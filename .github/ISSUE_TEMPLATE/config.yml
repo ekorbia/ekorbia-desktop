@@ -1,0 +1,12 @@
+# Disable the "Open a blank issue" link so contributors are nudged into
+# the structured bug / feature templates. They can still bypass via the
+# raw URL if they really need to.
+blank_issues_enabled: false
+
+contact_links:
+  - name: 🔒 Security vulnerability
+    url: https://github.com/ekorbia/ekorbia-desktop/security/advisories/new
+    about: Report security issues privately via GitHub Security Advisories. Do NOT file a public issue for these.
+  - name: 📖 Documentation
+    url: https://ekorbia.com
+    about: User-facing documentation, guides, and how-tos.

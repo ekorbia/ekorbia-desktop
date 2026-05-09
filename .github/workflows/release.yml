@@ -1,0 +1,135 @@
+# Release pipeline for Ekorbia.
+#
+# Fires when a tag matching `v*` is pushed (e.g. `v0.1.0`, `v0.1.1`).
+# Builds an unsigned aarch64-apple-darwin .dmg, computes a SHA256
+# checksum, and publishes a GitHub Release with notes pulled from the
+# matching CHANGELOG.md section.
+#
+# Manual release recipe:
+#   1. Edit CHANGELOG.md — move [Unreleased] content into a new
+#      [0.1.x] section dated today.
+#   2. Bump version in src-tauri/Cargo.toml, src-tauri/tauri.conf.json
+#      (keep them in sync).
+#   3. git commit -am "Prep 0.1.x release"
+#   4. git tag v0.1.x
+#   5. git push origin main && git push origin v0.1.x
+#
+# About 15 minutes later, github.com/ekorbia/ekorbia-desktop/releases
+# gets a new entry with .dmg + SHA256SUMS.txt attached.
+#
+# Notes:
+# - macos-latest is an Apple Silicon M1 runner, so a default `cargo
+#   tauri build` produces an aarch64-only binary. Intel Mac users can
+#   still run it under Rosetta 2 (transparent, slower). If you later
+#   want a universal binary, add `--target universal-apple-darwin` to
+#   the tauri-action `args` input.
+# - The build is UNSIGNED — there's no Apple Developer certificate
+#   configured. Users will hit a Gatekeeper warning on first launch;
+#   the workaround is documented in README.md's "First-launch on
+#   macOS" section.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# A tag is conceptually one-shot, but if someone force-pushes the same
+# tag to fix a typo before the first build finishes, cancel the older
+# run rather than racing two release uploads.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Build .dmg and publish release
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      # Required for tauri-action to create the GitHub Release and for
+      # `gh release upload` to attach the SHA256SUMS asset.
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Shares cache keys with ci.yml (same Cargo.lock + toolchain), so
+      # a recent green main-branch CI run leaves the build artifacts
+      # warm and this step saves 10+ minutes vs. a cold compile.
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Pull the section matching the tag (v0.1.0 → ## [0.1.0]) out of
+      # CHANGELOG.md and stash it in a multi-line GITHUB_OUTPUT so the
+      # next step can pass it as the release body. Fails the workflow
+      # loudly if no matching section exists — easier to debug a missing
+      # changelog than a release with empty notes.
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Extracting CHANGELOG section for [$VERSION]"
+          awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "^## \\[" ver "\\]") { found=1; next }
+            }
+            found { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::No CHANGELOG.md section found for [$VERSION]. Add a '## [$VERSION] - YYYY-MM-DD' entry before tagging."
+            exit 1
+          fi
+          echo "--- Release notes preview ---"
+          cat RELEASE_NOTES.md
+          # Heredoc pattern required for multi-line GITHUB_OUTPUT values.
+          {
+            echo "body<<RELEASE_NOTES_EOF"
+            cat RELEASE_NOTES.md
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # tauri-action runs `cargo tauri build`, finds the bundle outputs
+      # under src-tauri/target/release/bundle/, creates a GitHub Release
+      # for the tag, and uploads the .dmg as an asset. With
+      # releaseDraft: false, the release is published immediately.
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Ekorbia ${{ github.ref_name }}'
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          # No --target flag: native build on macos-latest is aarch64.
+          # No signing flags: this is the unsigned-distribution path.
+          args: ''
+
+      # Compute SHA256 of every .dmg in the bundle dir, write them into
+      # a single SHA256SUMS.txt, and attach it to the release tauri-action
+      # just created. Users on the Releases page can verify downloads
+      # with `shasum -a 256 -c SHA256SUMS.txt`.
+      - name: Compute and upload SHA256 checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd src-tauri/target/release/bundle/dmg
+          shasum -a 256 *.dmg > SHA256SUMS.txt
+          echo "--- SHA256SUMS.txt ---"
+          cat SHA256SUMS.txt
+          gh release upload "${{ github.ref_name }}" SHA256SUMS.txt --clobber --repo "${{ github.repository }}"

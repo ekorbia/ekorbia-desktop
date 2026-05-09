@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ekorbia — Local AI Desktop</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif&display=swap" rel="stylesheet">
+<!-- highlight.js github-dark theme for code blocks inside assistant
+     messages. Pinned to the same version as the JS bundle below so theme
+     classnames stay in sync (hljs-keyword, hljs-string, etc.). -->
+<link href="https://unpkg.com/@highlightjs/cdn-assets@11.10.0/styles/github-dark.min.css" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: #0c0c0e;
+    color: #e6e3dc;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  #root { width: 100vw; height: 100vh; display: block; }
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(212, 138, 80, 0.06), transparent 50%),
+      radial-gradient(circle at 80% 80%, rgba(80, 120, 200, 0.06), transparent 50%),
+      #0a0a0c;
+    pointer-events: none;
+  }
+  #root { position: relative; z-index: 0; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); border: 2px solid transparent; background-clip: padding-box; }
+  textarea, input, button { font-family: inherit; }
+  textarea:focus, input:focus, button:focus { outline: none; }
+  .blink { animation: blink 1.1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .stream-cursor {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    margin-left: 5px;
+    vertical-align: middle;
+    position: relative;
+    top: -1px;
+    animation: stream-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes stream-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 currentColor; }
+    50%       { opacity: 0.5; transform: scale(0.7); box-shadow: 0 0 6px 2px currentColor; }
+  }
+  .typing-dot { animation: typing 1.4s infinite; display: inline-block; }
+  .typing-dot:nth-child(2) { animation-delay: 0.15s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes typing { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+  /* Streaming assistant message: amber left border that breathes while the
+     model is generating. Applied via className so the keyframe can reference
+     the amber hex directly without needing a CSS variable. The border is set
+     on the content div (which has border-radius:10) so we match that radius
+     to avoid a flat edge clipping the rounded corners. */
+  .ek-stream-border {
+    border-left: 2px solid #d48a50 !important;
+    border-radius: 10px !important;
+    animation: ek-stream-border-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes ek-stream-border-pulse {
+    0%, 100% { border-left-color: #d48a50; }
+    50%       { border-left-color: rgba(212, 138, 80, 0.2); }
+  }
+  /* Watch-panel "processing" indicator: pulsing dot + breathing text so
+     in-flight rows are visually distinct from the static green/red ones. */
+  .watch-pulse-dot { animation: watch-pulse 1.4s ease-in-out infinite; }
+  @keyframes watch-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.4; transform: scale(0.65); }
+  }
+  .watch-pulse-text { animation: watch-pulse-text 1.4s ease-in-out infinite; }
+  @keyframes watch-pulse-text {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+  }
+  /* Toast slide-in. Used by ToastHost (components.jsx). Short — toasts
+     should appear quickly so the user doesn't think the action failed. */
+  @keyframes ek-toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  /* macOS title bar drag region.
+     -webkit-app-region does NOT inherit, so the parent's "drag" doesn't reach
+     children that fully cover it. We propagate it to all descendants and then
+     punch out the interactive elements (and their own children — the SVG
+     inside an IconButton would otherwise register as drag and steal clicks). */
+  [data-tauri-drag-region],
+  [data-tauri-drag-region] * { -webkit-app-region: drag; }
+  [data-tauri-drag-region] button, [data-tauri-drag-region] button *,
+  [data-tauri-drag-region] a, [data-tauri-drag-region] a *,
+  [data-tauri-drag-region] input,
+  [data-tauri-drag-region] textarea,
+  [data-tauri-drag-region] select { -webkit-app-region: no-drag; }
+  /* Quick-query overlay window: needs a fully transparent root so the
+     rounded-card UI in overlay.jsx can float against the desktop. We can't
+     use a media query here because both windows share this stylesheet —
+     overlay.jsx sets data-window="overlay" on both <html> and <body>.
+     Both layers need to be transparent: <body>'s default #0c0c0e otherwise
+     bleeds through the card's rounded corners, drawing the rectangular
+     window outline that the OS window cannot itself round off. */
+  html[data-window="overlay"],
+  body[data-window="overlay"] { background: transparent; }
+  body[data-window="overlay"]::before { display: none; }
+  /* Bright-enough placeholder so it reads against the dark vibrancy tint.
+     Default WKWebView placeholder is ~38% opacity which gets eaten alive
+     against any wallpaper that bleeds through the blur. */
+  body[data-window="overlay"] input::placeholder {
+    color: rgba(230, 227, 220, 0.55);
+  }
+  /* ─── Markdown rendering for assistant messages (Phase 1a) ───────────
+     Applied via the .ek-md root class on the container that holds the
+     marked-rendered HTML. We deliberately avoid global element rules so
+     that user messages (plain text + pre-wrap container) are unaffected.
+     Block spacing here matches the prior pre-wrap layout's visual rhythm
+     so the change from plaintext-with-newlines to real markdown doesn't
+     look like a layout shift to existing users. */
+  .ek-md { white-space: normal; }
+  .ek-md > :first-child { margin-top: 0; }
+  .ek-md > :last-child { margin-bottom: 0; }
+  .ek-md p { margin: 0 0 10px 0; }
+  .ek-md ul, .ek-md ol { margin: 0 0 10px 0; padding-left: 22px; }
+  .ek-md li { margin: 2px 0; }
+  .ek-md li > p { margin: 0; }
+  .ek-md h1, .ek-md h2, .ek-md h3, .ek-md h4 {
+    margin: 14px 0 6px 0;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .ek-md h1 { font-size: 18px; }
+  .ek-md h2 { font-size: 16px; }
+  .ek-md h3 { font-size: 15px; }
+  .ek-md h4 { font-size: 14px; }
+  .ek-md a {
+    color: #d48a50;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .ek-md a:hover { color: #e6a268; }
+  .ek-md blockquote {
+    margin: 8px 0;
+    padding: 4px 12px;
+    border-left: 2px solid rgba(212, 138, 80, 0.4);
+    color: rgba(230, 227, 220, 0.78);
+    background: rgba(255, 255, 255, 0.02);
+  }
+  .ek-md hr {
+    border: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin: 12px 0;
+  }
+  .ek-md table {
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 13px;
+  }
+  .ek-md th, .ek-md td {
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    padding: 4px 8px;
+    text-align: left;
+  }
+  .ek-md th { background: rgba(255, 255, 255, 0.03); font-weight: 600; }
+  /* Inline code: tight pill, monospace, subtle warm tint so it's visible
+     against the message background without competing with code blocks. */
+  .ek-md :not(pre) > code {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12.5px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(212, 138, 80, 0.10);
+    color: #f0d9c2;
+    border: 1px solid rgba(212, 138, 80, 0.18);
+  }
+  /* Code-block container. The .hljs class is added by highlight.js's
+     render; the github-dark stylesheet handles inner token colors. We
+     override only the outer card chrome so it sits cleanly inside our
+     darker message background. */
+  .ek-md pre.ek-code {
+    position: relative;
+    margin: 8px 0;
+    padding: 0;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #0f0f12;
+    overflow: hidden;
+  }
+  .ek-md pre.ek-code > code.hljs {
+    display: block;
+    padding: 10px 12px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    background: transparent;
+    overflow-x: auto;
+  }
+  /* Language badge in the top-left of each code block. Hidden when no
+     language is known, so generic ``` blocks don't show an empty chip. */
+  .ek-md pre.ek-code[data-lang]::before {
+    content: attr(data-lang);
+    position: absolute;
+    top: 6px;
+    left: 10px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: rgba(230, 227, 220, 0.4);
+    pointer-events: none;
+  }
+  .ek-md pre.ek-code[data-lang] > code.hljs {
+    padding-top: 22px;
+  }
+  /* Copy button on each code block. Mounted by addCopyButtons() after the
+     HTML is injected — it's not part of the parsed markdown. Hover-reveal
+     keeps the chrome quiet at rest. */
+  .ek-md pre.ek-code .ek-copy-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    padding: 3px 8px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+    color: rgba(230, 227, 220, 0.55);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 5px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 120ms, color 120ms, background 120ms;
+  }
+  .ek-md pre.ek-code:hover .ek-copy-btn,
+  .ek-md pre.ek-code .ek-copy-btn:focus { opacity: 1; }
+  .ek-md pre.ek-code .ek-copy-btn:hover {
+    color: #e6e3dc;
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .ek-md pre.ek-code .ek-copy-btn.ek-copied {
+    color: #7fb069;
+    border-color: rgba(127, 176, 105, 0.4);
+    opacity: 1;
+  }
+  /* Citation chip — wraps [N] markers when the message has sources.
+     Visually identical to the React-rendered chip in renderMessageContent
+     so the markdown vs. plaintext paths look the same to the reader. */
+  .ek-md sup.ek-citation {
+    display: inline-block;
+    padding: 0 4px;
+    margin: 0 1px;
+    border-radius: 4px;
+    background: rgba(212, 138, 80, 0.13);
+    color: #d48a50;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 9px;
+    font-weight: 700;
+    vertical-align: super;
+    line-height: 1.3;
+    cursor: default;
+  }
+  /* Search-match highlight — matches the React <mark> in renderHighlighted
+     so visual identity is preserved when search is active. */
+  .ek-md mark.ek-search {
+    background: rgba(212, 138, 80, 0.25);
+    color: #e6e3dc;
+    padding: 0;
+    border-radius: 2px;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+<!-- Markdown rendering pipeline for assistant messages (Phase 1a). Loaded
+     unconditionally so any chat the user opens has them available; the
+     MarkdownMessage component degrades to plaintext if a library failed
+     to load (offline first run with no cached unpkg). The cdn-assets
+     highlight.js bundle is the "common" pack — ~35 popular languages —
+     not the full 190-language registry. -->
+<script src="https://unpkg.com/marked@13.0.0/marked.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@highlightjs/cdn-assets@11.10.0/highlight.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/dompurify@3.1.6/dist/purify.min.js" crossorigin="anonymous"></script>
+
+<!-- Pure helpers extracted from the JSX so they can be unit-tested under
+     Node. Loads as a plain script (not text/babel) so it's synchronous
+     and on-window before any JSX runs. See ui/utils.js for the helper
+     list + the dual-export pattern (window for the browser, module.exports
+     for node:test). -->
+<script src="utils.js"></script>
+
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="icons.jsx"></script>
+<!-- Domain-split UI scripts. components.jsx (the old ~6.6k-line monolith) was
+     split into these nine files in May 2026; each script registers its
+     functions on the global scope, so cross-file references work as long as
+     every script has run before main.jsx mounts the React tree. -->
+<script type="text/babel" src="tokens.jsx"></script>
+<script type="text/babel" src="atoms.jsx"></script>
+<script type="text/babel" src="shell.jsx"></script>
+<!-- markdown.jsx must load before chat.jsx so MarkdownMessage is on
+     window when chat.jsx's Message component references it. -->
+<script type="text/babel" src="markdown.jsx"></script>
+<script type="text/babel" src="chat.jsx"></script>
+<script type="text/babel" src="overlays.jsx"></script>
+<script type="text/babel" src="prompts-library.jsx"></script>
+<script type="text/babel" src="watch.jsx"></script>
+<script type="text/babel" src="files.jsx"></script>
+<script type="text/babel" src="settings.jsx"></script>
+<!-- onboarding.jsx references HOTKEY_LS_KEY / SCREENSHOT_HOTKEY_LS_KEY +
+     formatHotkey from settings.jsx, so it must load after it. main.jsx
+     uses <OnboardingTour /> in its render, so it must load before main. -->
+<script type="text/babel" src="onboarding.jsx"></script>
+<script type="text/babel" src="toast.jsx"></script>
+<script type="text/babel" src="main.jsx"></script>
+<script type="text/babel" src="overlay.jsx"></script>
+</body>
+</html>

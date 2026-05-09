@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ekorbia — Playwright test harness</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Path note: this file lives at /tests/e2e/fixtures/playwright.html and
+     is served by Playwright's webserver rooted at the repo root, so every
+     resource reference uses an absolute path (/ui/*, /tests/e2e/*). -->
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://unpkg.com/@highlightjs/cdn-assets@11.10.0/styles/github-dark.min.css" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0c0c0e; color: #e6e3dc; font-family: Inter, system-ui, sans-serif; }
+  #test-root { width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+
+<!-- Where mounted components live. The mount helper (window.__TEST_MOUNT)
+     creates a child div per render. We keep the root div so Playwright has
+     a stable selector for "find me whatever the test mounted". -->
+<div id="test-root"></div>
+
+<!-- ─── Mock Tauri IPC layer — MUST load before any JSX. ──────────────────
+     The JSX files reach for window.__TAURI__.core.invoke() inside their
+     useEffects. Installing the mock first means those calls return
+     canned data instead of throwing. -->
+<script src="/tests/e2e/fixtures/mock-tauri.js"></script>
+
+<!-- ─── Mount helper exposed on window. Defined inline (no extra HTTP
+     round-trip) so it's available before the JSX runs. -->
+<script>
+  // Mount a component by name onto #test-root. Returns the container.
+  //
+  //   await page.evaluate(() => window.__TEST_MOUNT("OnboardingTour",
+  //     { open: true }));
+  //
+  // Functions can't cross the page.evaluate boundary, so this helper
+  // synthesises no-op stubs for the standard event handlers (onClose,
+  // onSend, onRetry, etc) when the caller doesn't supply them. If a test
+  // needs to assert that onClose fired, it should use window.__TEST_CALLS
+  // (incremented by the synth handlers) instead of a real function.
+  window.__TEST_CALLS = {};
+  window.__TEST_MOUNT = function (componentName, props) {
+    const Component = window[componentName];
+    if (typeof Component !== "function") {
+      throw new Error(
+        "Component '" + componentName + "' not on window. Did its JSX file fail to load?"
+      );
+    }
+    // Tear down anything previously mounted so tests don't bleed state.
+    if (window.__TEST_ROOT) {
+      try { window.__TEST_ROOT.unmount(); } catch (_) {}
+    }
+    const host = document.getElementById("test-root");
+    host.innerHTML = "";
+    const root = ReactDOM.createRoot(host);
+
+    // Synthesise no-op handlers for common callback prop names so
+    // components that destructure them don't crash. Each call is
+    // recorded on window.__TEST_CALLS[propName] so tests can assert
+    // "this callback fired N times".
+    const finalProps = Object.assign({}, props || {});
+    const handlerNames = [
+      "onClose", "onCancel", "onConfirm", "onSend", "onRetry",
+      "onEdit", "onEditMessage", "onRetryMessage", "onChange",
+      "onSendDemo", "onRename", "onScrollToMessage",
+    ];
+    handlerNames.forEach(function (name) {
+      if (typeof finalProps[name] !== "function") {
+        finalProps[name] = function () {
+          window.__TEST_CALLS[name] = (window.__TEST_CALLS[name] || 0) + 1;
+        };
+      }
+    });
+    window.__TEST_CALLS = {}; // reset per mount
+
+    root.render(React.createElement(Component, finalProps));
+    window.__TEST_ROOT = root;
+    return host;
+  };
+
+  // Re-render the currently mounted component with new props. Useful for
+  // testing prop transitions (e.g. open=false → open=true).
+  window.__TEST_RERENDER = function (componentName, props) {
+    if (!window.__TEST_ROOT) throw new Error("nothing mounted");
+    const Component = window[componentName];
+    const finalProps = Object.assign({}, props || {});
+    [
+      "onClose", "onCancel", "onConfirm", "onSend", "onRetry",
+      "onEdit", "onEditMessage", "onRetryMessage", "onChange",
+      "onSendDemo", "onRename", "onScrollToMessage",
+    ].forEach(function (name) {
+      if (typeof finalProps[name] !== "function") {
+        finalProps[name] = function () {
+          window.__TEST_CALLS[name] = (window.__TEST_CALLS[name] || 0) + 1;
+        };
+      }
+    });
+    window.__TEST_ROOT.render(React.createElement(Component, finalProps));
+  };
+
+  window.__TEST_UNMOUNT = function () {
+    if (window.__TEST_ROOT) {
+      window.__TEST_ROOT.unmount();
+      window.__TEST_ROOT = null;
+    }
+    document.getElementById("test-root").innerHTML = "";
+  };
+</script>
+
+<!-- ─── Same external deps as production /ui/index.html ───────────────── -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/marked@13.0.0/marked.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@highlightjs/cdn-assets@11.10.0/highlight.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/dompurify@3.1.6/dist/purify.min.js" crossorigin="anonymous"></script>
+
+<!-- ─── Production code under test, in the same order as /ui/index.html ─ -->
+<script src="/ui/utils.js"></script>
+<script type="text/babel" src="/ui/tweaks-panel.jsx"></script>
+<script type="text/babel" src="/ui/data.jsx"></script>
+<script type="text/babel" src="/ui/icons.jsx"></script>
+<script type="text/babel" src="/ui/tokens.jsx"></script>
+<script type="text/babel" src="/ui/atoms.jsx"></script>
+<script type="text/babel" src="/ui/shell.jsx"></script>
+<script type="text/babel" src="/ui/markdown.jsx"></script>
+<script type="text/babel" src="/ui/chat.jsx"></script>
+<script type="text/babel" src="/ui/overlays.jsx"></script>
+<script type="text/babel" src="/ui/prompts-library.jsx"></script>
+<script type="text/babel" src="/ui/watch.jsx"></script>
+<script type="text/babel" src="/ui/files.jsx"></script>
+<script type="text/babel" src="/ui/settings.jsx"></script>
+<script type="text/babel" src="/ui/onboarding.jsx"></script>
+<script type="text/babel" src="/ui/toast.jsx"></script>
+
+<!-- ─── Readiness flag.
+     Babel-standalone processes text/babel scripts in order, asynchronously.
+     We set a flag in the LAST text/babel script so Playwright's
+     page.waitForFunction(() => window.__JSX_READY) gates every test on
+     "all components are on window". This is the equivalent of an
+     end-of-stream signal — much more reliable than waiting for `load`. -->
+<script type="text/babel">
+  window.__JSX_READY = true;
+</script>
+</body>
+</html>

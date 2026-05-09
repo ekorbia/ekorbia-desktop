@@ -1,0 +1,73 @@
+[package]
+name = "ekorbia"
+version = "0.1.0"
+edition = "2021"
+description = "Local AI desktop IPE (Integrated Productivity Environment) powered by Ollama"
+license = "MIT"
+repository = "https://github.com/ekorbia/ekorbia-desktop"
+homepage = "https://ekorbia.com"
+authors = ["Ekorbia"]
+keywords = ["ollama", "llm", "desktop", "local-ai", "tauri"]
+categories = ["gui"]
+readme = "../README.md"
+
+[lib]
+name = "ekorbia_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "ekorbia"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-shell = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+window-vibrancy = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Tauri already pulls tokio in with broader features transitively; declaring
+# what *our* code uses keeps the dependency contract explicit and avoids
+# silent breakage if Tauri ever narrows its feature set.
+#   time   — tokio::time::{sleep, interval, Duration} used in watch poller
+#   macros — tokio::select! for cancellation and tokio::join! patterns
+#   sync   — Semaphore / mpsc / oneshot (NOT Mutex — DbState stays std::sync;
+#            holding a tokio::sync::Mutex across .await would silently violate
+#            the CLAUDE.md "no DbState across await" invariant)
+#   rt     — runtime handle access for cooperative cancellation
+tokio = { version = "1", features = ["time", "macros", "sync", "rt"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+# Background watch pipeline (Watch tab):
+#   pdf-extract — extract text from PDFs landing in watched folders
+#   reqwest     — POST to Ollama from Rust (rustls so we don't drag in OpenSSL)
+pdf-extract = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# File-system prompt storage:
+#   serde_yaml — parse/emit YAML frontmatter in .md prompt files
+#   dirs       — resolve ~/Documents for the default prompts directory
+serde_yaml = "0.9"
+dirs = "5"
+# Chat attachments:
+#   base64   — encode image bytes for Ollama /api/chat `images: [...]` field
+#   bytemuck — zero-copy `&[f32] ↔ &[u8]` for embedding BLOB pack/unpack
+base64 = "0.22"
+bytemuck = "1"
+# Watch pipeline (RSS / URL kinds — Phase 1+):
+#   feed-rs — unified parser for RSS 1.0/2.0 + Atom feeds. Smaller surface
+#             than rss + atom_syndication separately, handles both formats.
+#   scraper — HTML parsing + CSS selectors for extracting article body when
+#             we follow an RSS entry's <link> for full text (or for URL
+#             watch's optional `url_selector` in later phases).
+#   similar — line-level text diffing for URL diff mode (Phase 3). Produces
+#             unified-diff output that LLMs understand without coaxing.
+feed-rs = "2"
+scraper = "0.20"
+similar = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

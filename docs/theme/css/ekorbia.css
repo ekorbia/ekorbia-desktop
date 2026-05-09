@@ -1,0 +1,288 @@
+/* ─── Ekorbia-tinted mdBook theme overrides ───────────────────────────────
+   Aligns the docs site to the same palette used in the app itself.
+   Source of truth for the app palettes: ui/main.jsx THEMES.* (one_light is
+   the primary docs theme; one_dark is kept as the dark variant).
+
+   Default-theme in book.toml is "light" → new visitors land on One Light.
+   The theme picker still works; navy/coal/ayu are reskinned to One Dark
+   so the dark toggle stays on-brand.
+   ────────────────────────────────────────────────────────────────────── */
+
+/* ─── Palette: One Light (default) ────────────────────────────────────── */
+:root,
+.light,
+.rust {
+  --ek-bg0:           #fafafa;
+  --ek-bg1:           #f0f0f0;
+  --ek-bg2:           #e7e7e7;
+  --ek-bg3:           #d8d8d8;
+  --ek-bg4:           #c4c4c4;
+  --ek-border:        #d4d4d4;
+  --ek-border-strong: #bcbcbc;
+  --ek-fg:            #383a42;
+  --ek-fg1:           #5c5f66;
+  --ek-fg2:           #828489;
+  --ek-fg3:           #a0a1a7;
+
+  /* One Light syntax accents (Atom one-light palette) */
+  --ek-amber:  #b15c13;
+  --ek-blue:   #4078f2;
+  --ek-green:  #50a14f;
+  --ek-purple: #a626a4;
+  --ek-yellow: #c18401;
+  --ek-teal:   #0184bc;
+  --ek-red:    #e45649;
+}
+
+/* ─── Palette: One Dark (applied to mdBook's dark themes) ─────────────── */
+.navy,
+.coal,
+.ayu {
+  --ek-bg0:           #0a0a0c;
+  --ek-bg1:           #15151a;
+  --ek-bg2:           #1c1c22;
+  --ek-bg3:           #272730;
+  --ek-bg4:           #33333d;
+  --ek-border:        #2e2e38;
+  --ek-border-strong: #3d3d48;
+  --ek-fg:            #e6e3dc;
+  --ek-fg1:           #b8b4ab;
+  --ek-fg2:           #8a877e;
+  --ek-fg3:           #5e5c54;
+
+  /* One Dark syntax accents (matches ui/tokens.jsx) */
+  --ek-amber:  #d48a50;
+  --ek-blue:   #7ea7d8;
+  --ek-green:  #9bbf83;
+  --ek-purple: #c89bd0;
+  --ek-yellow: #d8c97e;
+  --ek-teal:   #83b4bf;
+  --ek-red:    #d87e7e;
+}
+
+/* ─── Map Ekorbia variables → mdBook variables ─────────────────────────
+   Applies to every theme class. The selectors are repeated because
+   mdBook's stylesheet sets these variables on a per-theme basis, and
+   without re-declaring under the theme class our values would lose the
+   specificity battle on theme switch. */
+.light, .rust,
+.navy, .coal, .ayu {
+  --bg: var(--ek-bg0);
+  --fg: var(--ek-fg);
+
+  --sidebar-bg: var(--ek-bg1);
+  --sidebar-fg: var(--ek-fg1);
+  --sidebar-non-existant: var(--ek-fg3);
+  --sidebar-active: var(--ek-amber);
+  --sidebar-spacer: var(--ek-border);
+
+  --scrollbar: var(--ek-bg4);
+
+  --icons: var(--ek-fg2);
+  --icons-hover: var(--ek-fg);
+
+  --links: var(--ek-blue);
+
+  --inline-code-color: var(--ek-amber);
+
+  --theme-popup-bg: var(--ek-bg1);
+  --theme-popup-border: var(--ek-border-strong);
+  --theme-hover: var(--ek-bg3);
+
+  --quote-bg: var(--ek-bg1);
+  --quote-border: var(--ek-border-strong);
+
+  --table-border-color: var(--ek-border);
+  --table-header-bg: var(--ek-bg2);
+  --table-alternate-bg: var(--ek-bg1);
+
+  --searchbar-border-color: var(--ek-border-strong);
+  --searchbar-bg: var(--ek-bg2);
+  --searchbar-fg: var(--ek-fg);
+  --searchbar-shadow-color: rgba(0, 0, 0, 0.15);
+  --searchresults-header-fg: var(--ek-fg1);
+  --searchresults-border-color: var(--ek-border);
+  --searchresults-li-bg: var(--ek-bg1);
+  --search-mark-bg: var(--ek-amber);
+}
+
+/* Dark themes get a deeper shadow for the searchbar. */
+.navy, .coal, .ayu {
+  --searchbar-shadow-color: rgba(0, 0, 0, 0.6);
+}
+
+/* ─── Typography ───────────────────────────────────────────────────────── */
+html, body, .content, .menu-bar {
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+code, pre, .hljs {
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+h1 { font-size: 2.0rem; margin-top: 0.5em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid var(--ek-border); padding-bottom: 0.3em; }
+h3 { font-size: 1.2rem; }
+.content p, .content li { line-height: 1.65; }
+
+/* ─── Code blocks ──────────────────────────────────────────────────────── */
+pre {
+  border: 1px solid var(--ek-border);
+  border-radius: 6px;
+  padding: 0.9em 1em;
+  background: var(--ek-bg1) !important;
+  overflow-x: auto;
+}
+.light pre code,
+.rust pre code,
+.navy pre code,
+.coal pre code,
+.ayu pre code {
+  background: transparent !important;
+  color: var(--ek-fg);
+}
+code:not(pre code) {
+  padding: 0.12em 0.36em;
+  border-radius: 3px;
+  background: rgba(177, 92, 19, 0.10); /* amber tint, light-friendly */
+}
+.navy code:not(pre code),
+.coal code:not(pre code),
+.ayu code:not(pre code) {
+  background: rgba(212, 138, 80, 0.10); /* darker-theme amber tint */
+}
+
+/* ─── Tables ───────────────────────────────────────────────────────────── */
+table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+}
+th, td {
+  border: 1px solid var(--ek-border);
+  padding: 0.55em 0.85em;
+  text-align: left;
+}
+th {
+  background: var(--ek-bg2);
+  font-weight: 600;
+}
+tr:nth-child(2n) td {
+  background: var(--ek-bg1);
+}
+
+/* ─── Blockquotes ──────────────────────────────────────────────────────── */
+blockquote {
+  border-left: 3px solid var(--ek-amber);
+  background: var(--ek-bg1);
+  padding: 0.6em 1em;
+  margin: 1em 0;
+  color: var(--ek-fg1);
+  border-radius: 0 4px 4px 0;
+}
+blockquote strong:first-child {
+  color: var(--ek-amber);
+}
+
+/* ─── Sidebar polish ───────────────────────────────────────────────────── */
+.sidebar {
+  font-size: 0.95em;
+}
+/* Add breathing room from the browser's left edge. mdBook's default
+   scrollbox padding is tight; bump it so the chapter list reads as
+   a panel rather than text bleeding off the window. */
+.sidebar .sidebar-scrollbox {
+  padding-left: 1.5em;
+  padding-right: 1em;
+}
+.sidebar .chapter li.chapter-item {
+  padding: 0.25em 0;
+}
+.sidebar .chapter li > a {
+  padding: 0.2em 0.5em;
+  border-radius: 3px;
+}
+.sidebar .chapter li > a:hover {
+  background: var(--ek-bg3);
+  color: var(--ek-fg);
+  text-decoration: none;
+}
+.sidebar .chapter li > a.active {
+  background: var(--ek-bg3);
+  color: var(--ek-amber);
+  font-weight: 500;
+}
+.sidebar .part-title {
+  color: var(--ek-fg2);
+  text-transform: uppercase;
+  font-size: 0.78em;
+  letter-spacing: 0.08em;
+  margin-top: 1.4em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+}
+
+/* ─── Top navigation bar ───────────────────────────────────────────────── */
+.menu-bar {
+  border-bottom: 1px solid var(--ek-border);
+}
+.menu-bar .menu-title {
+  font-weight: 600;
+  color: var(--ek-fg);
+}
+
+/* ─── Search ───────────────────────────────────────────────────────────── */
+.searchbar {
+  border-radius: 6px;
+}
+mark, .search-mark-bg {
+  color: var(--ek-bg0);
+}
+
+/* ─── Inline images ────────────────────────────────────────────────────── */
+.content img {
+  max-width: 100%;
+  border: 1px solid var(--ek-border);
+  border-radius: 6px;
+  margin: 0.5em 0;
+}
+
+/* ─── Spacing & readability ────────────────────────────────────────────── */
+.content {
+  max-width: 800px;
+}
+.content ul li,
+.content ol li {
+  margin: 0.2em 0;
+}
+.content hr {
+  border: none;
+  border-top: 1px solid var(--ek-border);
+  margin: 2em 0;
+}
+
+/* ─── Hide previous/next chapter navigation ────────────────────────────
+   mdBook puts large left/right arrow buttons on the edges of the content
+   area (`.nav-chapters`, `.mobile-nav-chapters`) and wraps them in a
+   `.nav-wide-wrapper` outside the page wrapper. We hide all of them —
+   the sidebar TOC already provides navigation, and the floating arrows
+   crowd the content on narrow viewports. */
+.nav-chapters,
+.mobile-nav-chapters,
+.nav-wide-wrapper,
+.previous,
+.next {
+  display: none !important;
+}
+
+/* Reclaim the horizontal space the nav-wide-wrapper used to reserve, so
+   the content area is centred properly with the arrows gone. */
+.page-wrapper > .page {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}

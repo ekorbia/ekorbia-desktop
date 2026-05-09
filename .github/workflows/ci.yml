@@ -1,0 +1,97 @@
+# Continuous Integration for Ekorbia.
+#
+# Runs the three test gates on every push to main and every pull request:
+#   1. clippy with warnings as errors (Rust lint)
+#   2. cargo test --lib (86 Rust unit tests)
+#   3. ./scripts/run-ui-tests.sh (Node helpers + Playwright WebKit smokes)
+#
+# Plus a license-attribution drift check via cargo-about, so a new
+# dependency landing with an unaccepted license fails CI immediately
+# rather than silently slipping into THIRD_PARTY_LICENSES.md.
+#
+# We intentionally do NOT enforce `cargo fmt --check` yet — the existing
+# codebase has fmt deviations that would block every PR until cleaned up.
+# Once the user runs `cargo fmt` across the tree and commits the result,
+# add a `cargo fmt --check` step here.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel older in-flight runs on the same ref when a new commit arrives.
+# Saves runner-minutes on rapid push-push-push cycles. We don't cancel
+# pushes to main — every commit's CI status should be visible historically
+# on the commits page, even if you push three commits in quick succession.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: Build + test (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # Swatinem/rust-cache handles invalidation correctly — Cargo.lock
+      # changes, target-triple changes, and toolchain bumps all bust the
+      # cache automatically, so cached builds never get stale crates.
+      # First run is ~15–20 min cold; subsequent runs land around 3–5 min.
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Clippy (lint gate)
+        working-directory: src-tauri
+        run: cargo clippy --lib --all-targets -- -D warnings
+
+      - name: Cargo unit tests
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      # cargo-about validates that every crate's license is on the accept
+      # list in src-tauri/about.toml. A new dependency with an unaccepted
+      # license (e.g. GPL-3.0) fails this step. We pipe the JSON output
+      # to /dev/null because we only care about the exit code here —
+      # THIRD_PARTY_LICENSES.md is regenerated manually when deps change.
+      # Using taiki-e/install-action to fetch a precompiled cargo-about
+      # binary in ~5s instead of compiling it from source (~3 min).
+      - name: Install cargo-about (prebuilt)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      - name: License attribution drift check
+        working-directory: src-tauri
+        run: cargo about generate --format json > /dev/null
+
+      - name: Install npm dependencies (Playwright runner)
+        run: npm ci
+
+      # The UI test script uses Playwright with the WebKit browser (mirrors
+      # macOS Safari). `--with-deps` is a no-op on macOS but harmless;
+      # included for symmetry with the Linux convention.
+      - name: Install Playwright WebKit
+        run: npx playwright install --with-deps webkit
+
+      - name: UI test suite (Node + Playwright)
+        run: ./scripts/run-ui-tests.sh

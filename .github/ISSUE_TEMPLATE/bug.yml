@@ -1,0 +1,82 @@
+name: Bug report
+description: Something in Ekorbia doesn't work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. A few notes before you start:
+
+        - **Not a security issue?** Carry on. Security vulnerabilities should
+          be reported privately — see [`SECURITY.md`](https://github.com/ekorbia/ekorbia-desktop/blob/main/SECURITY.md).
+        - **The more reproducible, the better.** A step-by-step recipe that
+          fails on a fresh launch is the gold standard.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of what went wrong and what you expected to happen instead.
+      placeholder: I clicked the paperclip and tried to attach a PDF, but the chip stayed in "indexing…" forever and the file was never embedded.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Number them. The simpler the recipe, the faster a fix.
+      placeholder: |
+        1. Launch Ekorbia (fresh dev build / installed .dmg)
+        2. Open a new chat
+        3. Click the paperclip
+        4. Pick a PDF larger than 5 MB
+        5. Observe "indexing…" never completes
+    validations:
+      required: true
+
+  - type: input
+    id: ekorbia-version
+    attributes:
+      label: Ekorbia version
+      description: Visible in the About dialog, or from the bundled `Info.plist`. If you built from source, paste the commit SHA.
+      placeholder: "0.1.0 (or commit abc1234)"
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: "14.5 (Sonoma)"
+    validations:
+      required: true
+
+  - type: input
+    id: ollama-version
+    attributes:
+      label: Ollama version (if relevant)
+      description: Output of `ollama --version`. Required for issues that involve model loading, chat, or embeddings.
+      placeholder: "0.3.0"
+
+  - type: input
+    id: model
+    attributes:
+      label: Active model (if relevant)
+      description: Which Ollama model was selected when the bug happened?
+      placeholder: "llama3.2:3b"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / console output
+      description: |
+        Anything from the macOS Console.app filtered by "Ekorbia", or terminal
+        output if you launched via `cargo tauri dev`. Stack traces are gold.
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, screen recordings, hypotheses, related issues — whatever helps.

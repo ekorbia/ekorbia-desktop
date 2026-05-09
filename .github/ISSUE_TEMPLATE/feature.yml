@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest an idea for Ekorbia
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. The most useful feature requests describe
+        a **concrete problem you're trying to solve** rather than a
+        pre-baked solution — the latter constrains the design space before
+        we've talked about trade-offs.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do? What's blocking you today? What workaround are you using?
+      placeholder: |
+        I keep a folder of PDFs I review weekly. Right now I have to manually
+        re-attach the folder every time I open a new chat. I'd like Ekorbia
+        to remember the last few attached folders and let me re-attach them
+        with one click.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach (optional)
+      description: How might this work in the UI? In the backend? Be as specific or as hand-wavy as you like.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you think about? Why this one?
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope notes
+      description: |
+        Is this a small tweak or a new tab? Does it touch the watch
+        pipeline, the chat surface, the prompt library, or something
+        else? (Helps us scope discussion.)

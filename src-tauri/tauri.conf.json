@@ -1,0 +1,55 @@
+{
+  "productName": "Ekorbia",
+  "version": "0.1.0",
+  "identifier": "com.ekorbia.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Ekorbia — Local AI Desktop",
+        "width": 1480,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "center": true,
+        "label": "main",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      },
+      {
+        "label": "overlay",
+        "title": "Ekorbia Quick Query",
+        "width": 600,
+        "height": 80,
+        "minWidth": 600,
+        "maxWidth": 600,
+        "minHeight": 80,
+        "maxHeight": 520,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "center": true,
+        "focus": false
+      }
+    ],
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "publisher": "Ekorbia",
+    "copyright": "Copyright (c) 2026 Ekorbia",
+    "icon": ["icons/icon.icns", "icons/icon.png"]
+  }
+}

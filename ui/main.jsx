@@ -1,0 +1,2707 @@
+// main.jsx — Ekorbia top-level
+
+const { useState: useS, useEffect: useE, useRef: useR } = React;
+
+// Theme palettes. Each theme defines all tokens that can plausibly invert
+// between light and dark — bg0..bg4, fg/fg1..fg3, border/borderStrong,
+// amber. Applied via Object.assign(T, ...) below.
+const THEMES = {
+  one_dark: {
+    bg0:'#0a0a0c', bg1:'#15151a', bg2:'#1c1c22', bg3:'#272730', bg4:'#33333d',
+    fg:'#e6e3dc', fg1:'#b8b4ab', fg2:'#8a877e', fg3:'#5e5c54',
+    border:'#2e2e38', borderStrong:'#3d3d48',
+    amber:'#d48a50', label:'one dark',
+  },
+  one_light: {
+    bg0:'#fafafa', bg1:'#f0f0f0', bg2:'#e7e7e7', bg3:'#d8d8d8', bg4:'#c4c4c4',
+    fg:'#383a42', fg1:'#5c5f66', fg2:'#828489', fg3:'#a0a1a7',
+    border:'#d4d4d4', borderStrong:'#bcbcbc',
+    amber:'#b15c13', label:'one light',
+  },
+  ayu_dark: {
+    bg0:'#0d1017', bg1:'#131721', bg2:'#1b202a', bg3:'#232a35', bg4:'#2d3540',
+    fg:'#bfbdb6', fg1:'#9a9890', fg2:'#787570', fg3:'#5a5852',
+    border:'#262d38', borderStrong:'#3a4150',
+    amber:'#e6b450', label:'ayu dark',
+  },
+  ayu_mirage: {
+    bg0:'#1f2430', bg1:'#232834', bg2:'#2a2f3d', bg3:'#343a4b', bg4:'#3d4456',
+    fg:'#cccac2', fg1:'#b3b1a8', fg2:'#8a8780', fg3:'#5c6773',
+    border:'#2d3340', borderStrong:'#3d4456',
+    amber:'#ffcc66', label:'ayu mirage',
+  },
+  ayu_light: {
+    bg0:'#fcfcfc', bg1:'#f3f4f5', bg2:'#e8eaeb', bg3:'#dcdfe2', bg4:'#c8ccd0',
+    fg:'#5c6166', fg1:'#787c80', fg2:'#959a9f', fg3:'#b3b8bd',
+    border:'#dcdfe2', borderStrong:'#bcc0c5',
+    amber:'#fa8d3e', label:'ayu light',
+  },
+};
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "theme": "one_dark",
+  "fontScale": 1.0,
+  "density": "comfortable",
+  "showStatusBar": true
+}/*EDITMODE-END*/;
+
+// ── Helper functions ──────────────────────────────────────────────────────────
+
+function groupChatsByDate(chatRows) {
+  const now = new Date();
+  const startOf = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+  const todayStart = startOf(now);
+  const yesterdayStart = startOf(new Date(now - 86400000));
+  const weekStart = startOf(new Date(now - 7 * 86400000));
+  const monthStart = startOf(new Date(now - 30 * 86400000));
+
+  const buckets = [
+    { section: 'Today', items: [] },
+    { section: 'Yesterday', items: [] },
+    { section: 'Last 7 days', items: [] },
+    { section: 'Last 30 days', items: [] },
+    { section: 'Older', items: [] },
+  ];
+  for (const r of chatRows) {
+    const d = new Date(r.createdAt * 1000);
+    const item = { id: r.id, title: r.title, model: r.model, when: relativeTime(r.updatedAt) };
+    if (d >= todayStart) buckets[0].items.push(item);
+    else if (d >= yesterdayStart) buckets[1].items.push(item);
+    else if (d >= weekStart) buckets[2].items.push(item);
+    else if (d >= monthStart) buckets[3].items.push(item);
+    else buckets[4].items.push(item);
+  }
+  return buckets.filter(b => b.items.length > 0);
+}
+
+// relativeTime, tryParseJson, genId live in `ui/utils.js` so they're
+// unit-testable under node:test. They're on `window` before main.jsx loads.
+
+// Persist a piece of state to localStorage so it survives app restart.
+// Initial value comes from localStorage if present; otherwise falls back to
+// `defaultValue`. localStorage in the Tauri webview is stored in the app's
+// data dir, so it persists across launches without needing SQLite for
+// trivial UI state.
+function usePersistedState(key, defaultValue) {
+  const [value, setValue] = useS(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw !== null) return JSON.parse(raw);
+    } catch {}
+    return defaultValue;
+  });
+  useE(() => {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  }, [key, value]);
+  return [value, setValue];
+}
+
+// Composer-model persistence. Stored as a raw string (not JSON) so the
+// value is human-readable in devtools and matches the overlay's storage
+// format (overlay.jsx uses `ekorbia.overlay.model` the same way).
+const COMPOSER_MODEL_LS_KEY = 'ekorbia.main.model';
+const COMPOSER_FALLBACK_MODEL = 'gemma4:26b';
+// Hard cap on tool-call iterations within a single chat send. Each iteration
+// is one round-trip to /api/chat. Without a cap a misbehaving model could
+// loop indefinitely emitting tool_calls. Set conservatively — most legitimate
+// flows finish in 1-3 iterations (initial response → tool call → final text).
+const MAX_TOOL_ITERATIONS = 8;
+
+function readPersistedComposerModel() {
+  try {
+    const stored = localStorage.getItem(COMPOSER_MODEL_LS_KEY);
+    if (stored) return stored;
+  } catch {}
+  return COMPOSER_FALLBACK_MODEL;
+}
+
+// ── Output-dir permission modal ───────────────────────────────────────────
+//
+// Fires the first time a chat's model tries to use the write_file tool with
+// no `output_dir` set. The Rust side emits `chat:needs_output_dir` and
+// suspends the tool call until the user makes a choice via chat_set_output_dir.
+//
+// Three resolutions:
+//   Allow         — set output_dir = props.suggested (Rust-supplied default,
+//                    typically ~/Documents/Ekorbia/Outputs/<slug>/)
+//   Choose folder — opens the dialog plugin so the user picks a custom path
+//   Block always  — set output_dir = "" (sentinel that suppresses the modal
+//                    for future tool calls in this chat; surfaces as a
+//                    warn toast on subsequent attempts)
+//
+// The component is hoisted to module scope per CLAUDE.md's "modal components
+// must be hoisted" rule — defining it inside App would cause focus loss on
+// every keystroke as React tears down + remounts on each parent render.
+function OutputDirModal({ chatId, chatTitle, suggested, onClose, invoke }) {
+  const [chosen, setChosen] = useS(suggested || '');
+
+  const submit = async (dir) => {
+    try {
+      await invoke('chat_set_output_dir', { chatId, dir });
+      onClose(dir);
+    } catch (e) {
+      window.ekToast?.({
+        kind: 'error',
+        title: 'Could not set output folder',
+        body: String(e),
+      });
+    }
+  };
+
+  const pickFolder = async () => {
+    const dialogApi = getDialogApi();
+    if (!dialogApi) return;
+    try {
+      const picked = await dialogApi.open({
+        directory: true,
+        multiple: false,
+        defaultPath: chosen || undefined,
+      });
+      if (typeof picked === 'string' && picked) setChosen(picked);
+    } catch (_) { /* user cancelled */ }
+  };
+
+  return (
+    <div
+      role="dialog"
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(0,0,0,0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <div
+        style={{
+          width: 440, padding: 18,
+          background: T.bg1,
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 10,
+          fontFamily: T.sans,
+          color: T.fg,
+          boxShadow: '0 16px 40px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div style={{ fontFamily: T.serif, fontSize: 18, marginBottom: 6 }}>
+          Allow this chat to save files?
+        </div>
+        <div style={{ color: T.fg1, fontSize: 13, lineHeight: 1.5, marginBottom: 12 }}>
+          The model in <em>{chatTitle || 'this chat'}</em> wants to write files
+          to a folder. Files will be saved to this directory — nothing outside it.
+        </div>
+        <label style={{ display: 'block', color: T.fg2, fontSize: 11, marginBottom: 4 }}>
+          Output folder
+        </label>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+          <input
+            value={chosen}
+            onChange={(e) => setChosen(e.target.value)}
+            spellCheck={false}
+            style={{
+              flex: 1, padding: '6px 8px',
+              background: T.bg2,
+              border: `1px solid ${T.border}`,
+              borderRadius: 5,
+              color: T.fg,
+              fontFamily: T.mono,
+              fontSize: 12,
+            }}
+          />
+          <button
+            onClick={pickFolder}
+            style={{
+              padding: '0 10px',
+              background: T.bg2,
+              border: `1px solid ${T.border}`,
+              borderRadius: 5,
+              color: T.fg1,
+              cursor: 'pointer',
+              fontSize: 12,
+            }}
+          >Browse…</button>
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button
+            onClick={() => submit('')}
+            title="Block file writes from this chat. The model will see an error and can adjust."
+            style={{
+              padding: '6px 12px',
+              background: 'transparent',
+              border: `1px solid ${T.border}`,
+              borderRadius: 5,
+              color: T.fg2,
+              cursor: 'pointer',
+              fontSize: 12,
+            }}
+          >Block always</button>
+          <button
+            onClick={() => onClose(null)}
+            style={{
+              padding: '6px 12px',
+              background: 'transparent',
+              border: `1px solid ${T.border}`,
+              borderRadius: 5,
+              color: T.fg2,
+              cursor: 'pointer',
+              fontSize: 12,
+            }}
+          >Not now</button>
+          <button
+            onClick={() => submit(chosen)}
+            disabled={!chosen}
+            style={{
+              padding: '6px 14px',
+              background: chosen ? T.amber : T.bg3,
+              border: 'none',
+              borderRadius: 5,
+              color: chosen ? T.bg0 : T.fg3,
+              cursor: chosen ? 'pointer' : 'not-allowed',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >Allow</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+
+function App() {
+  // Fallback to a rejecting stub so call sites can `await invoke(...)`
+  // unconditionally — non-Tauri (pure-browser dev) has no IPC bridge.
+  const invoke = getInvoke() ?? (() => Promise.reject('no tauri'));
+
+  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const theme = THEMES[tweaks.theme] || THEMES.one_dark;
+
+  // Apply theme tokens to T (mutate in place — components read T at render).
+  // Includes fg1/fg2/fg3 + border tokens so light themes don't end up with
+  // dark-theme borders and washed-out muted text on a white background.
+  Object.assign(T, {
+    bg0: theme.bg0, bg1: theme.bg1, bg2: theme.bg2, bg3: theme.bg3, bg4: theme.bg4,
+    fg: theme.fg, fg1: theme.fg1, fg2: theme.fg2, fg3: theme.fg3,
+    border: theme.border, borderStrong: theme.borderStrong,
+    amber: theme.amber,
+  });
+
+  // Tabs (multi-chat). The welcome tab is the empty "new chat" the user
+  // sees at startup. Its id is freshly generated each launch — a literal
+  // string like 'welcome' would collide with any chat the user previously
+  // saved from a prior welcome tab, leaving the sidebar entry unable to
+  // re-open into the editor (the empty in-memory chat would shadow the
+  // saved messages). Using `useRef(() => genId())` would also work but
+  // useState's lazy initialiser already runs exactly once.
+  const welcomeIdRef = useR(null);
+  if (welcomeIdRef.current === null) welcomeIdRef.current = genId();
+  const welcomeId = welcomeIdRef.current;
+  const [tabs, setTabs] = useS(() => [
+    { id: welcomeIdRef.current, title: 'New chat', model: readPersistedComposerModel() },
+  ]);
+  const [activeTab, setActiveTab] = useS(welcomeId);
+  const [sidebarOpen, setSidebarOpen] = usePersistedState('ekorbia.sidebar.open', true);
+  const [rightPanelOpen, setRightPanelOpen] = usePersistedState('ekorbia.rightpanel.open', true);
+  const [sidebarWidth, setSidebarWidth] = usePersistedState('ekorbia.sidebar.width', 220);
+  const [rightPanelWidth, setRightPanelWidth] = usePersistedState('ekorbia.rightpanel.width', 380);
+  // Which tab is showing in the right panel: 'prompts' or 'watches'.
+  const [rightPanelTab, setRightPanelTab] = usePersistedState('ekorbia.rightpanel.tab', 'prompts');
+  const sidebarStartRef = useR(220);
+  const rightPanelStartRef = useR(380);
+  // Bumped every time a new watch is created so the WatchPanel reloads its
+  // list. Lets the modal-created-watch flow stay one-way (modal → panel)
+  // without lifting the watches state up to the App.
+  const [watchPanelRefreshKey, setWatchPanelRefreshKey] = useS(0);
+  // Transient "the user just clicked an OS notification for this watch"
+  // signal. Bumping `key` triggers a useEffect in WatchPanel that sets the
+  // panel filter to `watchId`. Set by the notification-hint listener below
+  // when a window-focus event arrives within 5s of a hint — see the
+  // explanatory comment in flush_notify_batch on the Rust side.
+  const [watchFocusFilter, setWatchFocusFilter] = useS({ watchId: null, key: 0 });
+  const notificationHintRef = useR({ watchId: null, ts: 0 });
+  // OS notification permission state — 'granted' / 'default' / null
+  // (still checking). The plugin's isPermissionGranted() returns a bool;
+  // we keep the tri-state for the modal's UI logic. Checked once at
+  // startup, re-checked whenever WatchModal calls refreshNotifPermission
+  // after the user clicks "Request permission". On non-Tauri (dev) and
+  // on plugin errors, we fail-open as 'granted' so the strip doesn't
+  // get stuck blocking the UI.
+  const [notifPermission, setNotifPermission] = useS(null);
+  const refreshNotifPermission = React.useCallback(async () => {
+    const notifApi = getNotificationApi();
+    if (!notifApi?.isPermissionGranted) {
+      setNotifPermission('granted');
+      return;
+    }
+    try {
+      const granted = await notifApi.isPermissionGranted();
+      setNotifPermission(granted ? 'granted' : 'default');
+    } catch (e) {
+      console.error('isPermissionGranted failed:', e);
+      setNotifPermission('granted');
+    }
+  }, []);
+  useE(() => { refreshNotifPermission(); }, [refreshNotifPermission]);
+  // seedKey/seedText drive the Composer's pre-fill on demand. The key is a
+  // counter, not a boolean, so each "seed me" event is distinct — React's
+  // useEffect inside Composer only seeds when this changes.
+  const [composerSeedKey, setComposerSeedKey] = useS(0);
+  const [composerSeedText, setComposerSeedText] = useS("");
+  const [query, setQuery] = useS('');
+  // Full-text-search hits across message content. Populated by a debounced
+  // call to the Rust `search_chats` command whenever `query` changes; an
+  // empty list both at startup (no query) and during the debounce window.
+  const [messageHits, setMessageHits] = useS([]);
+  // Default-selected prompt: just the first one the backend returns.
+  // Hardcoding a slug here would silently break if the user deletes it.
+  const [selectedPromptId, setSelectedPromptId] = useS(null);
+  // Empty until the file-system-backed `prompts_list` resolves on mount.
+  // Built-ins are seeded by Rust at startup so this won't stay empty long.
+  const [prompts, setPrompts] = useS([]);
+  // Per-chat attached-prompts map. Each tab has its own attached set;
+  // switching tabs swaps what the Composer chip strip shows. Parallel
+  // to chatAttachments above — sparse, keyed by chatId. Hydrated on
+  // openChatInTab from the last user message's promptsJson so reopening
+  // an old chat lands on the same setup the user left it in.
+  //
+  // Mutator helpers below operate on the active tab's slice. External
+  // sites that need to set a specific chat's slice (overlay handoff,
+  // watch-notes flow, prompt deletion) use setAttachedPromptsByChat
+  // directly with a function updater.
+  const [attachedPromptsByChat, setAttachedPromptsByChat] = useS({});
+  const attachedPromptIds = attachedPromptsByChat[activeTab] || [];
+  const attachedPrompts = attachedPromptIds.map(id => prompts.find(p => p.id === id)).filter(Boolean);
+  const togglePromptAttach = (p) => {
+    setAttachedPromptsByChat(m => {
+      const curr = m[activeTab] || [];
+      const next = curr.includes(p.id) ? curr.filter(x => x !== p.id) : [...curr, p.id];
+      return { ...m, [activeTab]: next };
+    });
+  };
+  const detachPrompt = (id) => {
+    setAttachedPromptsByChat(m => ({
+      ...m,
+      [activeTab]: (m[activeTab] || []).filter(x => x !== id),
+    }));
+  };
+
+  // ── Chat attachments ──────────────────────────────────────────────────────
+  // Map of chatId → Attachment[] mirrors the Rust `attachments` table. The
+  // map is sparse — only chats the user has interacted with this session
+  // appear. `attachment_list` is called lazily when a chat opens (see
+  // openChatInTab) so old chats reload their attachments correctly.
+  const [chatAttachments, setChatAttachments] = useS({});
+  const attachments = chatAttachments[activeTab] || [];
+  // In-memory caches of model → capability bits. Populated by
+  // model_capabilities; gate the "VISION" / "TOOL" badges and are
+  // checked before encoding base64 / enabling write_file tool injection
+  // (the Rust side double-checks anyway).
+  const [modelVisionMap, setModelVisionMap] = useS({});
+  const [modelToolsMap, setModelToolsMap] = useS({});
+  const activeModelHasVision = !!modelVisionMap[modelId];
+  const activeModelHasTools = !!modelToolsMap[modelId];
+
+  // Permission-modal state for the write_file tool. Set when Rust emits
+  // chat:needs_output_dir (the model tried to write but the chat has no
+  // output_dir picked yet). Cleared on user choice or dismissal.
+  const [outputDirReq, setOutputDirReq] = useS(null); // { chatId, chatTitle, suggested } | null
+  // When handleSend's tool loop hits `permission_required`, it awaits the
+  // user's modal choice via this ref. The modal's onClose populates it
+  // with the resolution: a path string (Allow), "" (Block always), or
+  // null (Not now / dismissed). Single-shot — cleared on resolve.
+  const outputDirResolverRef = useR(null);
+  // Tool schemas fetched once from Rust so we can pass them in the /api/chat
+  // request body. Loaded lazily on first tool-capable send.
+  const toolSchemasRef = useR(null);
+
+  // Embedding-model-change banner state. `staleAttachments` is the number
+  // of attachments whose chunks were embedded with a model other than the
+  // currently-configured one. When > 0, a banner above the chat offers a
+  // one-click reindex. Re-checked on every attachment status_changed event
+  // plus a low-frequency poll to catch settings changes.
+  const [staleAttachments, setStaleAttachments] = useS({ count: 0, currentModel: '' });
+  const [reindexingStale, setReindexingStale] = useS(false);
+  const refreshStaleCount = async () => {
+    try {
+      const r = await invoke('embedding_stale_count');
+      setStaleAttachments(r || { count: 0, currentModel: '' });
+    } catch {
+      // Quiet — banner just won't appear.
+    }
+  };
+  useE(() => {
+    refreshStaleCount();
+    const iv = setInterval(refreshStaleCount, 15000);
+    return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const onReindexAllStale = async () => {
+    setReindexingStale(true);
+    try {
+      await invoke('attachment_reindex_stale');
+      // The reindex is async on the backend; status_changed events will
+      // flip individual chips to 'indexing' as they kick off. We optimistically
+      // clear the banner count — the next stale-count refresh will catch
+      // any that legitimately failed to start.
+      setStaleAttachments({ count: 0, currentModel: staleAttachments.currentModel });
+    } catch (e) {
+      console.error('reindex stale failed:', e);
+    } finally {
+      setReindexingStale(false);
+    }
+  };
+
+  const refreshAttachments = async (chatId) => {
+    if (!chatId) return;
+    try {
+      const rows = await invoke('attachment_list', { chatId });
+      setChatAttachments((m) => ({ ...m, [chatId]: rows || [] }));
+    } catch (e) {
+      console.error('attachment_list failed:', e);
+    }
+  };
+
+  // File picker → Rust persist → refresh in-memory cache. Rejection of
+  // unsupported types happens in Rust; surface as a console error rather
+  // than a noisy dialog (the picker filter already steers users to
+  // supported types). Before persisting, we probe whether the embedding
+  // model is installed — if not, the user sees a friendly hint with the
+  // exact `ollama pull` command they need to run. We still PROCEED with the
+  // attach so they can see the chip status and retry later.
+  const onAttachFile = async () => {
+    const dialogApi = getDialogApi();
+    if (!dialogApi) return;
+    try {
+      const picked = await dialogApi.open({
+        multiple: true,
+        filters: [
+          { name: 'Documents & images',
+            extensions: ['txt', 'md', 'markdown', 'pdf', 'png', 'jpg', 'jpeg', 'webp'] },
+        ],
+      });
+      if (!picked) return;
+      const paths = Array.isArray(picked) ? picked : [picked];
+      if (paths.length === 0) return;
+      const added = await invoke('attachment_add_files', { chatId: activeTab, paths });
+      setChatAttachments((m) => ({
+        ...m,
+        [activeTab]: [...(m[activeTab] || []), ...(added || [])],
+      }));
+      // If any of the new attachments is large enough to need indexing,
+      // verify the embedding model is pulled. The check is fast (one
+      // /api/show call with a 3s timeout) and only fires when relevant —
+      // small files / images skip it. We don't block the attach on the
+      // check; the alert is just an FYI.
+      const needsIndex = (added || []).some((a) => a.status === 'indexing');
+      if (needsIndex) {
+        try {
+          const check = await invoke('embedding_model_check');
+          if (check && !check.installed) {
+            window.ekToast?.({
+              kind: 'warn',
+              title: `Embedding model "${check.model}" not installed`,
+              body: `Large files won't be searchable until you run:\n    ollama pull ${check.model}\n\nThen click the chip's ↻ to retry.`,
+            });
+          }
+        } catch (e) {
+          // Silent — Ollama down, etc. The chip will eventually show 'error'.
+        }
+      }
+    } catch (e) {
+      // User-actionable errors (too big, unsupported type, missing file)
+      // become a toast — never block the UI on a confirm dialog.
+      console.error('attachment add failed:', e);
+      window.ekToast?.({ kind: 'error', title: 'Attach failed', body: String(e) });
+    }
+  };
+
+  // Folder attach. Same dialog plugin, just with `directory: true` —
+  // returns a single absolute path (or array when multi-select), which we
+  // hand to Rust to register a folder attachment + spawn the walker. Like
+  // file attach we proactively probe the embedding model since folder
+  // indexing definitely needs it.
+  const onAttachFolder = async () => {
+    const dialogApi = getDialogApi();
+    if (!dialogApi) return;
+    try {
+      const picked = await dialogApi.open({
+        directory: true,
+        multiple: false,
+      });
+      if (!picked) return;
+      const path = Array.isArray(picked) ? picked[0] : picked;
+      if (!path) return;
+      const added = await invoke('attachment_add_folder', { chatId: activeTab, path });
+      if (added) {
+        setChatAttachments((m) => ({
+          ...m,
+          [activeTab]: [...(m[activeTab] || []), added],
+        }));
+      }
+      // Embedding-model check (same as onAttachFile). Folders always need
+      // the model — there's no small-file fast path here.
+      try {
+        const check = await invoke('embedding_model_check');
+        if (check && !check.installed) {
+          window.ekToast?.({
+            kind: 'warn',
+            title: `Embedding model "${check.model}" not installed`,
+            body: `Folder won't be searchable until you run:\n    ollama pull ${check.model}\n\nThen click the chip's ↻ to retry.`,
+          });
+        }
+      } catch {}
+    } catch (e) {
+      console.error('attachment_add_folder failed:', e);
+      window.ekToast?.({ kind: 'error', title: 'Folder attach failed', body: String(e) });
+    }
+  };
+
+  const onDetachAttachment = async (id) => {
+    try {
+      await invoke('attachment_remove', { id });
+    } catch (e) {
+      console.error('attachment_remove failed:', e);
+    }
+    setChatAttachments((m) => ({
+      ...m,
+      [activeTab]: (m[activeTab] || []).filter((a) => a.id !== id),
+    }));
+  };
+
+  // Re-run the embedding pipeline for one attachment. Used by the chip's
+  // "retry" affordance when status === 'error'. The Rust side flips status
+  // back to 'indexing' immediately and emits a status_changed event when
+  // done, so the UI updates without an extra refresh here.
+  const onReindexAttachment = async (id) => {
+    try {
+      await invoke('attachment_reindex', { id });
+    } catch (e) {
+      console.error('attachment_reindex failed:', e);
+      window.ekToast?.({ kind: 'error', title: 'Re-index failed', body: String(e) });
+    }
+  };
+
+  // Patch a single attachment's status in the per-chat map. Called from the
+  // status_changed event listener; finds the matching row across all chats
+  // (we don't carry chatId in the event payload — the id is globally unique).
+  // For folder attachments, `done`/`total` are optional progress fields
+  // that get attached to the row so the chip can render "(N/M indexed)".
+  const patchAttachmentStatus = (payload) => {
+    const { id, status, error, done, total, phase } = payload || {};
+    if (!id) return;
+    setChatAttachments((m) => {
+      const next = { ...m };
+      for (const k of Object.keys(next)) {
+        const list = next[k];
+        const idx = list.findIndex((a) => a.id === id);
+        if (idx >= 0) {
+          const updated = [...list];
+          const prev = updated[idx];
+          updated[idx] = {
+            ...prev,
+            status: status || prev.status,
+            error: error ?? prev.error ?? null,
+            // Phase 3: progress fields. `done` is the live indexed-files
+            // count; mirror it into fileCount so the chip can use one
+            // source of truth for both live progress and post-index
+            // "N files" rendering. progressTotal is the walker's cap
+            // (only known once the walk finishes).
+            ...(typeof done === 'number' ? { fileCount: done } : {}),
+            ...(typeof total === 'number' ? { progressTotal: total } : {}),
+            // Phase 4.5: sub-phase for folder indexing — 'walking' while
+            // the walker is enumerating files, 'embedding' once per-file
+            // indexing starts. Cleared on terminal status transitions
+            // because the chip's label logic keys off status at that point.
+            ...(phase ? { phase } : {}),
+            ...(status === 'ready' || status === 'error' ? { phase: null } : {}),
+          };
+          next[k] = updated;
+        }
+      }
+      return next;
+    });
+  };
+
+  useE(() => {
+    const eventApi = getEventApi();
+    if (!eventApi) return;
+    let unlisten = null;
+    eventApi
+      .listen('attachment:status_changed', (e) => {
+        if (e?.payload?.id) patchAttachmentStatus(e.payload);
+        // Terminal status transitions can swing the stale count (a reindex
+        // completing turns a stale attachment current). Cheap to re-check.
+        if (e?.payload?.status === 'ready' || e?.payload?.status === 'error') {
+          refreshStaleCount();
+        }
+      })
+      .then((u) => { unlisten = u; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
+  }, []);
+
+  // Screenshot capture (Phase 5). Rust spawns `screencapture -i` on hotkey
+  // press; when the user finishes the selection, Rust emits this event
+  // with the temp file path. We open a new chat tab with the screenshot
+  // pre-attached + swap to a vision-capable model if the active one
+  // doesn't have vision. User cancels of the selector are silent — no
+  // event fires, so no UI work happens here.
+  useE(() => {
+    const eventApi = getEventApi();
+    if (!eventApi) return;
+    let unlisten = null;
+    eventApi
+      .listen('screenshot:captured', (e) => {
+        const path = e?.payload;
+        if (!path || typeof path !== 'string') return;
+        // Indirect through the ref so we always run the latest closure
+        // (reads modelId / modelVisionMap fresh, not mount-time snapshots).
+        screenshotHandlerRef.current?.(path);
+      })
+      .then((u) => { unlisten = u; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
+  }, []);
+
+  // Surface spawn failures from screencapture (binary missing, permissions
+  // denied, etc.). User cancels never reach here — Rust just doesn't emit.
+  useE(() => {
+    const eventApi = getEventApi();
+    if (!eventApi) return;
+    let unlisten = null;
+    eventApi
+      .listen('screenshot:failed', (e) => {
+        const msg = typeof e?.payload === 'string' ? e.payload : 'unknown error';
+        window.ekToast?.({
+          kind: 'error',
+          title: 'Screenshot failed',
+          body: msg,
+        });
+      })
+      .then((u) => { unlisten = u; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
+  }, []);
+
+  // First write_file tool call in a chat with no output_dir surfaces this
+  // event. The Rust loop suspends the tool execution; user choice (Allow /
+  // Block) feeds back via chat_set_output_dir and the tool call resumes.
+  // "Not now" closes without persisting — the next tool attempt re-fires
+  // the event. Multiple events arriving back-to-back collapse to the most
+  // recent (last writer wins) — Rust only re-fires after a previous
+  // dismissal, so this is safe.
+  useE(() => {
+    const eventApi = getEventApi();
+    if (!eventApi) return;
+    let unlisten = null;
+    eventApi
+      .listen('chat:needs_output_dir', (e) => {
+        const p = e?.payload || {};
+        if (!p.chatId) return;
+        setOutputDirReq({
+          chatId: p.chatId,
+          chatTitle: p.chatTitle || '',
+          suggested: p.suggested || '',
+        });
+      })
+      .then((u) => { unlisten = u; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
+  }, []);
+
+  // Notification focus-hint plumbing. Rust emits `watch:focus_hint` right
+  // before showing an OS notification; we stash the watchId + timestamp in
+  // a ref. The companion window-focus listener (below) reads the ref and
+  // — if the focus event arrives within FOCUS_HINT_WINDOW_MS of the hint
+  // — switches the right panel to Watches and filters the activity feed
+  // to the firing watch. The narrow time window keeps false positives
+  // (the user tabbing into Ekorbia for unrelated reasons) bounded.
+  useE(() => {
+    const eventApi = getEventApi();
+    if (!eventApi) return;
+    let unlisten = null;
+    eventApi
+      .listen('watch:focus_hint', (e) => {
+        const watchId = e?.payload;
+        if (typeof watchId === 'string' && watchId) {
+          notificationHintRef.current = { watchId, ts: Date.now() };
+        }
+      })
+      .then((u) => { unlisten = u; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
+  }, []);
+
+  // The Tauri v2 window-focus event fires whenever the main window becomes
+  // active. If a notification hint is fresh (<5s), treat this as a click-
+  // through, switch tabs, and bump the focus-filter key so WatchPanel
+  // applies the filter via its useEffect. Stale hints are discarded.
+  useE(() => {
+    const winApi = getWindowApi();
+    if (!winApi) return;
+    const FOCUS_HINT_WINDOW_MS = 5000;
+    const current = winApi?.getCurrentWindow?.() ?? winApi?.getCurrent?.();
+    if (!current?.listen) return;
+    let unlisten = null;
+    current
+      .listen('tauri://focus', () => {
+        const hint = notificationHintRef.current;
+        if (!hint?.watchId) return;
+        if (Date.now() - hint.ts > FOCUS_HINT_WINDOW_MS) return;
+        // Consume the hint so a later unrelated focus doesn't re-trigger.
+        notificationHintRef.current = { watchId: null, ts: 0 };
+        setRightPanelOpen(true);
+        setRightPanelTab('watches');
+        setWatchFocusFilter((f) => ({ watchId: hint.watchId, key: f.key + 1 }));
+      })
+      .then((u) => { unlisten = u; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
+  }, []);
+
+  // Look up capabilities (vision + tools) for a model in one round-trip,
+  // caching the result in memory. Failure (Ollama down, model not pulled)
+  // is treated as no-capabilities — we don't want a transient error to
+  // block image attachments or disable tool use forever, so the cache only
+  // records *successful* lookups. Rust still gates the actual usage.
+  const probeModelCapabilities = async (model) => {
+    if (!model) return;
+    if (modelVisionMap[model] !== undefined && modelToolsMap[model] !== undefined) return;
+    try {
+      const caps = await invoke('model_capabilities', { model });
+      setModelVisionMap((m) => ({ ...m, [model]: !!caps?.vision }));
+      setModelToolsMap((m) => ({ ...m, [model]: !!caps?.tools }));
+    } catch (e) {
+      // Silent — badges just won't show. Rust still gates encoding/tooling.
+    }
+  };
+  useE(() => { probeModelCapabilities(modelId); }, [modelId]);
+
+  // Chat state — keyed by tab/chat id
+  const [chats, setChats] = useS(() => ({
+    [welcomeIdRef.current]: { id: welcomeIdRef.current, title: 'New chat', messages: [], loaded: true },
+  }));
+  // Ephemeral (private-mode) chat ids. Kept in a ref so persistence helpers
+  // can check it synchronously without depending on React state having
+  // flushed — important during streams that span tab closure: if the user
+  // closes a private tab mid-stream, chats[id] disappears from state but
+  // we still want the in-flight assistant message to NOT hit the DB. The
+  // ref retains the "this id is private" decision even after the chat is
+  // gone from `chats`. Entries are never explicitly removed (stale ids
+  // pile up, but the Set size is bounded by sessions-worth of clicks —
+  // not a memory concern, and pruning would re-introduce the close-mid-
+  // stream bug we just avoided).
+  const ephemeralChatIdsRef = useR(new Set());
+  const isEphemeralChat = (chatId) => ephemeralChatIdsRef.current.has(chatId);
+
+  // Persistence wrappers that gate every DB write on the ephemeral flag.
+  // Use these instead of `invoke('db_upsert_chat', ...)` etc. so private
+  // chats genuinely never touch SQLite — not just "we tried not to".
+  const persistChat = (chatPayload) => {
+    if (isEphemeralChat(chatPayload.id)) return Promise.resolve();
+    return invoke('db_upsert_chat', { chat: chatPayload });
+  };
+  const persistMessage = (msgPayload) => {
+    if (isEphemeralChat(msgPayload.chatId)) return Promise.resolve();
+    return invoke('db_upsert_message', { msg: msgPayload });
+  };
+  const persistTruncate = (chatId, fromMessageId) => {
+    if (isEphemeralChat(chatId)) return Promise.resolve();
+    return invoke('db_truncate_chat_from', { chatId, fromMessageId });
+  };
+  const chat = chats[activeTab] ?? { id: activeTab, title: 'New chat', messages: [] };
+  const setChat = (updater) => setChats(cs => ({
+    ...cs,
+    [activeTab]: typeof updater === 'function' ? updater(cs[activeTab] ?? { id: activeTab, title: 'New chat', messages: [] }) : updater,
+  }));
+
+  const [modelId, setModelId] = useS(readPersistedComposerModel);
+  // Build a display object — fall back to a minimal stub for models not in the static list
+  const model = MODELS_BY_ID[modelId] || { id: modelId, name: modelId, color: '#9bbf83' };
+  const [streaming, setStreaming] = useS(false);
+  const [ramUsed, setRamUsed] = useS(28);
+
+  const [history, setHistory] = useS([]);
+
+  // ── Backend load on mount ───────────────────────────────────────────────────
+  // Prompts now live as Markdown files in the configured prompts directory.
+  // Rust already seeds built-ins on startup, so prompts_list returns the
+  // baseline set on first launch and any user additions thereafter.
+  // Plain function (not useCallback) — `invoke` is recomputed every render so
+  // memoizing on it would miss; we just call this from the mount effect and
+  // pass it down by reference. Identity changes don't matter here.
+  const refreshPrompts = async () => {
+    try {
+      const rows = await invoke('prompts_list');
+      const mapped = rows.map((r) => ({
+        ...r,
+        favorite: r.favorite ?? null,
+        updated: relativeTime(r.updatedAt),
+      }));
+      setPrompts(mapped);
+      // Seed a sensible selection on first load — first item by recency.
+      setSelectedPromptId((curr) =>
+        curr && mapped.some((p) => p.id === curr) ? curr : (mapped[0]?.id ?? null),
+      );
+    } catch (e) {
+      console.error('prompts_list failed:', e);
+      setPrompts([]);
+    }
+  };
+
+  useE(() => {
+    (async () => {
+      try {
+        const chatRows = await invoke('db_load_chats');
+        setHistory(groupChatsByDate(chatRows));
+        // Auto-open the most-recently-updated chat on launch so the app
+        // resumes where the user left off instead of dumping them into a
+        // blank "New chat". chatRows is ordered `updated_at DESC` by the
+        // Rust side (see chat.rs: db_load_chats), so [0] is freshest.
+        //
+        // First-run / cleared-history (empty list) intentionally falls
+        // through to the welcome tab the lazy useState initialisers
+        // already set up — no-history users still get the friendly
+        // empty composer.
+        //
+        // We open the historical chat then strip the welcome tab so the
+        // user lands on a single tab (the loaded chat), not two. The
+        // welcome id was generated fresh this launch (welcomeIdRef), so
+        // it can never collide with a real persisted chat id — safe to
+        // delete from `chats` unconditionally.
+        if (Array.isArray(chatRows) && chatRows.length > 0) {
+          const newest = chatRows[0];
+          try {
+            await openChatInTab({
+              id: newest.id,
+              title: newest.title,
+              model: newest.model,
+            });
+            setTabs(ts => ts.filter(t => t.id !== welcomeId));
+            setChats(cs => { const n = { ...cs }; delete n[welcomeId]; return n; });
+          } catch (openErr) {
+            // Don't block startup on a failed auto-open — the user can
+            // still click the chat in the sidebar. Leave the welcome
+            // tab in place as a usable fallback.
+            console.error('auto-open newest chat failed:', openErr);
+          }
+        }
+      } catch (e) {
+        console.error('chat load failed:', e);
+      }
+      await refreshPrompts();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
+  }, []);
+
+  // Keyboard shortcuts
+  useE(() => {
+    const onKey = (e) => {
+      const meta = e.metaKey || e.ctrlKey;
+      if (meta && e.key === '\\') { e.preventDefault(); setSidebarOpen(o => !o); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Debounced full-text-search across message content. Empty query clears
+  // hits immediately (no debounce — feels instant on backspace). A non-empty
+  // query waits 150ms before invoking so each keystroke doesn't trigger a
+  // round-trip. The Rust command sanitises the query (strips operators,
+  // appends `*` for prefix matching), so we can pass it through unprocessed.
+  useE(() => {
+    if (!query.trim()) {
+      setMessageHits([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      invoke('search_chats', { query: query.trim() })
+        .then((hits) => setMessageHits(Array.isArray(hits) ? hits : []))
+        .catch((err) => {
+          console.error('search_chats failed:', err);
+          setMessageHits([]);
+        });
+    }, 150);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  // Push the user's persisted quick-query hotkey into the OS-level binding.
+  // Rust's setup() already registered the default (Super+Shift+Space) so
+  // the overlay is reachable before this runs — this call re-registers
+  // with the user's choice if they've customised it.
+  useE(() => {
+    let stored = null;
+    try { stored = localStorage.getItem('ekorbia.overlay.hotkey'); } catch {}
+    if (stored) {
+      invoke('register_hotkey', { shortcut: stored }).catch((err) => {
+        console.error('Failed to apply stored hotkey, falling back:', err);
+        // If the stored hotkey is now invalid (e.g. user moved OS versions
+        // and the combo conflicts), Rust's startup default keeps working.
+      });
+    }
+  }, []);
+
+  // Same bootstrap for the screenshot hotkey (Phase 5). Rust's setup()
+  // registered Super+Shift+Digit1 as the default; this call re-registers
+  // with the user's customisation if any. Independent of the overlay
+  // bootstrap above because register_screenshot_hotkey operates on its
+  // own registry slot.
+  useE(() => {
+    let stored = null;
+    try { stored = localStorage.getItem('ekorbia.screenshot.hotkey'); } catch {}
+    if (stored) {
+      invoke('register_screenshot_hotkey', { shortcut: stored }).catch((err) => {
+        console.error('Failed to apply stored screenshot hotkey, falling back:', err);
+      });
+    }
+  }, []);
+
+  // First-launch onboarding gate (Phase 6). We read the completion flag
+  // from app_settings — null/empty means "never finished the tour", so
+  // open it. Any other value (we write "1" on completion) keeps it hidden.
+  // Settings live in SQLite rather than localStorage because (a) they
+  // survive an explicit localStorage wipe, and (b) the tour is something
+  // we'd want to re-trigger via a one-line `setting_set` if a future
+  // release reworks it substantially.
+  //
+  // Also expose window.ekOpenOnboarding so SettingsModal's "Show tour
+  // again" button (and anything else that wants to nudge users back into
+  // the tour) can reopen without lifting state up to App.
+  useE(() => {
+    const opener = () => setOnboardingOpen(true);
+    window.ekOpenOnboarding = opener;
+    invoke('setting_get', { key: 'onboarding.completed' })
+      .then((v) => {
+        // get_setting returns Option<String>: null when unset; we also
+        // treat empty string as unset so a future "reset the tour"
+        // setting_set('','') re-fires it cleanly.
+        if (!v) setOnboardingOpen(true);
+      })
+      .catch((err) => {
+        // setting_get can't fail without DB lock contention; if it
+        // somehow does, fail closed (don't show) so we don't pester a
+        // returning user. The Settings → Help "Show tour again" button
+        // still gives them an out.
+        console.error('onboarding setting_get failed:', err);
+      });
+    return () => {
+      // Only clear if it's still our handle — defensive in case a hot
+      // reload (dev) or future code installs a replacement.
+      if (window.ekOpenOnboarding === opener) {
+        delete window.ekOpenOnboarding;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Close handler — invoked from Skip, Get started, ⎋, and the
+  // dot-indicator's last-slide Next path. Writes the completion flag
+  // synchronously-ish (fire-and-forget; the worst case of a failed write
+  // is the tour re-opening once more on next launch — not a data loss
+  // bug, just a minor annoyance).
+  const closeOnboarding = React.useCallback(() => {
+    setOnboardingOpen(false);
+    invoke('setting_set', { key: 'onboarding.completed', value: '1' })
+      .catch((err) => console.error('onboarding setting_set failed:', err));
+  }, [invoke]);
+
+  // Persist the composer's model whenever the user changes it (via the
+  // model picker, or implicitly by opening an old chat). Next launch reads
+  // this back through readPersistedComposerModel(); see also the validation
+  // effect below which rationalises stale values against what's pulled.
+  useE(() => {
+    try { localStorage.setItem(COMPOSER_MODEL_LS_KEY, modelId); } catch {}
+  }, [modelId]);
+
+  // One-shot validation: at startup, ask Ollama what's actually pulled and
+  // — if our persisted/default choice isn't installed — fall back to the
+  // first available model. This is what stops a fresh install (or a new
+  // machine) from sitting on `gemma4:26b` when the user has llama3 only.
+  // Failures are silent: if Ollama is down, the StatusBar surfaces it and
+  // the user can fix the model later via the picker.
+  useE(() => {
+    fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(3000) })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((data) => {
+        const pulled = (data.models || []).map((m) => m.name);
+        if (pulled.length === 0) return;
+        // Use the setState callback form so this works regardless of when
+        // the effect resolves relative to other state updates at mount.
+        setModelId((curr) => (pulled.includes(curr) ? curr : pulled[0]));
+        // Sync the welcome tab so its composer-displayed model matches.
+        // We deliberately don't touch other tabs — their `model` is a
+        // historical fact about the conversation, not a preference.
+        setTabs((ts) =>
+          ts.map((t) =>
+            t.id === welcomeId && !pulled.includes(t.model)
+              ? { ...t, model: pulled[0] }
+              : t,
+          ),
+        );
+      })
+      .catch(() => {});
+  }, []);
+
+  const streamingRef = useR(false);
+  const abortRef = useR(null);
+  const streamAccumulatedRef = useR('');
+  const streamMsgIdRef = useR(null);
+
+  // Execute a single file write. Handles the permission-required dance:
+  // when Rust emits chat:needs_output_dir, the modal renders and user
+  // choice flows back via outputDirResolverRef. On Allow we retry once;
+  // on Block we surface a user-blocked error; on dismiss ("Not now") the
+  // call returns silently — the caller (tool loop OR heuristic save) gets
+  // a refusal it can reason about, but we don't toast it (the user just
+  // clicked "no").
+  //
+  // The `command` parameter switches between:
+  //   - 'tool_write_file' (default): model-driven saves via the tool loop.
+  //     chat_files.source = 'tool'.
+  //   - 'chat_save_manual_file': user-driven saves via the heuristic
+  //     Save buttons in chat.jsx. chat_files.source = 'manual'. Same
+  //     sandbox + permission flow.
+  const executeWriteFile = async (chatId, messageId, path, contents, command = 'tool_write_file') => {
+    const argPath = String(path || '');
+    const argContents = String(contents || '');
+    const callOnce = async () => {
+      const r = await invoke(command, {
+        chatId, messageId, path: argPath, contents: argContents,
+      });
+      return {
+        ok: true,
+        // id is the chat_files row id, threaded through so Reveal/Open
+        // affordances on the chip can call the native opener commands
+        // (chat_file_reveal / chat_file_open) which take a fileId arg.
+        // Without this, freshly-saved chips would lack a fileId and the
+        // buttons would no-op (the JS-side absPath path was removed when
+        // we abandoned the shell plugin due to its scope regex).
+        id: r.id,
+        relPath: r.relPath,
+        bytes: r.bytes,
+        version: r.version,
+        absPath: r.absPath,
+      };
+    };
+    try {
+      return await callOnce();
+    } catch (e) {
+      const errStr = String(e);
+      if (errStr.includes('permission_required')) {
+        const dir = await new Promise((resolve) => {
+          outputDirResolverRef.current = resolve;
+        });
+        if (dir === null) {
+          return { ok: false, error: 'user declined to allow file saves', silent: true };
+        }
+        if (dir === '') {
+          return { ok: false, error: 'user has blocked file saves on this chat' };
+        }
+        try { return await callOnce(); }
+        catch (e2) { return { ok: false, error: String(e2) }; }
+      }
+      return { ok: false, error: errStr };
+    }
+  };
+
+  // Register window.ekSaveModelFile — the heuristic-fallback bridge for
+  // chat.jsx's per-block Save buttons. Calls executeWriteFile with the
+  // 'manual' source command, toasts the result, and patches the
+  // assistant message's toolResults so the green chip strip surfaces the
+  // newly-saved file alongside any tool-driven saves. Mount-once: the
+  // closure captures stable refs (setChats setter, outputDirResolverRef);
+  // executeWriteFile reads through to those at call time.
+  useE(() => {
+    window.ekSaveModelFile = async ({ chatId, messageId, path, contents }) => {
+      const result = await executeWriteFile(
+        chatId, messageId, path, contents, 'chat_save_manual_file'
+      );
+      if (result.ok) {
+        window.ekToast?.({
+          kind: 'info',
+          title: `Saved ${result.relPath}`,
+          body: `${result.bytes} bytes · v${result.version}`,
+        });
+        // Mirror the live tool-write path: stash on the message so the
+        // chip strip renders it like any other saved file.
+        setChats(cs => {
+          const c = cs[chatId];
+          if (!c) return cs;
+          const msgs = c.messages.map(m => {
+            if (m.id !== messageId) return m;
+            return {
+              ...m,
+              toolResults: [
+                ...(m.toolResults || []),
+                {
+                  callId: `manual-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+                  // Same as the tool-loop chip: fileId drives the native
+                  // opener commands; absPath stays for debug display only.
+                  fileId: result.id,
+                  relPath: result.relPath,
+                  bytes: result.bytes,
+                  version: result.version,
+                  absPath: result.absPath,
+                },
+              ],
+            };
+          });
+          return { ...cs, [chatId]: { ...c, messages: msgs } };
+        });
+      } else if (!result.silent) {
+        window.ekToast?.({
+          kind: 'warn',
+          title: 'Could not save file',
+          body: result.error || 'unknown error',
+        });
+      }
+      return result;
+    };
+    return () => { try { delete window.ekSaveModelFile; } catch (_) {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSend = async (text, options = {}) => {
+    // `options.baseMessages` lets edit-and-resubmit / retry pass a truncated
+    // list of prior messages. React state updates (setChat) are async, so
+    // these flows can't just truncate the chat then immediately call
+    // handleSend — the closure here would still read the pre-truncation
+    // chat.messages. Passing the truncated list explicitly bypasses that
+    // race. When undefined, we fall back to the live chat.messages (the
+    // normal user-typed-then-clicked-Send path).
+    const baseMessages = options.baseMessages ?? chat.messages;
+
+    // Prepare attached-file payload first so we know if there's a system
+    // block to merge with the attached-prompts content and whether to pass
+    // images on the user message. Returns an empty payload (no system block,
+    // no images) when this chat has no attachments.
+    let attachPayload = { systemBlock: '', images: [], sources: [], imagesSkipped: false };
+    if (attachments.length > 0) {
+      try {
+        attachPayload = await invoke('attachment_prepare_for_send', {
+          chatId: activeTab,
+          model: modelId,
+          // The user's message text — Rust embeds it and retrieves top-k
+          // chunks from any large indexed attachments. Small files still
+          // get inlined whole regardless of the query.
+          query: text,
+        }) || attachPayload;
+      } catch (e) {
+        console.error('attachment_prepare_for_send failed:', e);
+      }
+    }
+    const promptSystem = attachedPrompts.map(p => p.body).join('\n\n');
+    // `isNewChat` drives two things that are wrong for truncate-and-resend:
+    //   1. Appending the chat to the sidebar `history` array — which would
+    //      create a duplicate row when an edit/retry truncates everything
+    //      and the chat already lives in history under the same id.
+    //   2. Auto-titling from the first message text — which would clobber
+    //      a chat the user has been having for a while.
+    // `options.isContinuation` lets truncateAndResend explicitly say "this
+    // chat already exists, don't re-do new-chat side effects" even when
+    // baseMessages is empty after the truncation.
+    const isNewChat = options.isContinuation ? false : baseMessages.length === 0;
+    // Auto-title from the first message ONLY if the user hasn't already set
+    // a custom title (via the ChatPane click-to-edit). Without this check, a
+    // pre-send rename would be silently overwritten by the auto-title.
+    const hasCustomTitle = chat.title && chat.title !== 'New chat';
+    const title = isNewChat && !hasCustomTitle
+      ? (text.trim().slice(0, 40) || 'New chat')
+      : chat.title;
+    const priorMessages = baseMessages.map(m => ({ role: m.role, content: m.content }));
+    // Prompt system content keeps its historical "first-send-only" treatment
+    // — re-sending the same prompt prefix each turn would waste tokens. The
+    // attachment system block is different: its content can change between
+    // turns (user adds/removes files), so it's sent every send as a fresh
+    // system message right at the start.
+    const promptSystemMessages = (promptSystem && isNewChat)
+      ? [{ role: 'system', content: promptSystem }]
+      : [];
+    const attachmentSystemMessages = attachPayload.systemBlock
+      ? [{ role: 'system', content: attachPayload.systemBlock }]
+      : [];
+    // Memory file (Phase 4a): a single user-edited markdown file injected
+    // as a system message on every send. Wrapped in <user_memory> tags so
+    // the model can distinguish "stuff the user wrote about themselves"
+    // from the rest of the system prompt. memory_read returns null when
+    // the file is missing, empty, or unreadable — in those cases we add
+    // no message at all (no point burning tokens on an empty wrapper).
+    // Sent every send (not first-only like prompts) because the user
+    // expects "memory" to follow the conversation; if they edit memory.md
+    // mid-chat, the next turn should reflect the change.
+    let memoryContent = null;
+    try {
+      memoryContent = await invoke('memory_read');
+    } catch (e) {
+      console.error('memory_read failed:', e);
+    }
+    const memorySystemMessages = memoryContent
+      ? [{ role: 'system', content: `<user_memory>\n${memoryContent.trim()}\n</user_memory>` }]
+      : [];
+    const userContent = (promptSystem && !isNewChat) ? `${promptSystem}\n\n${text}` : text;
+    const nowTs = Math.floor(Date.now() / 1000);
+
+    const userId = genId();
+    const asstId = genId();
+    streamMsgIdRef.current = asstId;
+    streamAccumulatedRef.current = '';
+
+    const userMsg = {
+      id: userId,
+      role: 'user', content: text, time: now(),
+      // Resolve favorite → color here so historical messages keep their tint
+      // even if the underlying prompt's favorite is later cleared or changed.
+      prompts: attachedPrompts.length ? attachedPrompts.map(p => {
+        const fav = p.favorite ? FAVORITE_COLOR_MAP[p.favorite] : null;
+        return { id: p.id, name: p.name, color: fav?.color || null };
+      }) : undefined,
+    };
+    // Snapshot of citation sources at send time, attached to the assistant
+    // message so its Sources footer renders the right files even if the user
+    // later detaches them. Undefined when there were no attachments.
+    const asstSources = attachPayload.sources?.length ? attachPayload.sources : undefined;
+    const asstImagesSkipped = attachPayload.imagesSkipped || undefined;
+
+    setStreaming(true);
+    streamingRef.current = true;
+
+    setChat(c => ({
+      ...c,
+      title,
+      messages: [
+        ...c.messages,
+        userMsg,
+        {
+          id: asstId, role: 'assistant', model: modelId, time: now(),
+          content: '', streaming: true,
+          sources: asstSources,
+          imagesSkipped: asstImagesSkipped,
+        },
+      ],
+    }));
+
+    // Persist new chat and user message. For ephemeral chats:
+    //   • persistChat / persistMessage are no-ops (gated on ephemeral ref)
+    //   • setHistory is skipped — private chats don't appear in the
+    //     sidebar history list. The tab itself still appears in the tab
+    //     bar with its lock indicator (set by newPrivateTab) so the user
+    //     can navigate while it's alive; closing the tab makes it gone.
+    const ephemeral = isEphemeralChat(activeTab);
+    if (isNewChat) {
+      setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, title } : t));
+      if (!ephemeral) {
+        const newItem = { id: activeTab, title, model: modelId, when: 'now' };
+        setHistory(hs => {
+          const todayIdx = hs.findIndex(s => s.section === 'Today');
+          if (todayIdx >= 0) return hs.map((s, i) => i === todayIdx ? { ...s, items: [newItem, ...s.items] } : s);
+          return [{ section: 'Today', items: [newItem] }, ...hs];
+        });
+      }
+      persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs }).catch(console.error);
+    } else {
+      persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs }).catch(console.error);
+    }
+
+    const seq = priorMessages.length;
+    persistMessage({
+      id: userId, chatId: activeTab, role: 'user', content: text,
+      model: null, time: userMsg.time,
+      tokensIn: null, tokensOut: null, tokensMs: null,
+      promptsJson: userMsg.prompts ? JSON.stringify(userMsg.prompts) : null,
+      seq,
+    }).catch(console.error);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    let accumulated = '';
+    let tokensIn = 0, tokensOut = 0, startMs = Date.now();
+    let ollamaOk = false;
+
+    // Tool-use loop. When the active model supports tools (modelHasTools)
+    // and the user hasn't blocked file saves on this chat (output_dir !== ''),
+    // we include the write_file schema in the request. The model may
+    // respond with `tool_calls`; we execute them via tool_write_file, append
+    // tool-response messages, and re-fetch /api/chat. Loop terminates when
+    // the model responds with no tool_calls (or MAX_TOOL_ITERATIONS hits).
+    //
+    // When tools are off (text-only models, or user-blocked chats), the
+    // loop runs exactly once and behaves exactly like the pre-tool-use
+    // streaming path — no tools field in the body, no tool_calls in the
+    // response, no permission modal.
+
+    // Build the user-role message. Vision-capable + image-attached → set
+    // images: [base64,...]. The Rust side already filtered out images
+    // for non-vision models, so this is safe.
+    const userMessage = { role: 'user', content: userContent };
+    if (attachPayload.images?.length) {
+      userMessage.images = attachPayload.images;
+    }
+
+    // Resolve current output_dir up front: lets us skip including tools at
+    // all when the user has explicitly blocked saves (output_dir === '').
+    // NULL/undefined means "never asked" — we still pass tools through and
+    // the modal fires on the first tool_call.
+    let currentOutputDir = null;
+    if (activeModelHasTools) {
+      try { currentOutputDir = await invoke('chat_output_dir', { chatId: activeTab }); }
+      catch (_) { currentOutputDir = null; }
+    }
+    const includeTools = activeModelHasTools && currentOutputDir !== '';
+    if (includeTools && !toolSchemasRef.current) {
+      try { toolSchemasRef.current = (await invoke('chat_tool_schemas')) || []; }
+      catch (_) { toolSchemasRef.current = []; }
+    }
+
+    // Mutable conversation array — extended each tool iteration with the
+    // assistant's tool_calls turn + the tool-result responses, then re-sent.
+    // System message ordering:
+    //   memory   — durable facts about the user (every send)
+    //   prompts  — first-send-only system prompt(s) the user attached
+    //   attach   — attachment context for this send (top-k chunks etc.)
+    //   prior    — the rolling conversation history
+    //   user     — this turn's user message
+    // Memory goes first because it's the most stable / general context;
+    // prompts and attachments are situational and should overlay it.
+    const convoMessages = [
+      ...memorySystemMessages,
+      ...attachmentSystemMessages,
+      ...promptSystemMessages,
+      ...priorMessages,
+      userMessage,
+    ];
+
+    // Accumulate across iterations for final persistence.
+    // - allToolCalls: every tool_call this send produced, stored as
+    //   tool_calls_json on the assistant message for history.
+    // - toolResultMessages: role='tool' rows to persist after the loop.
+    // - allToolResults: just the successful saves, threaded onto the
+    //   live assistant message so chat.jsx can render the chip row.
+    //   On chat reload, the equivalent comes from chat_files_list.
+    const allToolCalls = [];
+    const toolResultMessages = [];
+    const allToolResults = [];
+
+    try {
+      for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+        if (!streamingRef.current) break;
+        const body = {
+          model: modelId,
+          messages: convoMessages,
+          stream: true,
+        };
+        if (includeTools && toolSchemasRef.current?.length) {
+          body.tools = toolSchemasRef.current;
+        }
+
+        const resp = await fetch('http://localhost:11434/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        if (!resp.ok) { ollamaOk = false; break; }
+        ollamaOk = true;
+
+        let turnContent = '';
+        let turnToolCalls = [];
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        // Line-buffered NDJSON parsing. The previous implementation
+        // split each decoded chunk on '\n' and parsed each segment —
+        // which silently dropped content whenever a JSON line straddled
+        // a network packet boundary (the partial first/last line would
+        // fail JSON.parse and be swallowed by the catch below). Buffering
+        // raw text and only consuming completed lines (delimiter found)
+        // eliminates that loss.
+        let lineBuf = '';
+        const consumeLine = (line) => {
+          if (!line) return;
+          try {
+            const obj = JSON.parse(line);
+            if (obj.message?.content) {
+              turnContent += obj.message.content;
+              accumulated += obj.message.content;
+              streamAccumulatedRef.current = accumulated;
+              const snap = accumulated;
+              setChat(c => {
+                const msgs = [...c.messages];
+                msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: snap };
+                return { ...c, messages: msgs };
+              });
+            }
+            if (obj.message?.tool_calls?.length) {
+              turnToolCalls = turnToolCalls.concat(obj.message.tool_calls);
+            }
+            if (obj.done) {
+              // tokensIn is the prompt-eval count of the LATEST request —
+              // it grows each iteration as we append tool responses, so
+              // overwriting (not summing) gives a meaningful total.
+              tokensIn = obj.prompt_eval_count ?? tokensIn;
+              tokensOut += obj.eval_count ?? 0;
+            }
+          } catch (_) {
+            // Malformed JSON line. Should not happen with Ollama in
+            // practice; swallow and continue (a single bad chunk
+            // shouldn't kill the whole turn).
+          }
+        };
+        while (streamingRef.current) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          lineBuf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = lineBuf.indexOf('\n')) !== -1) {
+            const line = lineBuf.slice(0, nl).trim();
+            lineBuf = lineBuf.slice(nl + 1);
+            consumeLine(line);
+          }
+        }
+        // Drain any final non-newline-terminated content. Ollama always
+        // ends each NDJSON entry with '\n' in practice, but flushing
+        // here keeps us robust against servers that don't.
+        const tail = lineBuf.trim();
+        if (tail) consumeLine(tail);
+
+        // No tool_calls? Final turn — stop.
+        if (turnToolCalls.length === 0) break;
+
+        // Tool-call turn. Push the assistant message (with tool_calls) into
+        // the convo so the next request preserves the Ollama-required
+        // user → assistant(tool_calls) → tool → assistant interleave.
+        allToolCalls.push(...turnToolCalls);
+        convoMessages.push({
+          role: 'assistant',
+          content: turnContent,
+          tool_calls: turnToolCalls,
+        });
+
+        // Execute each tool call serially. JS-side validation is light;
+        // the heavy lifting (sandbox, atomic write, chat_files row) lives
+        // in the tool_write_file Rust command.
+        for (const call of turnToolCalls) {
+          const callId = call.id || call.function?.name || `call_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+          const name = call.function?.name;
+          let args = call.function?.arguments;
+          if (typeof args === 'string') {
+            try { args = JSON.parse(args); } catch (_) { args = {}; }
+          }
+          args = args || {};
+
+          let result;
+          if (name !== 'write_file') {
+            result = { ok: false, error: `unknown tool: ${name}` };
+          } else {
+            result = await executeWriteFile(activeTab, asstId, args.path, args.contents);
+          }
+
+          // Toast each save (success or failure). Image-only "user
+          // declined" path stays silent — the model still sees the
+          // refusal in the tool result and can react.
+          if (result.ok) {
+            // Stash the live result so the assistant message can render
+            // its file chip when the loop finishes. fileId = chat_files
+            // row id; the chip uses it to call chat_file_reveal /
+            // chat_file_open without needing absPath on the JS side.
+            allToolResults.push({
+              callId,
+              fileId: result.id,
+              relPath: result.relPath,
+              bytes: result.bytes,
+              version: result.version,
+              absPath: result.absPath,
+            });
+            window.ekToast?.({
+              kind: 'info',
+              title: `Saved ${result.relPath}`,
+              body: `${result.bytes} bytes · v${result.version}`,
+            });
+          } else if (!result.silent) {
+            window.ekToast?.({
+              kind: 'warn',
+              title: 'Could not save file',
+              body: result.error || 'unknown error',
+            });
+          }
+
+          // Append the tool response to the convo for the next iteration.
+          // Content must be a string per Ollama's tool-result format.
+          convoMessages.push({
+            role: 'tool',
+            tool_call_id: callId,
+            content: JSON.stringify(result),
+          });
+          toolResultMessages.push({ callId, content: JSON.stringify(result) });
+        }
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') {}
+    }
+
+    if (!ollamaOk && streamingRef.current) {
+      accumulated = `Ollama isn't running on localhost:11434. Start it with \`ollama serve\` and make sure the model "${modelId}" is pulled (\`ollama pull ${modelId}\`).`;
+      streamAccumulatedRef.current = accumulated;
+    }
+
+    const elapsedMs = Date.now() - startMs;
+    const finalContent = accumulated;
+    const finalTokens = (tokensIn || tokensOut) ? { in: tokensIn, out: tokensOut, ms: elapsedMs } : undefined;
+
+    setChat(c => {
+      const msgs = [...c.messages];
+      msgs[msgs.length - 1] = {
+        ...msgs[msgs.length - 1],
+        content: finalContent || msgs[msgs.length - 1].content,
+        streaming: false,
+        tokens: finalTokens,
+        // toolResults drives the saved-file chips above the assistant text
+        // in chat.jsx Message. undefined when the model didn't use tools
+        // so the chip strip simply isn't rendered.
+        toolResults: allToolResults.length ? allToolResults : undefined,
+      };
+      return { ...c, messages: msgs };
+    });
+
+    // Persist assistant message. sources_json is a JSON object wrapping
+    // both the citation array and a flag for skipped images so historical
+    // chats keep their "model couldn't see this image" hint even after
+    // reload. Null when neither applies — keeps row size minimal for the
+    // common no-attachments case.
+    const sourcesBlob = (asstSources?.length || asstImagesSkipped)
+      ? JSON.stringify({ items: asstSources || [], imagesSkipped: !!asstImagesSkipped })
+      : null;
+    // toolCallsJson captures every tool_call the model emitted during this
+    // send (possibly across multiple iterations). Persisted on the single
+    // assistant message id so Phase 4 can render saved-file chips above
+    // the assistant text without needing to walk separate intermediate
+    // assistant rows. Null when no tools were used → row stays compact.
+    const toolCallsBlob = allToolCalls.length
+      ? JSON.stringify(allToolCalls)
+      : null;
+    persistMessage({
+      id: asstId, chatId: activeTab, role: 'assistant',
+      content: finalContent || streamAccumulatedRef.current,
+      model: modelId, time: now(),
+      tokensIn: finalTokens?.in ?? null, tokensOut: finalTokens?.out ?? null, tokensMs: finalTokens?.ms ?? null,
+      promptsJson: null,
+      sourcesJson: sourcesBlob,
+      toolCallsJson: toolCallsBlob,
+      toolCallId: null,
+      seq: seq + 1,
+    }).catch(console.error);
+
+    // Persist each tool-result message as its own row (role='tool',
+    // tool_call_id set, content = JSON-encoded result). Sequenced AFTER
+    // the assistant row to keep the on-reload ordering sensible — the
+    // assistant emitted these calls before the responses came back, so
+    // the order is user → assistant(+tool_calls) → tool ... → end.
+    // Note: when the tool loop ran multiple iterations, all tool rows
+    // collapse here at the tail. For v1 this is acceptable; full multi-
+    // turn replay fidelity would need separate assistant rows per
+    // iteration and is a Phase-4+ concern.
+    let toolSeq = seq + 2;
+    for (const tr of toolResultMessages) {
+      persistMessage({
+        id: `${asstId}-t-${tr.callId}`,
+        chatId: activeTab,
+        role: 'tool',
+        content: tr.content,
+        model: null,
+        time: now(),
+        tokensIn: null, tokensOut: null, tokensMs: null,
+        promptsJson: null,
+        sourcesJson: null,
+        toolCallsJson: null,
+        toolCallId: tr.callId,
+        seq: toolSeq++,
+      }).catch(console.error);
+    }
+
+    setStreaming(false);
+    streamingRef.current = false;
+    abortRef.current = null;
+    streamMsgIdRef.current = null;
+  };
+
+  // Truncate-and-resend helper. Shared by edit-and-resubmit (`fromIdx` is
+  // the edited user message, send `newText`) and retry (`fromIdx` is the
+  // last user message, send its existing content). Both delete the
+  // from-message and everything after it (in memory + DB), then invoke
+  // handleSend with the truncated list explicitly so the closure inside
+  // handleSend doesn't need React state to have flushed.
+  //
+  // Gated by !streaming externally; this helper assumes the caller has
+  // checked. Toasts on DB failure but otherwise stays silent.
+  const truncateAndResend = async (fromIdx, newText) => {
+    const msgs = chat.messages;
+    if (fromIdx < 0 || fromIdx >= msgs.length) return;
+    const anchor = msgs[fromIdx];
+    if (!anchor?.id) return;
+    const truncated = msgs.slice(0, fromIdx);
+    // Optimistic UI: drop the from-message + tail immediately so the
+    // user gets visual confirmation. If the DB delete fails below, we
+    // surface a toast — the in-memory state will be re-synced on next
+    // chat reload, so a transient mismatch is acceptable.
+    setChat(c => ({ ...c, messages: truncated }));
+    try {
+      // persistTruncate no-ops for ephemeral chats (in-memory truncate
+      // above is the only work needed there). For persisted chats it
+      // calls the Rust command to delete the from-message and everything
+      // after it.
+      await persistTruncate(activeTab, anchor.id);
+    } catch (e) {
+      console.error('truncate failed:', e);
+      window.ekToast?.({
+        kind: 'error',
+        title: 'Could not redo from this point',
+        body: String(e),
+      });
+      return;
+    }
+    // Re-run send with the truncated list passed in explicitly. Don't
+    // await — handleSend kicks off the stream, which we want to fire-
+    // and-forget the same way the composer's send does. `isContinuation`
+    // tells handleSend to skip its new-chat side effects (sidebar
+    // history append + auto-title) even if the truncated list is empty:
+    // the chat itself still exists, we just deleted its messages.
+    handleSend(newText, { baseMessages: truncated, isContinuation: true });
+  };
+
+  // Edit-and-resubmit: called from chat.jsx's Message component when the
+  // user edits a past user message and clicks Save. Truncates from that
+  // message (deletes it + everything after) and re-runs the send flow
+  // with the new text. No-op while a stream is in progress.
+  const handleEditAndResubmit = (messageId, newText) => {
+    if (streamingRef.current) return;
+    const text = (newText || '').trim();
+    if (!text) return;
+    const idx = chat.messages.findIndex(m => m.id === messageId);
+    if (idx < 0) return;
+    if (chat.messages[idx].role !== 'user') return;
+    truncateAndResend(idx, text);
+  };
+
+  // Retry: called from chat.jsx's Message component for the most-recent
+  // assistant message. Finds the user turn that preceded it and re-runs
+  // from there. No-op while a stream is in progress.
+  const handleRetryAssistant = () => {
+    if (streamingRef.current) return;
+    const msgs = chat.messages;
+    // Find the last assistant message that has any content (or a saved
+    // partial). Walk backwards from the end so we always operate on the
+    // most-recent turn; older assistant messages should be retried via
+    // edit-and-resubmit on the user message that produced them.
+    let asstIdx = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant') { asstIdx = i; break; }
+    }
+    if (asstIdx < 0) return;
+    // The user message that drove this assistant turn is the most-recent
+    // user role at index < asstIdx. In practice this is asstIdx - 1, but
+    // we scan defensively in case a future change interleaves system rows.
+    let userIdx = -1;
+    for (let i = asstIdx - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') { userIdx = i; break; }
+    }
+    if (userIdx < 0) return;
+    const userText = msgs[userIdx].content || '';
+    truncateAndResend(userIdx, userText);
+  };
+
+  const handleStop = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    streamingRef.current = false;
+    setStreaming(false);
+    setChat(c => {
+      const msgs = [...c.messages];
+      const last = msgs[msgs.length - 1];
+      if (last?.role === 'assistant' && last.streaming) {
+        // Mark the message as incomplete so the chat UI renders a
+        // "Stopped" marker. `incomplete` rides on the message object in
+        // memory and through sources_json on disk (see stoppedBlob below).
+        msgs[msgs.length - 1] = { ...last, streaming: false, incomplete: true };
+        // Persist partial content
+        if (last.id) {
+          // Preserve citation sources on stopped messages so the Sources
+          // footer still renders for partial responses. Matches the wrapper
+          // shape used in the normal-completion path above, plus an
+          // `incomplete: true` flag so the marker survives a chat reload.
+          // We ALWAYS serialize the blob here (even with no sources or
+          // images) because the incomplete flag is itself worth persisting.
+          const stoppedBlob = JSON.stringify({
+            items: last.sources || [],
+            imagesSkipped: !!last.imagesSkipped,
+            incomplete: true,
+          });
+          persistMessage({
+            id: last.id, chatId: activeTab, role: 'assistant',
+            content: streamAccumulatedRef.current || last.content,
+            model: last.model, time: last.time,
+            tokensIn: null, tokensOut: null, tokensMs: null,
+            promptsJson: null,
+            sourcesJson: stoppedBlob,
+            seq: msgs.length - 1,
+          }).catch(console.error);
+        }
+      }
+      return { ...c, messages: msgs };
+    });
+  };
+
+  // Rename a chat. Updates three pieces of in-memory state (chats, tabs,
+  // sidebar history) and persists via db_upsert_chat — which after the
+  // INSERT…ON CONFLICT fix is safe to call on existing chats without
+  // wiping their message history. Whitespace-only titles are rejected.
+  const renameChat = (id, newTitle) => {
+    const title = (newTitle || '').trim();
+    if (!title || !id) return;
+    setChats(cs => (cs[id] ? { ...cs, [id]: { ...cs[id], title } } : cs));
+    setTabs(ts => ts.map(t => (t.id === id ? { ...t, title } : t)));
+    setHistory(hs =>
+      hs.map(s => ({
+        ...s,
+        items: s.items.map(it => (it.id === id ? { ...it, title } : it)),
+      })),
+    );
+    // Use the current tab's model if available, else fall back to whatever
+    // the chats state has, else the active model. created_at is ignored on
+    // the UPDATE branch of the upsert — the original survives — so passing
+    // current time is harmless.
+    const tab = tabs.find(t => t.id === id);
+    const model = tab?.model || chats[id]?.model || modelId || '';
+    const nowTs = Math.floor(Date.now() / 1000);
+    persistChat({ id, title, model, createdAt: nowTs, updatedAt: nowTs }).catch(console.error);
+  };
+
+  const deleteChat = (id) => {
+    // Skip the DB delete for ephemeral chats — there's no row to remove.
+    // The in-memory cleanup below still runs so the tab + state vanish.
+    if (!isEphemeralChat(id)) {
+      invoke('db_delete_chat', { id }).catch(console.error);
+    }
+    setHistory(hs => hs.map(s => ({ ...s, items: s.items.filter(c => c.id !== id) })).filter(s => s.items.length));
+    setTabs(ts => {
+      const next = ts.filter(t => t.id !== id);
+      if (id === activeTab && next.length) setActiveTab(next[0].id);
+      return next;
+    });
+    setChats(cs => { const n = { ...cs }; delete n[id]; return n; });
+    // Drop the deleted chat's slot from the per-chat attached-prompts
+    // map. Without this, the map slowly grows by one dangling entry
+    // every time the user deletes a chat that had a prompt attached.
+    setAttachedPromptsByChat(m => { const n = { ...m }; delete n[id]; return n; });
+  };
+
+  // Bulk wipe of every persisted chat. Called from SettingsModal's
+  // Danger zone after the user confirms. The flow:
+  //   1. Abort any in-flight stream the same way handleStop does, so
+  //      no late setChat calls can resurrect a chat-id we're about
+  //      to delete. abortRef.abort() rejects the fetch immediately
+  //      and the surrounding try/catch in handleSend unwinds.
+  //   2. Run db_clear_all_chats — single DELETE FROM chats; FK cascade
+  //      drops messages, attachments, attachment_files,
+  //      attachment_chunks, and chat_files in one shot. Files on disk
+  //      are untouched.
+  //   3. Reset all in-memory chat state to a fresh single new tab.
+  //      Mirrors the newTab() shape so the user lands in a working
+  //      compose surface instead of a blank screen.
+  //   4. Clear the ephemeral-chat id set — any private tabs we just
+  //      wiped were never persisted, so dropping their ids is safe.
+  // Errors are re-thrown so SettingsModal can surface them via toast.
+  const clearAllChats = async () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    streamingRef.current = false;
+    setStreaming(false);
+    await invoke('db_clear_all_chats');
+    ephemeralChatIdsRef.current.clear();
+    const freshId = genId();
+    const freshModel = readPersistedComposerModel();
+    setHistory([]);
+    setTabs([{ id: freshId, title: 'New chat', model: freshModel }]);
+    setChats({ [freshId]: { id: freshId, title: 'New chat', messages: [], loaded: true } });
+    setActiveTab(freshId);
+    // Every chat we tracked is gone; map keys would all be dangling.
+    // Reset to {} so the fresh chat starts with no attached prompts
+    // (per-chat default = no entry → [] via the derived getter).
+    setAttachedPromptsByChat({});
+  };
+
+  // Total persisted-chat count, used for the Danger-zone confirm copy
+  // ("Delete N chats?"). history is the grouped-by-date sidebar shape;
+  // sum item counts across sections. Ephemeral chats aren't in history
+  // so they're not counted — matches the user's mental model that
+  // "history" is the persisted list they see in the sidebar.
+  const totalChatCount = history.reduce((n, s) => n + (s.items?.length || 0), 0);
+
+  const activeTabModelId = tabs.find(t => t.id === activeTab)?.model || modelId;
+  const tabModel = MODELS_BY_ID[activeTabModelId] || { id: activeTabModelId, name: activeTabModelId, color: '#9bbf83' };
+
+  const closeTab = (id) => {
+    // Pre-compute the post-close tab list so the branch decision happens
+    // OUTSIDE any setState reducer. Putting genId() inside a setTabs
+    // reducer would double-fire under StrictMode and mint two fresh ids
+    // for the same close action.
+    const next = tabs.filter(t => t.id !== id);
+
+    if (next.length === 0) {
+      // Last tab closed — spawn a fresh empty chat so the user lands on
+      // a working composer. Without this, the tab bar would go empty but
+      // `chat = chats[activeTab] ?? ...` (see top of App) keeps resolving
+      // to the just-closed chat's entry, so ChatPane keeps rendering its
+      // stale title + messages. Mirrors newTab()'s shape inline so we
+      // can also drop the closed ephemeral entry in the same setChats
+      // call.
+      const fresh = genId();
+      setTabs([{ id: fresh, title: 'New chat', model: model.id }]);
+      setChats(cs => {
+        const upd = {
+          ...cs,
+          [fresh]: { id: fresh, title: 'New chat', messages: [], loaded: true },
+        };
+        if (isEphemeralChat(id)) delete upd[id];
+        return upd;
+      });
+      setActiveTab(fresh);
+      // Drop the closed chat's attached-prompts slot. Closing a tab
+      // doesn't reopen the chat (it's just hidden), but the per-chat
+      // attached set is a session-only convenience — on reopen we
+      // re-hydrate from the last user message in openChatInTab. So
+      // it's safe to drop now to keep the map bounded.
+      setAttachedPromptsByChat(m => { const n = { ...m }; delete n[id]; return n; });
+      return;
+    }
+
+    setTabs(next);
+    if (id === activeTab) setActiveTab(next[0].id);
+    // For ephemeral chats, also drop the in-memory entry — they have no
+    // sidebar row and no DB row, so once the tab is closed there's no way
+    // to bring them back. Holding them in `chats` would just be a leak.
+    // Persisted chats stay in memory because the sidebar can reopen them
+    // (load-on-demand is already wired in openChatInTab).
+    if (isEphemeralChat(id)) {
+      setChats(cs => { const n = { ...cs }; delete n[id]; return n; });
+    }
+    // Drop this chat's slot from the per-chat attached-prompts map.
+    // Re-hydrated from the last user message on reopen (see
+    // openChatInTab). Keeps the map size bounded by open-tab count.
+    setAttachedPromptsByChat(m => { const n = { ...m }; delete n[id]; return n; });
+  };
+
+  const openChatInTab = async (c) => {
+    if (!tabs.find(t => t.id === c.id)) {
+      setTabs(ts => [...ts, { id: c.id, title: c.title, model: c.model || modelId }]);
+    }
+    if (!chats[c.id]?.loaded) {
+      setChats(cs => ({ ...cs, [c.id]: { id: c.id, title: c.title, messages: [], loaded: false } }));
+      try {
+        const rows = await invoke('db_load_messages', { chatId: c.id });
+        // role='tool' rows hold raw JSON tool-result payloads — useful for
+        // model context on continuation but noise in the chat UI. We skip
+        // them at render time; the saved-file chips are reconstructed from
+        // chat_files_list instead (see below). Persisted rows remain on
+        // disk so a future re-send round trip still includes them.
+        const messages = rows.filter(r => r.role !== 'tool').map(r => {
+          // sources_json is a JSON object { items, imagesSkipped, incomplete? };
+          // null when the message had no attachments at send time. tryParseJson
+          // returns undefined on failure → the spreads below preserve
+          // undefined-ness. `incomplete: true` is set by handleStop when the
+          // user aborted mid-generation; surfaced on the message so the chat
+          // UI shows a "Stopped" marker after reload.
+          const blob = r.sourcesJson ? tryParseJson(r.sourcesJson, null) : null;
+          return {
+            id: r.id,
+            role: r.role,
+            content: r.content,
+            model: r.model,
+            time: r.time,
+            tokens: (r.tokensIn || r.tokensOut) ? { in: r.tokensIn, out: r.tokensOut, ms: r.tokensMs } : undefined,
+            prompts: r.promptsJson ? tryParseJson(r.promptsJson, undefined) : undefined,
+            sources: blob?.items?.length ? blob.items : undefined,
+            imagesSkipped: blob?.imagesSkipped || undefined,
+            incomplete: blob?.incomplete || undefined,
+          };
+        });
+
+        // Attach saved-file chips to assistant messages by walking
+        // chat_files rows. Failures here don't block the chat — chips
+        // just won't show. message_id may be null on legacy rows; those
+        // get dropped from the chip rendering.
+        try {
+          const files = await invoke('chat_files_list', { chatId: c.id });
+          if (Array.isArray(files) && files.length) {
+            const byMsg = new Map();
+            for (const f of files) {
+              if (!f.messageId) continue;
+              const list = byMsg.get(f.messageId) || [];
+              list.push({
+                callId: f.id,
+                relPath: f.relPath,
+                bytes: f.bytes,
+                version: f.version,
+                // absPath isn't on chat_files — we resolve lazily via
+                // chat_file_path when the user clicks Reveal/Open.
+                fileId: f.id,
+              });
+              byMsg.set(f.messageId, list);
+            }
+            for (const m of messages) {
+              const list = byMsg.get(m.id);
+              if (list?.length) m.toolResults = list;
+            }
+          }
+        } catch (_) { /* chips silently absent on failure */ }
+
+        setChats(cs => ({ ...cs, [c.id]: { id: c.id, title: c.title, messages, loaded: true } }));
+        // Hydrate the composer's attached-prompts slot for this chat
+        // from the LAST user message's prompts metadata. We don't store
+        // the composer's attached set per-chat in the DB — instead we
+        // derive it from the per-message promptsJson that's already
+        // there. Means: reopening an old chat lands the Composer chip
+        // strip on the same prompts the user had attached when they
+        // last sent a message in this chat.
+        //
+        // The `m[c.id] !== undefined` guard preserves any pick made
+        // BEFORE the message load resolved — e.g. the overlay handoff
+        // and the watch-notes "Open notes" flow both set the slot
+        // synchronously before openChatInTab finishes. Without the
+        // guard, their explicit pick would be overwritten when the
+        // async load arrives.
+        setAttachedPromptsByChat(m => {
+          if (m[c.id] !== undefined) return m;
+          const lastUser = [...messages].reverse().find(x => x.role === 'user');
+          const ids = lastUser?.prompts?.map(p => p.id) || [];
+          return { ...m, [c.id]: ids };
+        });
+        // Load any attachments persisted for this chat. Side-loaded so the
+        // chip row reappears as the user re-enters an older conversation
+        // and can be augmented before the next send.
+        refreshAttachments(c.id);
+      } catch (e) {
+        console.error('Failed to load messages:', e);
+        setChats(cs => ({ ...cs, [c.id]: { id: c.id, title: c.title, messages: [], loaded: true } }));
+      }
+    }
+    setActiveTab(c.id);
+    const m = MODELS_BY_ID[c.model];
+    if (m) setModelId(m.id);
+  };
+
+  // ── Overlay "Send to main" handoff ──────────────────────────────────────────
+  // The overlay window already inserted the chat + messages into the DB;
+  // we just need to update in-memory state (sidebar history + a fresh tab).
+  // The listener is registered once at mount and routes through a ref so
+  // the body always sees current closures of openChatInTab.
+  const openChatInTabRef = useR(openChatInTab);
+  useE(() => { openChatInTabRef.current = openChatInTab; });
+  useE(() => {
+    const eventApi = getEventApi();
+    if (!eventApi) return;
+    let unlisten = null;
+    let cancelled = false;
+    eventApi.listen('overlay:open_chat', (e) => {
+      const payload = e.payload || {};
+      const { id, title, model, promptId } = payload;
+      if (!id) return;
+      // Prepend to "Today" — same shape as a new chat born in the composer.
+      setHistory(hs => {
+        if (hs.some(s => s.items.some(c => c.id === id))) return hs;
+        const newItem = { id, title, model, when: 'now' };
+        const todayIdx = hs.findIndex(s => s.section === 'Today');
+        if (todayIdx >= 0) {
+          return hs.map((s, i) =>
+            i === todayIdx ? { ...s, items: [newItem, ...s.items] } : s
+          );
+        }
+        return [{ section: 'Today', items: [newItem] }, ...hs];
+      });
+      openChatInTabRef.current?.({ id, title, model });
+      // Carry the overlay's attached prompt into the new chat's slot
+      // in the per-chat map. Setting it BEFORE openChatInTab finishes
+      // is safe because the hydration block in openChatInTab only
+      // writes when the entry is undefined — our explicit array wins.
+      // If the prompt has since been deleted in the main window,
+      // attachedPrompts silently filters it out via .filter(Boolean).
+      if (promptId) {
+        setAttachedPromptsByChat(m => ({ ...m, [id]: [promptId] }));
+      }
+    }).then(u => {
+      // Window unmounted before the listener finished registering — unlisten now.
+      if (cancelled) u();
+      else unlisten = u;
+    });
+    return () => { cancelled = true; if (unlisten) unlisten(); };
+  }, []);
+
+  const newTab = () => {
+    const id = genId();
+    setTabs(ts => [...ts, { id, title: 'New chat', model: model.id }]);
+    setChats(cs => ({ ...cs, [id]: { id, title: 'New chat', messages: [], loaded: true } }));
+    setActiveTab(id);
+  };
+
+  // Private chat (Phase 4b): same as newTab, but registers the chat id
+  // in the ephemeral ref so every persistence helper (persistChat,
+  // persistMessage, persistTruncate) short-circuits. Tab gets ephemeral
+  // metadata so the UI can render a lock indicator + distinct color.
+  // The chat is NOT added to history (no sidebar entry); it lives only
+  // in the tab strip until closed.
+  const newPrivateTab = () => {
+    const id = genId();
+    ephemeralChatIdsRef.current.add(id);
+    setTabs(ts => [...ts, { id, title: 'Private chat', model: model.id, ephemeral: true }]);
+    setChats(cs => ({
+      ...cs,
+      [id]: { id, title: 'Private chat', messages: [], loaded: true, ephemeral: true },
+    }));
+    setActiveTab(id);
+  };
+
+  // Screenshot pipeline (Phase 5). Called from the `screenshot:captured`
+  // event listener (registered earlier with [] deps) via a ref-based
+  // indirection so the listener always invokes the LATEST closure — direct
+  // capture would freeze modelId / modelVisionMap to their mount-time
+  // values. Updated on every render below.
+  const screenshotIntoNewTab = async (path) => {
+    if (!path) return;
+    // Pick a vision-capable model. Three-step decision:
+    //   1. If we already KNOW the active model has vision (cached true) —
+    //      keep it.
+    //   2. If we DON'T KNOW (cache miss — undefined, not false), probe
+    //      synchronously so we don't false-alarm the user with "active
+    //      model has no vision" when in reality we just haven't asked
+    //      Ollama yet. The probe is a single /api/show call.
+    //   3. Only after a confirmed false do we hunt for another vision
+    //      model in the cache.
+    let chosenModel = modelId;
+    let switched = false;
+    let activeHasVision = modelVisionMap[modelId];
+    if (activeHasVision === undefined) {
+      try {
+        const caps = await invoke('model_capabilities', { model: modelId });
+        activeHasVision = !!caps?.vision;
+        // Cache the probe result for next time and so other code paths
+        // (the composer's vision badge, etc.) reflect it immediately.
+        setModelVisionMap((m) => ({ ...m, [modelId]: activeHasVision }));
+      } catch (_) {
+        // Probe failure (Ollama down, model not pulled) — treat as
+        // unknown-false. The user will see the existing "model has no
+        // vision capability" warning, which is the right signal.
+        activeHasVision = false;
+      }
+    }
+    if (!activeHasVision) {
+      const visionEntry = Object.entries(modelVisionMap).find(([, v]) => v);
+      if (visionEntry) {
+        chosenModel = visionEntry[0];
+        switched = true;
+      }
+    }
+
+    const id = genId();
+    // The new tab inherits chosenModel; the active model selector also
+    // switches so the composer + status bar follow. We don't touch other
+    // open tabs — their model is a historical fact about that chat.
+    setTabs(ts => [...ts, { id, title: 'Screenshot', model: chosenModel }]);
+    setChats(cs => ({
+      ...cs,
+      [id]: { id, title: 'Screenshot', messages: [], loaded: true },
+    }));
+    setActiveTab(id);
+    if (switched) {
+      setModelId(chosenModel);
+      window.ekToast?.({
+        kind: 'info',
+        title: 'Switched to vision model',
+        body: `Using ${chosenModel} to read the screenshot.`,
+      });
+    } else if (!activeHasVision) {
+      // We have a confirmed-false vision capability for the active model
+      // and no other known vision model in the cache. Warn so the user
+      // understands why the screenshot won't be read.
+      window.ekToast?.({
+        kind: 'warn',
+        title: 'Active model has no vision capability',
+        body: `${modelId} can't read images. Pull a vision model (e.g., gemma3) for best results.`,
+      });
+    }
+
+    // Attach the screenshot via the regular attachment pipeline. The
+    // pipeline only stores the PATH — it doesn't copy the file. So the
+    // PNG at this path needs to remain readable for the whole lifetime
+    // of the chat (every send re-reads it). We DELIBERATELY do not
+    // delete the temp file: macOS reclaims the system temp dir on
+    // reboot, the file is tiny (a few KB to a few MB), and an earlier
+    // cleanup would silently break the attachment on the user's first
+    // send. The `screenshot_consumed` Rust command is kept around for a
+    // future "copy then delete" implementation.
+    try {
+      const added = await invoke('attachment_add_files', {
+        chatId: id,
+        paths: [path],
+      });
+      setChatAttachments((m) => ({
+        ...m,
+        [id]: [...(m[id] || []), ...(added || [])],
+      }));
+    } catch (e) {
+      console.error('attach screenshot failed:', e);
+      window.ekToast?.({
+        kind: 'error',
+        title: 'Could not attach screenshot',
+        body: String(e),
+      });
+    }
+  };
+
+  // Mirror the latest screenshotIntoNewTab into a ref so the listener
+  // (bound once at mount with [] deps) always calls the freshest closure.
+  // Without this indirection, modelId / modelVisionMap reads inside the
+  // handler would be frozen to their mount-time values.
+  const screenshotHandlerRef = useR(null);
+  screenshotHandlerRef.current = screenshotIntoNewTab;
+
+  // ── Chat with a watch's notes file ─────────────────────────────────────────
+  // Reads the notes file via Rust, then opens a fresh chat tab whose system
+  // context is the file's contents. We carry the notes as a "virtual" prompt
+  // entry: same in-memory shape as a real library prompt, attached the same
+  // way (handleSend converts attached prompts to a system message on the
+  // first turn of a new chat), but flagged with `_virtual: true` so the
+  // PromptLibrary can hide it from the user-visible list.
+  //
+  // No DB write — virtual prompts live only in `prompts` state for the
+  // session; they vanish on reload, which is what we want (each chat-with-
+  // notes click captures a fresh snapshot of the notes file at click time).
+  const chatWithNotes = async (watch) => {
+    let content = '';
+    try {
+      content = await invoke('watch_notes_read', { path: watch.notesPath });
+    } catch (e) {
+      window.ekToast?.({
+        kind: 'error',
+        title: "Couldn't read notes file",
+        body: String(e),
+      });
+      return;
+    }
+    if (!content || !content.trim()) {
+      window.ekToast?.({
+        kind: 'warn',
+        title: 'Notes file is empty',
+        body: `${watch.notesPath}\n\nNothing has been processed yet — wait for the watch to summarise some files, then try again.`,
+      });
+      return;
+    }
+
+    // Synthesize the prompt body. The plain notes content is wrapped in a
+    // brief explanatory frame so the model treats it as reference material
+    // rather than instructions to follow.
+    const virtualPrompt = {
+      id: `notes-${watch.id}-${Date.now().toString(36)}`,
+      name: `${watch.name} notes`,
+      tags: ['watch'],
+      favorite: null,
+      body:
+        `You have access to the following notes — accumulated summaries of files ` +
+        `from the user's "${watch.name}" watch. Use them as reference material ` +
+        `when answering questions. If asked something not covered by the notes, ` +
+        `say so plainly.\n\n` +
+        `=== NOTES START ===\n${content}\n=== NOTES END ===`,
+      updated: 'now',
+      _virtual: true,
+    };
+
+    // Open new chat tab + attach the virtual prompt + switch focus.
+    const chatId = genId();
+    const title = `Chat: ${watch.name}`;
+    setPrompts(ps => [virtualPrompt, ...ps]);
+    setTabs(ts => [...ts, { id: chatId, title, model: modelId }]);
+    setChats(cs => ({
+      ...cs,
+      [chatId]: { id: chatId, title, messages: [], loaded: true },
+    }));
+    setAttachedPromptsByChat(m => ({ ...m, [chatId]: [virtualPrompt.id] }));
+    setActiveTab(chatId);
+
+    // Seed the composer with a starter question so the user has a sense of
+    // what to ask. They can edit or replace before sending.
+    setComposerSeedText(
+      `What are the main themes across these ${watch.name} notes?`,
+    );
+    setComposerSeedKey(k => k + 1);
+  };
+
+  // Update an existing prompt. Two paths:
+  //   • Favorite-only change → prompts_meta_set (SQLite write, no file touch).
+  //   • Anything else → prompts_save (rewrites the .md file). Favorite is
+  //     orthogonal to file content so we keep its persistence separate even
+  //     when it's part of a larger patch.
+  const updatePrompt = (id, patch) => {
+    setPrompts(ps => ps.map(p => {
+      if (p.id !== id) return p;
+      const updated = { ...p, ...patch, updated: 'just now' };
+      const favoriteChanged = 'favorite' in patch && patch.favorite !== p.favorite;
+      const fileChanged = ['name', 'tags', 'body'].some(
+        (k) => k in patch && patch[k] !== p[k],
+      );
+      if (favoriteChanged) {
+        invoke('prompts_meta_set', {
+          slug: id,
+          favorite: updated.favorite ?? null,
+        }).catch(console.error);
+      }
+      if (fileChanged) {
+        invoke('prompts_save', {
+          slug: id,
+          name: updated.name,
+          tags: updated.tags ?? [],
+          body: updated.body ?? '',
+        }).catch(console.error);
+      }
+      return updated;
+    }));
+  };
+
+  // Create a new prompt. Optimistic UI: insert with a placeholder slug, then
+  // swap to the slug Rust returns (it dedupes against existing files, so
+  // `code-review` could come back as `code-review-2`). The placeholder is
+  // distinguished from real slugs by the `pending-` prefix so subsequent
+  // state lookups still resolve correctly until the save settles.
+  const createPrompt = async (init = {}) => {
+    const placeholder = 'pending-' + Math.random().toString(36).slice(2, 7);
+    const p = {
+      id: placeholder,
+      name: init.name || 'New prompt',
+      tags: init.tags || [],
+      body: init.body || '',
+      favorite: init.favorite ?? null,
+      builtin: false,
+      updated: 'just now',
+    };
+    setPrompts(ps => [p, ...ps]);
+    setSelectedPromptId(placeholder);
+    try {
+      const slug = await invoke('prompts_save', {
+        slug: '',
+        name: p.name,
+        tags: p.tags,
+        body: p.body,
+      });
+      // Swap the placeholder for the real slug. Re-map selection too so the
+      // UI doesn't lose its place after the save resolves.
+      setPrompts(ps => ps.map(x => x.id === placeholder ? { ...x, id: slug } : x));
+      setSelectedPromptId(curr => curr === placeholder ? slug : curr);
+      if (p.favorite) {
+        invoke('prompts_meta_set', { slug, favorite: p.favorite }).catch(console.error);
+      }
+      return slug;
+    } catch (e) {
+      console.error('prompts_save failed:', e);
+      // Roll the placeholder out so a failed save doesn't leave a ghost row.
+      setPrompts(ps => ps.filter(x => x.id !== placeholder));
+      return null;
+    }
+  };
+
+  // Delete a prompt by slug — works for both built-ins and user prompts.
+  // We close any context menus the caller had open by removing the row from
+  // state immediately, then fire-and-forget the backend delete.
+  const deletePrompt = (id) => {
+    if (!id || id.startsWith('pending-')) return;
+    setPrompts(ps => ps.filter(p => p.id !== id));
+    setSelectedPromptId(curr => curr === id ? null : curr);
+    // Detach the deleted prompt from EVERY chat's attached set — not
+    // just the active one. Without this sweep, an old chat with the
+    // now-deleted prompt would re-render its chip from stale state
+    // on next open (until the .filter(Boolean) in attachedPrompts
+    // hides it anyway, but the underlying id would still be there).
+    setAttachedPromptsByChat(m => {
+      const out = {};
+      for (const [k, v] of Object.entries(m)) {
+        out[k] = (v || []).filter(x => x !== id);
+      }
+      return out;
+    });
+    invoke('prompts_delete', { slug: id }).catch(console.error);
+  };
+  const importPromptFromFile = async (file) => {
+    if (!file) return;
+    const text = await file.text();
+    const baseName = file.name.replace(/\.(md|markdown|txt)$/i, '');
+    // First markdown H1 wins as name, if present
+    const h1 = text.match(/^\s*#\s+(.+)$/m);
+    const name = (h1 ? h1[1] : baseName).trim().slice(0, 60) || 'Imported';
+    createPrompt({ name, body: text, tags: ['imported'] });
+  };
+
+  const [ollamaModalOpen, setOllamaModalOpen] = useS(true);
+  const [modelWarming, setModelWarming] = useS(false);
+  const [watchModalOpen, setWatchModalOpen] = useS(false);
+  // null = create mode; watch object = edit mode. Cleared after close so a
+  // subsequent "+ Configure" click reliably lands in create mode.
+  const [editingWatch, setEditingWatch] = useS(null);
+  // First-launch onboarding tour (Phase 6). Opens automatically when the
+  // app_settings flag is absent; closes on Skip / Get started, both of
+  // which write the flag so the tour stays hidden across launches.
+  // Exposed as window.ekOpenOnboarding so the Settings modal's
+  // "Show tour again" button can re-open it without lifting that state.
+  const [onboardingOpen, setOnboardingOpen] = useS(false);
+
+  // Pre-warm a model: POST /api/generate with a tiny one-token prompt so
+  // Ollama runs a complete forward pass — this is what actually pays the
+  // first-inference costs (Metal/CUDA kernel compilation, KV cache
+  // allocation, tokenizer/sampler init) that an empty-prompt load doesn't.
+  // Without a real generation, /api/ps flips to "loaded" the moment weights
+  // are resident, but the user's first Send still eats the cold-kernel
+  // penalty. With num_predict:1 the cost is ~one decode step and the model
+  // is genuinely warm when modelWarming flips off. keep_alive:'30m' beats
+  // the 5min default so a momentarily idle user doesn't pay the warmup
+  // tax again.
+  const warmModel = async (id) => {
+    setModelWarming(true);
+    try {
+      await fetch('http://localhost:11434/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: id,
+          prompt: 'hi',
+          stream: false,
+          options: { num_predict: 1 },
+          keep_alive: '30m',
+        }),
+      });
+    } catch (e) {
+      // Network failures are surfaced by the StatusBar's own polling — no
+      // need to bubble up here.
+    } finally {
+      setModelWarming(false);
+    }
+  };
+
+  return (
+    <>
+      <OllamaGate
+        open={ollamaModalOpen}
+        modelId={model.id}
+        onReady={() => { setOllamaModalOpen(false); warmModel(model.id); }}
+        onDismiss={() => setOllamaModalOpen(false)}
+      />
+      {/* Toast host mounts once and exposes window.ekToast for global use.
+          Lives high in the tree so toasts overlay everything else. */}
+      <ToastHost />
+      {/* First-launch onboarding tour (Phase 6). State lives in App so the
+          Settings modal can reopen it via window.ekOpenOnboarding. */}
+      <OnboardingTour open={onboardingOpen} onClose={closeOnboarding} />
+      {/* write_file permission modal — appears when a tool-using model
+          first tries to save a file in a chat with no output_dir.
+          onClose receives the resolution: a path string (Allow), "" (Block
+          always), or null (Not now). handleSend awaits this via
+          outputDirResolverRef. */}
+      {outputDirReq && (
+        <OutputDirModal
+          chatId={outputDirReq.chatId}
+          chatTitle={outputDirReq.chatTitle}
+          suggested={outputDirReq.suggested}
+          invoke={invoke}
+          onClose={(dir) => {
+            setOutputDirReq(null);
+            const r = outputDirResolverRef.current;
+            outputDirResolverRef.current = null;
+            r?.(dir);
+          }}
+        />
+      )}
+      <SettingsModal
+        tweaks={tweaks}
+        setTweak={setTweak}
+        onPromptsChanged={refreshPrompts}
+        chatCount={totalChatCount}
+        onClearAllChats={clearAllChats}
+      />
+      <WatchModal
+        open={watchModalOpen}
+        editing={editingWatch}
+        onClose={() => {
+          setWatchModalOpen(false);
+          setEditingWatch(null);
+        }}
+        onCreated={() => {
+          setWatchModalOpen(false);
+          setEditingWatch(null);
+          // Bump the panel's refresh key — picks up the new/edited row
+          // without any direct coupling between modal and panel state.
+          setWatchPanelRefreshKey((k) => k + 1);
+        }}
+        prompts={prompts}
+        notifPermission={notifPermission}
+        refreshNotifPermission={refreshNotifPermission}
+      />
+
+      <div style={{
+        width: '100vw', height: '100vh',
+        minWidth: 0, minHeight: 0,
+        background: theme.bg0, color: theme.fg,
+        display: 'flex', flexDirection: 'column',
+        fontSize: 14 * tweaks.fontScale,
+      }}>
+        <TitleBar
+          onToggleSidebar={() => setSidebarOpen(o => !o)}
+          // Each tab button toggles the panel if it's already on that tab,
+          // otherwise opens the panel and switches to that tab. Clicking
+          // "the tab I'm not currently on" never closes the panel — just
+          // swaps content, matching how browser/IDE tab bars behave.
+          onTogglePrompts={() => {
+            if (rightPanelOpen && rightPanelTab === 'prompts') {
+              setRightPanelOpen(false);
+            } else {
+              setRightPanelOpen(true);
+              setRightPanelTab('prompts');
+            }
+          }}
+          onToggleWatch={() => {
+            if (rightPanelOpen && rightPanelTab === 'watches') {
+              setRightPanelOpen(false);
+            } else {
+              setRightPanelOpen(true);
+              setRightPanelTab('watches');
+            }
+          }}
+          onToggleFiles={() => {
+            if (rightPanelOpen && rightPanelTab === 'files') {
+              setRightPanelOpen(false);
+            } else {
+              setRightPanelOpen(true);
+              setRightPanelTab('files');
+            }
+          }}
+          onToggleTweaks={() => window.postMessage({type:'__activate_edit_mode'}, '*')}
+          sidebarOpen={sidebarOpen}
+          rightPanelOpen={rightPanelOpen}
+          rightPanelTab={rightPanelTab}
+          model={tabModel}
+        />
+        <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+          {sidebarOpen && (
+            <>
+              <Sidebar
+                chats={history}
+                activeId={activeTab}
+                onPick={openChatInTab}
+                onDelete={deleteChat}
+                query={query}
+                onQuery={setQuery}
+                onNew={newTab}
+                onNewPrivate={newPrivateTab}
+                width={sidebarWidth}
+                // Full-text hits + click handler. The hit carries chatModel
+                // so we don't have to look it up from history (which is
+                // grouped/filtered and awkward to scan).
+                messageHits={messageHits}
+                onPickHit={(hit) =>
+                  openChatInTab({ id: hit.chatId, title: hit.chatTitle, model: hit.chatModel })
+                }
+              />
+              <Resizer onDrag={(dx) => {
+                if (dx === 0) sidebarStartRef.current = sidebarWidth;
+                setSidebarWidth(Math.max(160, Math.min(420, sidebarStartRef.current + dx)));
+              }} />
+            </>
+          )}
+
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <TabBar
+              tabs={tabs}
+              activeId={activeTab}
+              onSelect={setActiveTab}
+              onClose={closeTab}
+              onNew={newTab}
+              // Derived map of tab.id → attachment count for the TabBar
+              // indicator. Cheap to recompute on each render since the
+              // list is per-tab and small; Object.entries keeps it
+              // straightforward without a useMemo dance.
+              attachmentCounts={Object.fromEntries(
+                Object.entries(chatAttachments).map(([k, v]) => [k, (v || []).length]),
+              )}
+            />
+            {staleAttachments.count > 0 && (
+              <StaleEmbeddingsBanner
+                count={staleAttachments.count}
+                model={staleAttachments.currentModel}
+                onReindex={onReindexAllStale}
+                onDismiss={() => setStaleAttachments({ count: 0, currentModel: staleAttachments.currentModel })}
+                busy={reindexingStale}
+              />
+            )}
+            <ChatPane
+              chat={chat} model={tabModel}
+              isStreaming={streaming}
+              onRename={renameChat}
+              // Propagate the sidebar search query so messages can highlight
+              // matches in-place. Empty/whitespace queries are handled inside
+              // ChatPane (regex becomes null, render is unchanged).
+              searchQuery={query}
+              // Edit + retry (Phase 3). Both go through truncateAndResend,
+              // gated by streaming inside the handlers themselves so the UI
+              // doesn't need to know.
+              onEditMessage={handleEditAndResubmit}
+              onRetryMessage={handleRetryAssistant}
+            />
+            <Composer
+              model={tabModel}
+              onModelChange={(id) => {
+                setModelId(id);
+                setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, model: id } : t));
+              }}
+              onSend={handleSend}
+              isStreaming={streaming}
+              onStop={handleStop}
+              attachedPrompts={attachedPrompts}
+              onDetachPrompt={detachPrompt}
+              // Full library for the in-composer slash-command picker.
+              // Filter out _virtual prompts (watch-notes carriers) per
+              // the rule in CLAUDE.md — they're context blobs that
+              // shouldn't appear as user-selectable presets.
+              prompts={prompts.filter(p => !p._virtual)}
+              onPickPrompt={togglePromptAttach}
+              attachments={attachments}
+              onAttachFile={onAttachFile}
+              onAttachFolder={onAttachFolder}
+              onDetachAttachment={onDetachAttachment}
+              onReindexAttachment={onReindexAttachment}
+              modelHasVision={activeModelHasVision}
+              modelHasTools={activeModelHasTools}
+              seedText={composerSeedText}
+              seedKey={composerSeedKey}
+              // Hide attach buttons in private mode — see Composer notes.
+              ephemeral={!!chat.ephemeral}
+            />
+          </div>
+
+          {rightPanelOpen && (
+            <>
+              <Resizer onDrag={(dx) => {
+                if (dx === 0) rightPanelStartRef.current = rightPanelWidth;
+                setRightPanelWidth(Math.max(280, Math.min(600, rightPanelStartRef.current - dx)));
+              }} />
+              {/* Tab bar is built once and passed as a prop to whichever  */}
+              {/* tab's component is rendering — keeps the two tabs from   */}
+              {/* having to re-implement the chrome each time.             */}
+              {(() => {
+                const tabHeader = (
+                  <RightPanelTabs
+                    tab={rightPanelTab}
+                    onTab={setRightPanelTab}
+                    onClose={() => setRightPanelOpen(false)}
+                  />
+                );
+                if (rightPanelTab === 'prompts') {
+                  return (
+                    <PromptLibrary
+                      tabHeader={tabHeader}
+                      // Hide _virtual prompts — these are transient,
+                      // session-only contexts (e.g. notes-from-a-watch)
+                      // that get attached behind the scenes by features
+                      // like "Chat with notes". They're real in the
+                      // attached-prompts flow but shouldn't clutter the
+                      // user-visible library.
+                      prompts={prompts.filter((p) => !p._virtual)}
+                      selectedId={selectedPromptId}
+                      onSelect={setSelectedPromptId}
+                      onUse={togglePromptAttach}
+                      attachedIds={attachedPromptIds}
+                      onUpdate={updatePrompt}
+                      onCreate={createPrompt}
+                      onDelete={deletePrompt}
+                      onRefresh={refreshPrompts}
+                      onImport={importPromptFromFile}
+                      width={rightPanelWidth}
+                    />
+                  );
+                }
+                if (rightPanelTab === 'files') {
+                  return (
+                    <FilesPanel
+                      tabHeader={tabHeader}
+                      width={rightPanelWidth}
+                      chatId={activeTab}
+                      // Click a row → scroll the chat scroller to the
+                      // message that produced this save. Message divs in
+                      // chat.jsx carry id="ek-msg-{m.id}" so we can find
+                      // them without prop-drilling refs through ChatPane.
+                      onScrollToMessage={(messageId) => {
+                        const el = document.getElementById(`ek-msg-${messageId}`);
+                        if (el) {
+                          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          // Brief amber pulse on the targeted message so the
+                          // user notices where the scroll landed.
+                          el.style.transition = 'background 0.6s ease';
+                          const prev = el.style.background;
+                          el.style.background = T.amber + '22';
+                          setTimeout(() => { el.style.background = prev; }, 900);
+                        }
+                      }}
+                    />
+                  );
+                }
+                return (
+                  <WatchPanel
+                    tabHeader={tabHeader}
+                    width={rightPanelWidth}
+                    prompts={prompts}
+                    onConfigure={() => {
+                      setEditingWatch(null);
+                      setWatchModalOpen(true);
+                    }}
+                    onEdit={(w) => {
+                      setEditingWatch(w);
+                      setWatchModalOpen(true);
+                    }}
+                    onChatWithNotes={chatWithNotes}
+                    refreshKey={watchPanelRefreshKey}
+                    focusFilter={watchFocusFilter}
+                  />
+                );
+              })()}
+            </>
+          )}
+        </div>
+
+        {tweaks.showStatusBar && (
+          <StatusBar
+            model={tabModel}
+            onOllamaClick={() => setOllamaModalOpen(true)}
+            warming={modelWarming}
+            // Flatten all chats' attachments and surface anything in
+            // 'indexing'. Aggregated across the whole window so a long
+            // folder index in chat A stays visible while the user works
+            // in chat B.
+            indexingAttachments={Object.values(chatAttachments)
+              .flat()
+              .filter((a) => a.status === 'indexing')}
+          />
+        )}
+      </div>
+    </>
+  );
+}
+
+function now() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+// Only the main window renders <App />. The overlay window has its own
+// mount inside overlay.jsx. In a non-Tauri context (pure-browser dev),
+// __TAURI__ is absent and we default to the main app.
+(() => {
+  const winApi = getWindowApi();
+  const label =
+    (winApi?.getCurrentWindow?.() ?? winApi?.getCurrent?.())?.label ?? 'main';
+  if (label === 'main') {
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  }
+})();

@@ -1,0 +1,34 @@
+[book]
+title = "Ekorbia User Guide"
+description = "User documentation for Ekorbia — a native desktop integrated productivity environment for local AI models."
+authors = ["Ekorbia"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = ""
+edit-url-template = ""
+no-section-label = false
+additional-css = ["theme/css/ekorbia.css"]
+additional-js = []
+site-url = "https://ekorbia.com"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.print]
+enable = true
+
+[output.html.search]
+enable = true
+limit-results = 20
+teaser-word-count = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 2
+boost-paragraph = 1
+expand = true
+heading-split-level = 2
