@@ -38,7 +38,15 @@ docs/book/
 .DS_Store
 .AppleDouble
 .LSOverride
+# `Icon?` is intended to ignore macOS's `Icon\r` folder-icon marker.
+# With core.ignorecase=true (default on APFS), git's matching is loose
+# enough that it also catches our tracked app icons under src-tauri/icons/
+# — which then breaks `cargo tauri build` in CI ("failed to open icon
+# .../icon.png: No such file or directory"). Whitelist that directory
+# back below.
 Icon?
+!src-tauri/icons/
+!src-tauri/icons/**
 
 # ── Editors / IDEs ────────────────────────────────────────────
 .vscode/
