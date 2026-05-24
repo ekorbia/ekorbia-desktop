@@ -23,7 +23,12 @@ cd "$REPO_ROOT"
 # ── Stage 1: Node tests for pure helpers ───────────────────────────────────
 
 echo "── Node tests (ui/utils.js helpers) ──────────────────────────────────"
-node --test 'ui/__tests__/*.test.js'
+# Drop quotes so the shell expands the glob and passes each match as a
+# separate argument. Node's --test only learned to expand glob patterns
+# itself in v21.0.0; v18/v20 (LTS, what CI runs) treats a quoted glob as
+# a literal path and errors with "Could not find". Shell expansion works
+# on every Node version that supports --test (v18+).
+node --test ui/__tests__/*.test.js
 echo
 
 # ── Stage 2: Playwright tests for components ───────────────────────────────
