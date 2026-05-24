@@ -37,29 +37,43 @@ open it, and drag **Ekorbia.app** into your Applications folder.
 ### First-launch on macOS (important)
 
 Ekorbia is **not** signed with an Apple Developer ID certificate (the
-project doesn't carry a paid Apple Developer membership). The first
-time you double-click `Ekorbia.app`, macOS Gatekeeper will refuse to
-open it with a "cannot be opened because the developer cannot be
-verified" message. This is normal for unsigned open-source desktop
-apps.
+project doesn't carry a paid Apple Developer membership). macOS
+Gatekeeper will refuse to open it on first launch. Depending on which
+step you're at, you'll see one of two messages — both have the same
+root cause (the browser tagged the download with a quarantine
+attribute) and the same fix.
 
-You have two options to allow it:
+**If the `.dmg` itself won't open** — message reads `"Ekorbia_…dmg" is damaged and can't be opened. You should move it to the Trash.`
 
-**Option 1 — one-time approval via right-click:**
-
-1. In Finder, locate `Ekorbia.app` in your Applications folder.
-2. **Right-click** (or Control-click) the app and choose **Open**.
-3. The dialog now has an **Open** button — click it.
-4. macOS remembers your choice; future launches work normally.
-
-**Option 2 — strip the quarantine attribute in Terminal:**
+The file isn't actually damaged. Your browser quarantined it, and
+because the bundle is unsigned, Gatekeeper refuses outright instead of
+showing a bypass dialog. Strip the quarantine flag in Terminal:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/Ekorbia.app
+xattr -dr com.apple.quarantine ~/Downloads/Ekorbia_*.dmg
 ```
 
-This removes the quarantine flag that triggers the warning. After
-running it once, the app opens normally from then on.
+Then double-click the `.dmg` — it mounts normally — and drag
+`Ekorbia.app` into `/Applications`.
+
+> If `xattr` prints `No such xattr`, the file really is corrupted.
+> Re-download from the Releases page and verify the SHA256 against
+> `SHA256SUMS.txt` (also on the release page):
+> `shasum -a 256 -c SHA256SUMS.txt`
+
+**If the `.app` won't open after installing** — message reads `"Ekorbia.app" cannot be opened because the developer cannot be verified.`
+
+Pick one:
+
+- **Right-click → Open**: in Finder, **right-click** (or Control-click)
+  `Ekorbia.app` in `/Applications` and choose **Open**. The dialog now
+  has an **Open** button — click it. macOS remembers your choice.
+- **Strip quarantine in Terminal**:
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Ekorbia.app
+  ```
+
+Either approach is one-time; future launches work normally.
 
 If you'd rather not run unsigned binaries, you can [build from source](#build-from-source)
 instead — the source build produces a locally-signed binary that
