@@ -21,9 +21,18 @@ module.exports = defineConfig({
   testDir: "./tests/e2e",
   // Don't pick up the fixtures themselves as tests.
   testMatch: /.*\.spec\.js$/,
-  // Reasonable per-test ceiling — most tests run in <1s. A 10s cap catches
-  // hangs (e.g. waitForFunction stuck because __JSX_READY never fires).
-  timeout: 10_000,
+  // Per-test ceiling. Tests themselves run in <1s, but every beforeEach
+  // does page.goto(fixture) which forces a fresh fetch of ~6 CDN scripts
+  // (React, ReactDOM, Babel-standalone, marked, highlight.js, DOMPurify)
+  // and Babel-standalone then compiles 16 .jsx files before __JSX_READY
+  // fires. On GitHub Actions runners with cold caches and occasional
+  // unpkg slowness, 10s was tight enough to flake ~30% of the suite.
+  // 30s gives comfortable headroom without masking genuine hangs.
+  timeout: 30_000,
+  // One auto-retry under CI to handle the residual CDN-flake long tail.
+  // Local runs get 0 retries — a flake on your machine is signal, not
+  // noise. Set CI=true env var if you want to mirror CI locally.
+  retries: process.env.CI ? 1 : 0,
   // Parallel by default but cap at 4 workers — each worker spawns its own
   // WebKit, and the components-on-window pattern means there's no shared
   // state to fight over.
