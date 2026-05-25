@@ -27,7 +27,23 @@ CREATE TABLE IF NOT EXISTS chats (
     -- tool. NULL = no folder picked yet; first write_file call surfaces
     -- the permission modal in the UI. Empty string '' is the sentinel
     -- for 'blocked always' — modal won't reappear.
-    output_dir TEXT
+    output_dir TEXT,
+    -- Multi-model comparison mode (see CLAUDE.md, Multi-model panel):
+    --   NULL or 'single'      -- ordinary single-model chat
+    --   'multi-pending'       -- compare-mode chat awaiting a pick on
+    --                            its first assistant turn; the panel
+    --                            layout is in effect
+    --   'single-from-multi'   -- user has picked; chat now behaves as
+    --                            a normal single-model chat but retains
+    --                            unpicked variant rows for the
+    --                            N-alternatives disclosure
+    tab_type TEXT,
+    -- For 'multi-pending' / 'single-from-multi' chats: JSON-encoded
+    -- array of the model ids being compared, e.g.
+    -- '[''gemma4:26b'',''llama3:70b'',''qwen2.5:32b'']'. NULL for
+    -- single-mode. Capped at 3 entries by the UI per the v1 column-
+    -- count decision.
+    multi_models TEXT
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -55,7 +71,22 @@ CREATE TABLE IF NOT EXISTS messages (
     -- Matches the model-supplied id from the corresponding tool_calls
     -- entry on the preceding assistant row. NULL otherwise.
     tool_call_id TEXT,
-    seq INTEGER NOT NULL DEFAULT 0
+    seq INTEGER NOT NULL DEFAULT 0,
+    -- Multi-model fan-out: groups every assistant row produced in
+    -- parallel for a single user turn. All N variant rows share the
+    -- same value (a chat-scoped opaque id). NULL on single-mode chats
+    -- and on user/system/tool rows.
+    variant_group_id TEXT,
+    -- For variant rows:
+    --   1     -- the chosen response (canonical history, visible by
+    --            default in the chat scroll)
+    --   0     -- an unpicked sibling (hidden by default; surfaced via
+    --            the alternatives disclosure under the picked row)
+    --   NULL  -- single-mode row OR multi-pending row that the user
+    --            hasn't acted on yet (still streaming, or all variants
+    --            are still equal candidates and the panel layout
+    --            renders them all)
+    is_picked INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, seq);
@@ -294,6 +325,90 @@ CREATE TABLE IF NOT EXISTS chat_files (
 
 CREATE INDEX IF NOT EXISTS idx_chat_files_chat ON chat_files(chat_id);
 ";
+
+/// Apply column-add migrations to a connection AFTER `execute_batch(SCHEMA)`.
+///
+/// The SCHEMA const uses `CREATE TABLE IF NOT EXISTS`, which is a no-op when
+/// the table already exists on an upgraded user's DB — so any columns we add
+/// to SCHEMA in a later release would never appear on those DBs and the
+/// first query that names them would fail with "no such column".
+///
+/// Each migration uses `add_column_if_missing` (PRAGMA-introspection based)
+/// so this function is idempotent and safe to call on every launch — fresh
+/// installs, upgraded installs, and re-launches all converge on the same
+/// final shape. Order matters only if a later migration depends on the
+/// presence of a column added by an earlier one; group such pairs together
+/// in this function and document the dependency.
+///
+/// Add new migrations at the END of this function. Never reorder or remove
+/// existing migrations — that would break upgrade paths from intermediate
+/// versions.
+///
+/// **Indices on migration-added columns must be created HERE, after the
+/// ALTER TABLE that adds them.** Putting `CREATE INDEX … ON t(new_col)` in
+/// SCHEMA would fail on upgrade installs because the index runs before the
+/// ALTER TABLE — see the CLAUDE.md gotcha on migration ordering.
+pub(crate) fn apply_migrations(conn: &Connection) -> Result<(), String> {
+    // ── Phase 1 (multi-model panel) ─────────────────────────────────────
+    // Four nullable columns: NULL is the well-defined sentinel for "this
+    // chat / message predates compare-mode". The Rust ChatRow/MessageRow
+    // structs use Option<T> for each.
+    add_column_if_missing(conn, "chats", "tab_type", "TEXT")?;
+    add_column_if_missing(conn, "chats", "multi_models", "TEXT")?;
+    add_column_if_missing(conn, "messages", "variant_group_id", "TEXT")?;
+    add_column_if_missing(conn, "messages", "is_picked", "INTEGER")?;
+    Ok(())
+}
+
+/// Idempotent `ALTER TABLE … ADD COLUMN`. Reads `PRAGMA table_info(table)`
+/// to enumerate existing columns; if `column` is absent, issues the ALTER.
+///
+/// Why introspection vs. try-and-swallow-the-error: the failure mode for a
+/// duplicate column is SQLite's "duplicate column name: X" error, which is
+/// a string match that couples to SQLite's error formatting. PRAGMA-based
+/// detection is one extra prepare/query but stays explicit and survives
+/// any future SQLite error-text changes.
+///
+/// `type_def` is appended verbatim — pass nullable types without NOT NULL,
+/// since `ALTER TABLE ADD COLUMN` rejects NOT NULL without a default. The
+/// helper does NOT enforce this at compile time; if you violate it you'll
+/// see a clear SQLite error on the first launch with the new code.
+///
+/// `table` and `column` are interpolated into SQL via `format!`. Both are
+/// expected to be hardcoded identifiers in the migration list above —
+/// never user-supplied — so SQL injection is not a concern. The helper
+/// is `fn`, not `pub`, to keep that contract local.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    type_def: &str,
+) -> Result<(), String> {
+    let already_present: bool = {
+        // PRAGMA table_info row shape: (cid, name, type, notnull, dflt_value, pk).
+        // We only need column 1 (name). Collect into a Vec so the
+        // borrow on stmt ends before this block does — letting .any()
+        // hold the borrow into the block tail trips NLL temporary-drop
+        // rules ("stmt dropped here while still borrowed").
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .map_err(|e| format!("PRAGMA table_info({table}): {e}"))?;
+        let names: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| format!("PRAGMA table_info({table}) query: {e}"))?
+            .filter_map(Result::ok)
+            .collect();
+        names.iter().any(|name| name == column)
+    };
+    if !already_present {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {type_def}"),
+            [],
+        )
+        .map_err(|e| format!("ALTER TABLE {table} ADD COLUMN {column} {type_def}: {e}"))?;
+    }
+    Ok(())
+}
 
 /// Unix epoch seconds (truncated). Returns 0 on the (impossible) clock-
 /// before-epoch case rather than panicking — call sites use this as a
@@ -654,5 +769,376 @@ mod tests {
         // this behavior, just through different paths (prompts via
         // `to_lowercase + filter`, tools via direct `to_ascii_lowercase`).
         assert_eq!(slugify("Café", None), "caf");
+    }
+
+    // ── Multi-model panel (Phase 1: schema + persistence) ─────────────────
+    //
+    // These pin the wire shape of compare-mode chats: a `chats` row carries
+    // `tab_type` + `multi_models` (JSON array), and a single user turn
+    // produces N assistant rows that share a `variant_group_id` and start
+    // with `is_picked = NULL`. The "pick" UI flips one row to 1 and the
+    // siblings to 0; the canonical-load filter (`is_picked IS NULL OR
+    // is_picked = 1`) then surfaces the chosen reply alongside any
+    // pre-existing single-mode rows.
+
+    #[test]
+    fn multimodel_chat_persists_tab_type_and_models_list() {
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO chats (id, title, model, tab_type, multi_models) \
+             VALUES ('c1', 'Compare opening', '', 'multi-pending', \
+                     '[\"gemma4:26b\",\"llama3:70b\",\"qwen2.5:32b\"]')",
+            [],
+        )
+        .unwrap();
+
+        let (tab_type, models): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT tab_type, multi_models FROM chats WHERE id = 'c1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tab_type.as_deref(), Some("multi-pending"));
+        assert_eq!(
+            models.as_deref(),
+            Some("[\"gemma4:26b\",\"llama3:70b\",\"qwen2.5:32b\"]")
+        );
+    }
+
+    #[test]
+    fn multimodel_variant_group_round_trips_and_pick_filter_works() {
+        // End-to-end shape: one user message followed by three assistant
+        // variants that share a `variant_group_id`. Initially all three
+        // are unpicked (is_picked IS NULL — multi-pending). After the
+        // user picks one, the chosen row's is_picked=1 and the siblings'
+        // is_picked=0. The default canonical-load filter (NULL or 1)
+        // surfaces only the picked row + the original user message.
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO chats (id, title, model, tab_type, multi_models) \
+             VALUES ('c1', 'Compare', '', 'multi-pending', \
+                     '[\"a\",\"b\",\"c\"]')",
+            [],
+        )
+        .unwrap();
+
+        // User message (seq=1). variant_group_id stays NULL on user rows.
+        conn.execute(
+            "INSERT INTO messages (id, chat_id, role, content, seq) \
+             VALUES ('u1', 'c1', 'user', 'Start my adventure', 1)",
+            [],
+        )
+        .unwrap();
+
+        // Three parallel assistant variants. Share seq=2 (same turn) AND
+        // variant_group_id='v1'. is_picked stays NULL until the user
+        // picks. The model column distinguishes them.
+        for (id, model, body) in [
+            ("a1", "a", "Response from A"),
+            ("a2", "b", "Response from B"),
+            ("a3", "c", "Response from C"),
+        ] {
+            conn.execute(
+                "INSERT INTO messages (id, chat_id, role, content, model, seq, variant_group_id) \
+                 VALUES (?1, 'c1', 'assistant', ?2, ?3, 2, 'v1')",
+                rusqlite::params![id, body, model],
+            )
+            .unwrap();
+        }
+
+        // Sanity: all three load with the panel-layout (unfiltered) query.
+        let all: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages \
+                 WHERE chat_id = 'c1' AND role = 'assistant'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(all, 3, "all three variants must round-trip");
+
+        // Simulate the user picking variant 'b' (a2):
+        //   • a2 → is_picked = 1
+        //   • a1, a3 → is_picked = 0
+        // In production this comes from db_upsert_message; here we hit
+        // the table directly so the test isn't coupled to the command.
+        conn.execute("UPDATE messages SET is_picked = 1 WHERE id = 'a2'", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE messages SET is_picked = 0 WHERE id IN ('a1', 'a3')",
+            [],
+        )
+        .unwrap();
+
+        // Canonical-load filter the UI applies post-pick: NULL (single-
+        // mode or pre-pick) OR is_picked = 1 (canonical). Should yield
+        // exactly the user message + the picked assistant variant.
+        let canonical: Vec<(String, String, Option<String>)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, role, model FROM messages \
+                     WHERE chat_id = 'c1' \
+                       AND (is_picked IS NULL OR is_picked = 1) \
+                     ORDER BY seq ASC, id ASC",
+                )
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert_eq!(canonical.len(), 2, "canonical view = user + 1 assistant");
+        assert_eq!(canonical[0].0, "u1");
+        assert_eq!(canonical[1].0, "a2");
+        assert_eq!(canonical[1].2.as_deref(), Some("b"));
+
+        // The unpicked siblings ARE still in the DB — the alternatives
+        // disclosure relies on this. A focused query for is_picked = 0
+        // within the same variant_group_id returns the two cousins.
+        let unpicked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages \
+                 WHERE chat_id = 'c1' AND variant_group_id = 'v1' AND is_picked = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(unpicked, 2, "unpicked siblings must be retained");
+    }
+
+    // ── Column-add migrations (apply_migrations) ──────────────────────────
+    //
+    // These pin the upgrade-safety contract. Ekorbia has a public release on
+    // GitHub, so any column we add to SCHEMA in a later version would never
+    // appear on existing users' DBs (CREATE TABLE IF NOT EXISTS skips when
+    // the table exists). apply_migrations runs after execute_batch(SCHEMA)
+    // and idempotently adds any missing columns via ALTER TABLE.
+
+    fn columns_of(conn: &Connection, table: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect()
+    }
+
+    /// Build a pre-multimodel DB shape: just enough columns for a chats +
+    /// messages round trip from the version BEFORE Phase 1 landed. Used by
+    /// the legacy-DB migration tests below. Keep this minimal — adding
+    /// columns here would defeat the test by skipping the ALTER path.
+    fn legacy_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE chats (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                output_dir TEXT
+             );
+             CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                model TEXT,
+                time TEXT,
+                tokens_in INTEGER,
+                tokens_out INTEGER,
+                tokens_ms INTEGER,
+                prompts_json TEXT,
+                sources_json TEXT,
+                tool_calls_json TEXT,
+                tool_call_id TEXT,
+                seq INTEGER NOT NULL DEFAULT 0
+             );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn migrations_no_op_on_fresh_db() {
+        // Fresh-install path: SCHEMA already creates every Phase 1 column.
+        // apply_migrations should find each one present and not error.
+        // Running it twice in a row is a stricter idempotency check.
+        let conn = fresh_db();
+        apply_migrations(&conn).expect("first run on fresh DB");
+        apply_migrations(&conn).expect("second run on fresh DB");
+
+        let chat_cols = columns_of(&conn, "chats");
+        assert!(chat_cols.iter().any(|c| c == "tab_type"));
+        assert!(chat_cols.iter().any(|c| c == "multi_models"));
+        let msg_cols = columns_of(&conn, "messages");
+        assert!(msg_cols.iter().any(|c| c == "variant_group_id"));
+        assert!(msg_cols.iter().any(|c| c == "is_picked"));
+    }
+
+    #[test]
+    fn migrations_add_columns_to_legacy_db() {
+        // Upgrade path. Construct a legacy DB (Phase 1 columns absent),
+        // confirm they're missing, run apply_migrations, confirm they're
+        // present. This is the test that would have caught the original
+        // bug — a user upgrading from an old release would hit this exact
+        // shape before the first launch finishes opening the DB.
+        let conn = legacy_db();
+
+        assert!(!columns_of(&conn, "chats").iter().any(|c| c == "tab_type"));
+        assert!(!columns_of(&conn, "chats")
+            .iter()
+            .any(|c| c == "multi_models"));
+        assert!(!columns_of(&conn, "messages")
+            .iter()
+            .any(|c| c == "variant_group_id"));
+        assert!(!columns_of(&conn, "messages")
+            .iter()
+            .any(|c| c == "is_picked"));
+
+        apply_migrations(&conn).expect("migrating legacy DB");
+
+        assert!(columns_of(&conn, "chats").iter().any(|c| c == "tab_type"));
+        assert!(columns_of(&conn, "chats")
+            .iter()
+            .any(|c| c == "multi_models"));
+        assert!(columns_of(&conn, "messages")
+            .iter()
+            .any(|c| c == "variant_group_id"));
+        assert!(columns_of(&conn, "messages")
+            .iter()
+            .any(|c| c == "is_picked"));
+    }
+
+    #[test]
+    fn migrations_let_phase1_writes_round_trip_on_legacy_db() {
+        // The strongest integrated check: after migrating a legacy DB, the
+        // Phase 1 multi-model round trip from `multimodel_variant_group_
+        // round_trips_and_pick_filter_works` should succeed end-to-end. If
+        // ALTER TABLE somehow produced a column with the wrong type or
+        // shape, this test fails. (Test isolated from the fresh-DB version
+        // by going through the legacy → migrate → write path explicitly.)
+        let conn = legacy_db();
+        apply_migrations(&conn).expect("migrate legacy DB");
+
+        // A real legacy user might have pre-existing single-mode chats.
+        // Seed one to make sure the migration doesn't disturb them.
+        conn.execute(
+            "INSERT INTO chats (id, title, model) VALUES ('legacy1', 'old', 'm')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, chat_id, role, content, seq) \
+             VALUES ('lm1', 'legacy1', 'user', 'hi from before', 1)",
+            [],
+        )
+        .unwrap();
+
+        // Now use the new columns on a brand-new chat — same shape as the
+        // confirmCompareModels flow in the UI.
+        conn.execute(
+            "INSERT INTO chats (id, title, model, tab_type, multi_models) \
+             VALUES ('c1', 'Compare', '', 'multi-pending', \
+                     '[\"a\",\"b\",\"c\"]')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, chat_id, role, content, seq) \
+             VALUES ('u1', 'c1', 'user', 'go', 1)",
+            [],
+        )
+        .unwrap();
+        for (id, model) in [("a1", "a"), ("a2", "b"), ("a3", "c")] {
+            conn.execute(
+                "INSERT INTO messages (id, chat_id, role, content, model, seq, variant_group_id) \
+                 VALUES (?1, 'c1', 'assistant', 'r', ?2, 2, 'v1')",
+                rusqlite::params![id, model],
+            )
+            .unwrap();
+        }
+
+        // Legacy chat unchanged.
+        let legacy_msg_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE chat_id = 'legacy1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy_msg_count, 1, "legacy chats survive migration");
+
+        // New compare-mode chat round-trips correctly.
+        let (tab_type, models): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT tab_type, multi_models FROM chats WHERE id = 'c1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tab_type.as_deref(), Some("multi-pending"));
+        assert_eq!(models.as_deref(), Some("[\"a\",\"b\",\"c\"]"));
+        let variants: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages \
+                 WHERE chat_id = 'c1' AND variant_group_id = 'v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(variants, 3);
+    }
+
+    #[test]
+    fn multimodel_columns_default_to_null_for_legacy_single_mode_rows() {
+        // Pre-existing single-mode chats and messages must keep working
+        // without any code changes elsewhere. The new columns default
+        // to NULL on insert, and the UI treats NULL tab_type as 'single'
+        // and NULL is_picked as canonical-visible.
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO chats (id, title, model) VALUES ('c1', 'Legacy', 'm')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, chat_id, role, content, seq) \
+             VALUES ('u1', 'c1', 'user', 'hi', 1)",
+            [],
+        )
+        .unwrap();
+
+        let (tab_type, multi_models): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT tab_type, multi_models FROM chats WHERE id = 'c1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(tab_type.is_none(), "legacy chats default to NULL tab_type");
+        assert!(
+            multi_models.is_none(),
+            "legacy chats default to NULL multi_models"
+        );
+
+        let (vgid, picked): (Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT variant_group_id, is_picked FROM messages WHERE id = 'u1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(
+            vgid.is_none(),
+            "legacy messages default to NULL variant_group_id"
+        );
+        assert!(
+            picked.is_none(),
+            "legacy messages default to NULL is_picked"
+        );
     }
 }

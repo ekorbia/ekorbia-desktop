@@ -21,6 +21,16 @@ pub(crate) struct ChatRow {
     model: String,
     created_at: i64,
     updated_at: i64,
+    /// Multi-model comparison-mode discriminator. See `chats.tab_type` in
+    /// db.rs SCHEMA. None means single-mode (the historical default);
+    /// `Some("multi-pending")` / `Some("single-from-multi")` come into
+    /// play once the compare-mode feature lands in the UI.
+    #[serde(default)]
+    tab_type: Option<String>,
+    /// JSON-encoded array of model ids participating in a compare-mode
+    /// chat (e.g. `["gemma4:26b","llama3:70b"]`). None for single-mode.
+    #[serde(default)]
+    multi_models: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -52,6 +62,18 @@ pub(crate) struct MessageRow {
     #[serde(default)]
     tool_call_id: Option<String>,
     seq: i64,
+    /// Multi-model fan-out grouping. Every assistant row produced in
+    /// parallel for one user turn shares the same opaque id. None on
+    /// single-mode chats and on user/system/tool rows.
+    #[serde(default)]
+    variant_group_id: Option<String>,
+    /// Pick-state for variant rows. `Some(1)` = chosen (canonical
+    /// history), `Some(0)` = unpicked sibling (alternatives disclosure),
+    /// `None` = single-mode row OR multi-pending awaiting pick. The
+    /// UI uses this to decide what to render in the main scroll vs.
+    /// what to tuck under the "▸ N alternatives" disclosure.
+    #[serde(default)]
+    is_picked: Option<i64>,
 }
 
 #[tauri::command]
@@ -59,7 +81,8 @@ pub(crate) fn db_load_chats(state: tauri::State<'_, DbState>) -> Result<Vec<Chat
     let db = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = db
         .prepare(
-            "SELECT id, title, model, created_at, updated_at FROM chats ORDER BY updated_at DESC",
+            "SELECT id, title, model, created_at, updated_at, tab_type, multi_models \
+             FROM chats ORDER BY updated_at DESC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -70,6 +93,8 @@ pub(crate) fn db_load_chats(state: tauri::State<'_, DbState>) -> Result<Vec<Chat
                 model: row.get(2)?,
                 created_at: row.get(3)?,
                 updated_at: row.get(4)?,
+                tab_type: row.get(5)?,
+                multi_models: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -83,10 +108,25 @@ pub(crate) fn db_load_messages(
     chat_id: String,
 ) -> Result<Vec<MessageRow>, String> {
     let db = state.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = db.prepare(
-        "SELECT id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, prompts_json, sources_json, tool_calls_json, tool_call_id, seq \
-         FROM messages WHERE chat_id = ?1 ORDER BY seq ASC"
-    ).map_err(|e| e.to_string())?;
+    // Returns ALL rows for the chat — including unpicked variants
+    // (is_picked = 0). The UI is the filter point: ChatPane shows only
+    // is_picked IS NULL OR is_picked = 1, and the "▸ N alternatives"
+    // disclosure renders the is_picked = 0 siblings inline from the
+    // same payload. Loading everything in one round-trip is cheap (a
+    // turn has at most 3 variants in v1) and avoids an extra command
+    // for the disclosure.
+    //
+    // Secondary sort by id keeps variants within a group in a stable,
+    // deterministic order — gen_id is nanosecond-monotonic per process,
+    // so the row created first sorts first within its variant_group_id.
+    let mut stmt = db
+        .prepare(
+            "SELECT id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, \
+                prompts_json, sources_json, tool_calls_json, tool_call_id, seq, \
+                variant_group_id, is_picked \
+         FROM messages WHERE chat_id = ?1 ORDER BY seq ASC, id ASC",
+        )
+        .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([&chat_id], |row| {
             Ok(MessageRow {
@@ -104,6 +144,8 @@ pub(crate) fn db_load_messages(
                 tool_calls_json: row.get(11)?,
                 tool_call_id: row.get(12)?,
                 seq: row.get(13)?,
+                variant_group_id: row.get(14)?,
+                is_picked: row.get(15)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -130,18 +172,22 @@ pub(crate) fn db_upsert_chat(
     // created_at is intentionally not in the SET list so the original
     // creation timestamp survives subsequent updates.
     db.execute(
-        "INSERT INTO chats (id, title, model, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
+        "INSERT INTO chats (id, title, model, created_at, updated_at, tab_type, multi_models) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
          ON CONFLICT(id) DO UPDATE SET \
             title = excluded.title, \
             model = excluded.model, \
-            updated_at = excluded.updated_at",
+            updated_at = excluded.updated_at, \
+            tab_type = excluded.tab_type, \
+            multi_models = excluded.multi_models",
         (
             &chat.id,
             &chat.title,
             &chat.model,
             chat.created_at,
             chat.updated_at,
+            &chat.tab_type,
+            &chat.multi_models,
         ),
     )
     .map_err(|e| e.to_string())?;
@@ -161,8 +207,8 @@ pub(crate) fn db_upsert_message(
     // cheaper and matches the chats-table convention.
     db.execute(
         "INSERT INTO messages \
-         (id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, prompts_json, sources_json, tool_calls_json, tool_call_id, seq) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
+         (id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, prompts_json, sources_json, tool_calls_json, tool_call_id, seq, variant_group_id, is_picked) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
          ON CONFLICT(id) DO UPDATE SET \
             chat_id = excluded.chat_id, \
             role = excluded.role, \
@@ -176,7 +222,9 @@ pub(crate) fn db_upsert_message(
             sources_json = excluded.sources_json, \
             tool_calls_json = excluded.tool_calls_json, \
             tool_call_id = excluded.tool_call_id, \
-            seq = excluded.seq",
+            seq = excluded.seq, \
+            variant_group_id = excluded.variant_group_id, \
+            is_picked = excluded.is_picked",
         (
             &msg.id, &msg.chat_id, &msg.role, &msg.content,
             &msg.model, &msg.time,
@@ -184,6 +232,7 @@ pub(crate) fn db_upsert_message(
             &msg.prompts_json, &msg.sources_json,
             &msg.tool_calls_json, &msg.tool_call_id,
             msg.seq,
+            &msg.variant_group_id, msg.is_picked,
         ),
     ).map_err(|e| e.to_string())?;
     Ok(())
@@ -296,7 +345,8 @@ pub(crate) fn chat_export_to_path(
     // user-visible error, not a panic.
     let chat = db
         .query_row(
-            "SELECT id, title, model, created_at, updated_at FROM chats WHERE id = ?1",
+            "SELECT id, title, model, created_at, updated_at, tab_type, multi_models \
+             FROM chats WHERE id = ?1",
             [&chat_id],
             |row| {
                 Ok(ChatRow {
@@ -305,6 +355,8 @@ pub(crate) fn chat_export_to_path(
                     model: row.get(2)?,
                     created_at: row.get(3)?,
                     updated_at: row.get(4)?,
+                    tab_type: row.get(5)?,
+                    multi_models: row.get(6)?,
                 })
             },
         )
@@ -316,8 +368,9 @@ pub(crate) fn chat_export_to_path(
     let mut stmt = db
         .prepare(
             "SELECT id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, \
-                    prompts_json, sources_json, tool_calls_json, tool_call_id, seq \
-             FROM messages WHERE chat_id = ?1 ORDER BY seq ASC",
+                    prompts_json, sources_json, tool_calls_json, tool_call_id, seq, \
+                    variant_group_id, is_picked \
+             FROM messages WHERE chat_id = ?1 ORDER BY seq ASC, id ASC",
         )
         .map_err(|e| e.to_string())?;
     let messages: Vec<MessageRow> = stmt
@@ -337,6 +390,8 @@ pub(crate) fn chat_export_to_path(
                 tool_calls_json: row.get(11)?,
                 tool_call_id: row.get(12)?,
                 seq: row.get(13)?,
+                variant_group_id: row.get(14)?,
+                is_picked: row.get(15)?,
             })
         })
         .map_err(|e| e.to_string())?

@@ -33,10 +33,12 @@ The codebase was split from monoliths into domain files in May 2026. It is a **m
 
 | Touched | Run |
 |---|---|
-| any file under `src-tauri/src/` | `cd src-tauri && cargo test --lib` |
+| any file under `src-tauri/src/` | `cd src-tauri && cargo fmt && cargo test --lib` |
 | any file under `ui/` (except `*.md` / CSS-only in `index.html`) | `./scripts/run-ui-tests.sh` |
-| both, or unsure | `./scripts/run-all-tests.sh` |
+| both, or unsure | `cd src-tauri && cargo fmt && cd .. && ./scripts/run-all-tests.sh` |
 | only `README.md` / `CLAUDE.md` / `docs/` / other prose | no test run required |
+
+`cargo fmt` is mandatory after touching Rust — CI runs `cargo fmt --check` and a deviation fails the build. It's idempotent and sub-second; run it even on one-line edits. (The fmt-deviation backlog was cleared in May 2026; keep the tree clean from here on.)
 
 If a test fails, **fix it before reporting work done**. Don't ship a red suite. Skipping the run because "the change was small" is how the Phase 6 Rules-of-Hooks crash shipped — the regression test that would have caught it now exists (`tests/e2e/onboarding.spec.js`), but only catches the bug if the suite is actually run.
 
@@ -110,7 +112,7 @@ Doc-only changes do NOT require test runs (per the table above).
 
 ## Key design rules
 
-**Schema**: read `src/db.rs` `SCHEMA` const directly — don't trust any copy elsewhere. No migration block: solo-dev app, wipe the DB between schema changes. If real-user migrations are ever needed, reintroduce `ALTER TABLE` blocks in `setup()` *after* `execute_batch(SCHEMA)`, and note the index-ordering gotcha below.
+**Schema**: read `src/db.rs` `SCHEMA` const directly — don't trust any copy elsewhere. SCHEMA defines the shape for **fresh installs**. Ekorbia has a public release, so any column added to SCHEMA in a later version would never appear on an upgraded user's DB (`CREATE TABLE IF NOT EXISTS` is a no-op when the table exists). Wire upgrades through `apply_migrations()` in `db.rs`, which runs in `setup()` immediately after `execute_batch(SCHEMA)`. Each migration uses `add_column_if_missing` (PRAGMA-introspection based) so it's idempotent — fresh installs no-op through it, upgraded installs gain the columns. Add new migrations at the END of `apply_migrations`; never reorder or remove existing ones (that breaks upgrade paths from intermediate versions). See the index-ordering gotcha below.
 
 **Upsert pattern**: always `INSERT … ON CONFLICT(id) DO UPDATE SET …`, never `INSERT OR REPLACE`. SQLite implements OR REPLACE as DELETE + INSERT; the DELETE cascades FK children. Affects `chats` (children: `messages`, `attachments`), `watches` (children: `watch_events`), and any future table with ON DELETE CASCADE children.
 
@@ -139,7 +141,7 @@ Doc-only changes do NOT require test runs (per the table above).
 - **Component scripts load BEFORE `main.jsx`**: helpers defined in `main.jsx` (e.g. `usePersistedState`) are NOT in scope when any of the component files parse. Inline the pattern locally where needed — see `prompts-library.jsx`'s `LIST_WIDTH_KEY` block for the canonical example.
 - **Do not add ES `import`/`export` to the UI**: there's no bundler; Babel-standalone in `text/babel` mode will silently break script-scope hoisting if you switch to `type="module"`. Top-level `function` declarations are automatically on `window` in the current setup.
 - **FTS5 `MATCH` is finicky with raw user input**: dashes, parens, quotes, and colons are all reserved. Sanitise to alphanumeric + whitespace, tokenize, and append `*` per token in `sanitize_fts_query()`. Treat any MATCH error as "no results" rather than surfacing.
-- **Migration ordering — indices vs ALTER TABLE**: *(migrations removed; moot while the app is solo-dev and the DB is wiped between schema changes.)* When migrations existed, SCHEMA ran first and `CREATE INDEX … ON table(new_column)` would fail on upgrade installs if the column was only added by a later `ALTER TABLE`. Rule to restore: **indices on migration-added columns must live in the migration block, AFTER their ALTER TABLE.**
+- **Migration ordering — indices vs ALTER TABLE**: SCHEMA runs first (`execute_batch`) and `apply_migrations` runs second. So `CREATE INDEX … ON table(new_column)` in SCHEMA would fail on upgrade installs — the column doesn't exist yet at the moment SCHEMA runs, because the ALTER TABLE happens later in `apply_migrations`. **Indices on migration-added columns must be created INSIDE `apply_migrations`, after the corresponding `add_column_if_missing` call**, never in SCHEMA. Fresh installs are fine either way (SCHEMA creates both column and index in one batch), but upgrade installs only work when the index lives in the migration block.
 - **Doc comments on Tauri command parameters fail to compile**: `#[tauri::command]` macro doesn't allow `///` on individual params — they get parsed as attributes. Put the docs above the function.
 - **Embedding-model change invalidates chunks silently**: `retrieve_chunks` filters by `c.embed_model = current_model`. After a Settings change, old chunks vanish from results until reindexed. The Stale-Embeddings banner surfaces this; `attachment_reindex_stale` is the one-click fix.
 - **Cancellation registry leak**: every `register_cancel(&id)` MUST be paired with `clear_cancel(&id)` on the task's exit path (and `cancel_index` on external abort). Otherwise the `HashMap<String, Arc<AtomicBool>>` grows without bound across many attachments.

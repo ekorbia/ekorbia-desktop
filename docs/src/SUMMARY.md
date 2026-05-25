@@ -13,6 +13,7 @@
 - [The chat window](./chat/composer.md)
 - [Streaming and the Stop button](./chat/streaming-and-stop.md)
 - [Edit and retry messages](./chat/edit-and-retry.md)
+- [Compare 2-3 models side-by-side](./chat/compare.md)
 - [Markdown and code blocks](./chat/markdown-and-code.md)
 - [Exporting chats](./chat/export.md)
 - [Searching chat history](./chat/search.md)

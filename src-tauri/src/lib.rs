@@ -45,7 +45,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
 
-use crate::db::{DbState, SCHEMA};
+use crate::db::{apply_migrations, DbState, SCHEMA};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -163,11 +163,16 @@ pub fn run() {
             conn.execute_batch(SCHEMA)
                 .expect("failed to initialize database schema");
 
-            // No migration block: this app is in development, so future
-            // schema changes go directly into the SCHEMA const in db.rs
-            // and the dev DB gets wiped between schema iterations.
-            // Reintroduce ALTER TABLE / DO-UPDATE plumbing here when
-            // there are users whose DBs need to survive upgrades.
+            // Column-add migrations for upgraded installs. SCHEMA uses
+            // CREATE TABLE IF NOT EXISTS, which is a no-op on existing
+            // tables — so any column added to SCHEMA in a later release
+            // never lands on a pre-existing user DB. apply_migrations is
+            // idempotent (PRAGMA-introspection per column) so fresh
+            // installs no-op through it and upgraded installs converge
+            // on the same final shape. See db.rs::apply_migrations for
+            // the full migration list and the rule on where to add new
+            // ones.
+            apply_migrations(&conn).expect("failed to apply database migrations");
 
             // Backfill the FTS index for any messages that pre-date the
             // virtual table. The sync triggers keep new inserts indexed

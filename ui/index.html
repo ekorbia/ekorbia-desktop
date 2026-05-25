@@ -314,6 +314,11 @@
      window when chat.jsx's Message component references it. -->
 <script type="text/babel" src="markdown.jsx"></script>
 <script type="text/babel" src="chat.jsx"></script>
+<!-- compare-chat.jsx defines CompareChatPane (multi-model comparison panel).
+     Must load after chat.jsx (shares the Composer / Message render style)
+     and before main.jsx, which references the component when routing a
+     tabType='multi-pending' tab. -->
+<script type="text/babel" src="compare-chat.jsx"></script>
 <script type="text/babel" src="overlays.jsx"></script>
 <script type="text/babel" src="prompts-library.jsx"></script>
 <script type="text/babel" src="watch.jsx"></script>

@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **Compare 2-3 models side-by-side** — new comparison-chat mode. Pick 2 or 3
+  installed models from the sidebar's columns button, send one prompt, see all
+  responses stream into adjacent columns in parallel. Click "Keep this" on the
+  preferred response to transition the chat to a normal single-model
+  conversation with the kept model.
+- **Model + tokens footer** on every assistant message — subtle monospace
+  line showing which model produced the response and its token counts, so
+  scrolling back through a chat where you switched models mid-conversation
+  makes attribution obvious.
+- **Database migrations** — new `apply_migrations()` step in `db.rs` runs
+  after `execute_batch(SCHEMA)` to `ALTER TABLE ADD COLUMN` any new columns
+  on upgraded installs. Idempotent via PRAGMA introspection; fresh installs
+  no-op through it.
 
 ## [0.1.0] - 2026-05-23
 

@@ -52,6 +52,10 @@ const I = {
   // glyph + chat-pane banner). Shackle on top, body below, no keyhole
   // (too detailed at 16x16). Stroked so it inherits color cleanly.
   Lock:      (p) => <Icon {...p} d={<><rect x="3.5" y="7.5" width="9" height="6" rx="1" /><path d="M5.5 7.5V5.5a2.5 2.5 0 015 0V7.5" /></>} />,
+  // Two side-by-side columns — used for the compare-mode sidebar affordance
+  // and any future "panel layout" cue. Two thin rounded rects so the gap
+  // between them reads clearly at 16x16.
+  Columns:   (p) => <Icon {...p} d={<><rect x="2.5" y="3" width="5" height="10" rx="0.8" /><rect x="8.5" y="3" width="5" height="10" rx="0.8" /></>} />,
 };
 
 window.I = I;

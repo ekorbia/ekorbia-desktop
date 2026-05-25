@@ -102,6 +102,7 @@ For development with hot-reload, use `cargo tauri dev` from the
 
 - **Multi-tab chat** with independent conversation history per tab
 - **Private chats** — click the lock icon next to "New chat" in the sidebar to open an ephemeral session. Messages, attachments, and file saves never touch the database; the conversation lives only in memory and disappears when the tab closes
+- **Compare 2-3 models side-by-side** — click the columns icon next to the lock icon in the sidebar to start a comparison chat. Pick 2 or 3 installed models, send one prompt, and watch the responses stream into adjacent columns in parallel. Click "Keep this" on whichever response you prefer — the chat transitions to a normal single-model conversation with the kept model, and the unpicked responses are preserved under a "▸ N alternatives" disclosure for later inspection. See [docs/src/chat/compare.md](docs/src/chat/compare.md) for the full walkthrough.
 - **File & folder attachments with local RAG**
   - Click the paperclip to attach `.txt` / `.md` / `.pdf` files or images, or the folder icon to attach an entire directory
   - Small files are inlined verbatim; large files and folders are chunked, embedded locally with [nomic-embed-text](https://ollama.com/library/nomic-embed-text) (or any embedding model you pull), and retrieved per-query

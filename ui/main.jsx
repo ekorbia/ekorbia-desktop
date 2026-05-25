@@ -64,7 +64,23 @@ function groupChatsByDate(chatRows) {
   ];
   for (const r of chatRows) {
     const d = new Date(r.createdAt * 1000);
-    const item = { id: r.id, title: r.title, model: r.model, when: relativeTime(r.updatedAt) };
+    // Multi-model fields hitch a ride into the sidebar item so chat-row
+    // renderers can show a "compare" badge and openChatInTab can re-
+    // hydrate the tab without a second DB round-trip. multiModels is
+    // JSON in the DB; parse here once rather than at every render.
+    // tryParseJson returns the fallback on malformed payloads — we
+    // treat that as "not multi-mode" and let the chat behave as single.
+    const parsedModels = r.multiModels
+      ? tryParseJson(r.multiModels, null)
+      : null;
+    const item = {
+      id: r.id,
+      title: r.title,
+      model: r.model,
+      when: relativeTime(r.updatedAt),
+      tabType: r.tabType || null,
+      models: Array.isArray(parsedModels) ? parsedModels : null,
+    };
     if (d >= todayStart) buckets[0].items.push(item);
     else if (d >= yesterdayStart) buckets[1].items.push(item);
     else if (d >= weekStart) buckets[2].items.push(item);
@@ -100,7 +116,7 @@ function usePersistedState(key, defaultValue) {
 // value is human-readable in devtools and matches the overlay's storage
 // format (overlay.jsx uses `ekorbia.overlay.model` the same way).
 const COMPOSER_MODEL_LS_KEY = 'ekorbia.main.model';
-const COMPOSER_FALLBACK_MODEL = 'gemma4:26b';
+const COMPOSER_FALLBACK_MODEL = 'gemma4:latest';
 // Hard cap on tool-call iterations within a single chat send. Each iteration
 // is one round-trip to /api/chat. Without a cap a misbehaving model could
 // loop indefinitely emitting tool_calls. Set conservatively — most legitimate
@@ -113,6 +129,14 @@ function readPersistedComposerModel() {
     if (stored) return stored;
   } catch {}
   return COMPOSER_FALLBACK_MODEL;
+}
+
+// Write the user's preferred default model to localStorage. Called ONLY
+// when the user explicitly picks a model via the Composer dropdown — not
+// when opening a historical chat (that would drift the default away
+// from what the user actually prefers).
+function persistComposerModel(id) {
+  try { localStorage.setItem(COMPOSER_MODEL_LS_KEY, id); } catch {}
 }
 
 // ── Output-dir permission modal ───────────────────────────────────────────
@@ -801,6 +825,23 @@ function App() {
     if (isEphemeralChat(chatPayload.id)) return Promise.resolve();
     return invoke('db_upsert_chat', { chat: chatPayload });
   };
+
+  // Look up the multi-model persistence fields for a chat from current
+  // tabs state. Every persistChat caller spreads the result so a routine
+  // single-field UPDATE (e.g. renameChat bumping title) doesn't blank
+  // out the multi-pending state on the row — the Rust ON CONFLICT DO
+  // UPDATE SET clause writes whatever we send. Returns {tabType: null,
+  // multiModels: null} for single-mode chats, which preserves the
+  // existing row's NULLs.
+  const multiFieldsForChat = (chatId) => {
+    const tab = tabs.find(t => t.id === chatId);
+    return {
+      tabType: tab?.tabType || null,
+      multiModels: Array.isArray(tab?.models)
+        ? JSON.stringify(tab.models)
+        : null,
+    };
+  };
   const persistMessage = (msgPayload) => {
     if (isEphemeralChat(msgPayload.chatId)) return Promise.resolve();
     return invoke('db_upsert_message', { msg: msgPayload });
@@ -871,11 +912,19 @@ function App() {
         // delete from `chats` unconditionally.
         if (Array.isArray(chatRows) && chatRows.length > 0) {
           const newest = chatRows[0];
+          // Forward multi-model fields so a relaunch lands the user back
+          // in compare mode rather than a single-model view of the same
+          // chat id. multiModels is JSON on the row; parse here.
+          const parsedModels = newest.multiModels
+            ? tryParseJson(newest.multiModels, null)
+            : null;
           try {
             await openChatInTab({
               id: newest.id,
               title: newest.title,
               model: newest.model,
+              tabType: newest.tabType || null,
+              models: Array.isArray(parsedModels) ? parsedModels : null,
             });
             setTabs(ts => ts.filter(t => t.id !== welcomeId));
             setChats(cs => { const n = { ...cs }; delete n[welcomeId]; return n; });
@@ -1008,10 +1057,14 @@ function App() {
   // Persist the composer's model whenever the user changes it (via the
   // model picker, or implicitly by opening an old chat). Next launch reads
   // this back through readPersistedComposerModel(); see also the validation
-  // effect below which rationalises stale values against what's pulled.
-  useE(() => {
-    try { localStorage.setItem(COMPOSER_MODEL_LS_KEY, modelId); } catch {}
-  }, [modelId]);
+  // NOTE: we deliberately do NOT auto-persist modelId to localStorage.
+  // localStorage[COMPOSER_MODEL_LS_KEY] is the user's STABLE preferred
+  // model for new chats; it should only change when the user explicitly
+  // picks via the Composer dropdown. Opening a historical chat shifts
+  // the active modelId for display, but mustn't drift the default for
+  // the next "+ New chat" the user creates. See onModelChange in the
+  // Composer mount below: it calls persistComposerModel(id) to update
+  // both the state and the localStorage key together.
 
   // One-shot validation: at startup, ask Ollama what's actually pulled and
   // — if our persisted/default choice isn't installed — fall back to the
@@ -1046,6 +1099,19 @@ function App() {
   const abortRef = useR(null);
   const streamAccumulatedRef = useR('');
   const streamMsgIdRef = useR(null);
+
+  // ── Multi-model compare mode (Phase 3) ───────────────────────────────
+  // Per-stream Maps keyed by assistant-message id. Distinct from the
+  // singleton streamingRef/abortRef above, which the single-model
+  // handleSend path continues to use unchanged. Each fanned-out column
+  // has its own slot here:
+  //   • multiStreamControllersRef.get(asstId) — AbortController for
+  //     that column's fetch; deleted when the stream completes or aborts.
+  //   • multiStreamAccumRef.get(asstId) — rolling content accumulator;
+  //     the finalize step reads this as the last-known content when a
+  //     stream completes (or aborts mid-flight). Cleared after persist.
+  const multiStreamControllersRef = useR(new Map());
+  const multiStreamAccumRef = useR(new Map());
 
   // Execute a single file write. Handles the permission-required dance:
   // when Rust emits chat:needs_output_dir, the modal renders and user
@@ -1297,9 +1363,9 @@ function App() {
           return [{ section: 'Today', items: [newItem] }, ...hs];
         });
       }
-      persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs }).catch(console.error);
+      persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs, ...multiFieldsForChat(activeTab) }).catch(console.error);
     } else {
-      persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs }).catch(console.error);
+      persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs, ...multiFieldsForChat(activeTab) }).catch(console.error);
     }
 
     const seq = priorMessages.length;
@@ -1708,6 +1774,470 @@ function App() {
     truncateAndResend(userIdx, userText);
   };
 
+  // ── Multi-model parallel send pipeline (Phase 3) ─────────────────────
+  //
+  // streamModelToMessage: stream one model's response into one assistant
+  // message row. Pure-ish — reads/writes only the per-stream Map slots
+  // (keyed by asstId) and invokes the onChunk callback for content
+  // updates. No tool-call support; the tool loop is deliberately
+  // single-model only (its permission-modal interleave doesn't map to
+  // N-way fan-out, and compare-mode v1 is a one-shot pick-a-winner
+  // experience).
+  //
+  // Returns { ok, content, tokensIn, tokensOut, elapsedMs }. ok=false
+  // means the fetch errored before any content arrived (Ollama not
+  // running, model missing, etc) — the caller treats this as "this
+  // column failed" without aborting the other columns.
+  const streamModelToMessage = async ({ asstId, model, messages, onChunk }) => {
+    const startMs = Date.now();
+    const controller = new AbortController();
+    multiStreamControllersRef.current.set(asstId, controller);
+    multiStreamAccumRef.current.set(asstId, '');
+
+    let accumulated = '';
+    let tokensIn = 0;
+    let tokensOut = 0;
+    let ok = false;
+
+    try {
+      const resp = await fetch('http://localhost:11434/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages, stream: true }),
+        signal: controller.signal,
+      });
+      if (!resp.ok) {
+        return { ok: false, content: '', tokensIn: 0, tokensOut: 0, elapsedMs: Date.now() - startMs };
+      }
+      ok = true;
+
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let lineBuf = '';
+
+      const consumeLine = (line) => {
+        if (!line) return;
+        try {
+          const obj = JSON.parse(line);
+          if (obj.message?.content) {
+            accumulated += obj.message.content;
+            multiStreamAccumRef.current.set(asstId, accumulated);
+            onChunk?.(asstId, accumulated);
+          }
+          if (obj.done) {
+            // tokensIn is the prompt-eval count of the latest /api/chat
+            // response. Compare-mode currently issues one fetch per
+            // column (no tool loop), so this is final by definition.
+            tokensIn = obj.prompt_eval_count ?? tokensIn;
+            tokensOut += obj.eval_count ?? 0;
+          }
+        } catch (_) {
+          // Malformed JSON line. Mirrors the single-model handleSend
+          // policy: swallow + continue rather than crashing the stream
+          // on one bad chunk.
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        lineBuf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = lineBuf.indexOf('\n')) !== -1) {
+          const line = lineBuf.slice(0, nl).trim();
+          lineBuf = lineBuf.slice(nl + 1);
+          consumeLine(line);
+        }
+      }
+      const tail = lineBuf.trim();
+      if (tail) consumeLine(tail);
+    } catch (e) {
+      // AbortError fires when the user hits Stop or closes the tab —
+      // expected, no log. Other errors are worth surfacing in devtools
+      // so we don't silently lose a column to a bug.
+      if (e.name !== 'AbortError') {
+        console.error(`streamModelToMessage error for ${model}:`, e);
+      }
+    } finally {
+      // Always clear the controller slot so the Map doesn't leak across
+      // sends. The accum slot stays — handleSendMultiModel's finalize
+      // step reads it as the last-known content for the persist step
+      // (matters when an AbortError truncated content mid-stream).
+      multiStreamControllersRef.current.delete(asstId);
+    }
+
+    return {
+      ok,
+      content: accumulated,
+      tokensIn,
+      tokensOut,
+      elapsedMs: Date.now() - startMs,
+    };
+  };
+
+  // handleSendMultiModel: fan-out send for compare-mode tabs. Called by
+  // CompareChatPane's Composer (Phase 4 wiring). Builds one user message,
+  // appends N empty assistant stubs (one per model), then fires N parallel
+  // streamModelToMessage calls via Promise.allSettled so one model erroring
+  // doesn't kill the others.
+  //
+  // All N assistant rows share a `variantGroupId` and start with
+  // `isPicked: null`. Phase 4's "Keep this" interaction flips one of them
+  // to is_picked=1 and the siblings to 0, then the chat transitions to
+  // `tabType='single-from-multi'`.
+  const handleSendMultiModel = async (text) => {
+    const tab = tabs.find(t => t.id === activeTab);
+    const models = Array.isArray(tab?.models) ? tab.models : null;
+    if (!models || models.length < 2) {
+      console.error('handleSendMultiModel: tab has no model list', tab);
+      return;
+    }
+    const trimmed = (text || '').trim();
+    if (!trimmed) return;
+
+    const baseMessages = chat.messages || [];
+    const isNewChat = baseMessages.length === 0;
+    // Auto-title: avoid clobbering both the literal 'New chat' default
+    // AND our compare-mode 'New comparison chat' so the first send still
+    // names the chat after the user's prompt.
+    const hasCustomTitle =
+      chat.title &&
+      chat.title !== 'New chat' &&
+      chat.title !== 'New comparison chat';
+    const title = isNewChat && !hasCustomTitle
+      ? (trimmed.slice(0, 40) || 'New comparison chat')
+      : chat.title;
+
+    // Compare-mode v2: attached prompts are now included as a system
+    // message at the start of the convo so every column receives the
+    // same prompt context. Attachments (file context, memory) are still
+    // deferred to a future iteration — they involve the Rust retrieval
+    // pipeline and don't map cleanly to a one-shot N-way comparison.
+    const priorMessages = baseMessages.map(m => ({ role: m.role, content: m.content }));
+    const promptSystem = attachedPrompts.map(p => p.body).join('\n\n');
+    const promptSystemMessages = promptSystem
+      ? [{ role: 'system', content: promptSystem }]
+      : [];
+    const userMessage = { role: 'user', content: text };
+    const convoMessages = [
+      ...promptSystemMessages,
+      ...priorMessages,
+      userMessage,
+    ];
+
+    const userId = genId();
+    const variantGroupId = genId();
+    const asstIds = models.map(() => genId());
+    const userSeq = priorMessages.length;
+    const nowTs = Math.floor(Date.now() / 1000);
+
+    // Resolve favorite color → chip background here so historical
+    // chats keep their tint even if a prompt's favorite is later
+    // cleared. Mirrors handleSend's userMsg construction.
+    const userPromptChips = attachedPrompts.length
+      ? attachedPrompts.map(p => {
+          const fav = p.favorite ? FAVORITE_COLOR_MAP[p.favorite] : null;
+          return { id: p.id, name: p.name, color: fav?.color || null };
+        })
+      : undefined;
+    const userMsgUi = {
+      id: userId,
+      role: 'user',
+      content: text,
+      time: now(),
+      prompts: userPromptChips,
+    };
+    const stubAssistants = models.map((m, i) => ({
+      id: asstIds[i],
+      role: 'assistant',
+      model: m,
+      time: now(),
+      content: '',
+      streaming: true,
+      // Carried through the persisted row + back via db_load_messages
+      // so Phase 4 can render variants under one user message and
+      // keepVariant can re-persist with the original seq.
+      variantGroupId,
+      isPicked: null,
+      seq: userSeq + 1,
+    }));
+
+    setStreaming(true);
+
+    setChat(c => ({
+      ...c,
+      title,
+      messages: [...c.messages, userMsgUi, ...stubAssistants],
+    }));
+
+    if (isNewChat) {
+      setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, title } : t));
+      const ephemeral = isEphemeralChat(activeTab);
+      if (!ephemeral) {
+        const newItem = {
+          id: activeTab, title, model: models[0], when: 'now',
+          tabType: tab.tabType, models,
+        };
+        setHistory(hs => {
+          if (hs.some(s => s.items.some(c => c.id === activeTab))) return hs;
+          const todayIdx = hs.findIndex(s => s.section === 'Today');
+          if (todayIdx >= 0) {
+            return hs.map((s, i) =>
+              i === todayIdx ? { ...s, items: [newItem, ...s.items] } : s,
+            );
+          }
+          return [{ section: 'Today', items: [newItem] }, ...hs];
+        });
+      }
+    }
+    // Persist chat row (idempotent vs. the one confirmCompareModels
+    // created — INSERT … ON CONFLICT DO UPDATE in Rust preserves the
+    // original created_at and the multi_models / tab_type fields).
+    persistChat({
+      id: activeTab,
+      title,
+      model: tab.model,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+      ...multiFieldsForChat(activeTab),
+    }).catch(console.error);
+
+    // Persist the user message + N empty assistant stubs up front so
+    // the variant group exists in the DB before any stream completes.
+    // This means a crash / quit mid-send still leaves the variant
+    // structure on disk; the user can reopen the chat and the stubs
+    // remain (Phase 4 will offer "Retry empty variants" affordance).
+    persistMessage({
+      id: userId, chatId: activeTab, role: 'user', content: text,
+      model: null, time: userMsgUi.time,
+      tokensIn: null, tokensOut: null, tokensMs: null,
+      // Persist attached-prompt chips on the user row so re-opening
+      // the chat re-renders them above the bubble. Matches handleSend.
+      promptsJson: userPromptChips ? JSON.stringify(userPromptChips) : null,
+      seq: userSeq,
+    }).catch(console.error);
+    stubAssistants.forEach((stub) => {
+      persistMessage({
+        id: stub.id, chatId: activeTab, role: 'assistant',
+        content: '',
+        model: stub.model, time: stub.time,
+        tokensIn: null, tokensOut: null, tokensMs: null,
+        promptsJson: null,
+        seq: userSeq + 1,
+        variantGroupId,
+        isPicked: null,
+      }).catch(console.error);
+    });
+
+    // Per-chunk UI update. Looks up the message by id (not last-index)
+    // because in compare mode the "last" message changes per-column —
+    // we want each chunk to land in its own row regardless of order.
+    const onChunk = (id, accumulated) => {
+      setChat(c => {
+        const msgs = c.messages.map(m =>
+          m.id === id ? { ...m, content: accumulated } : m,
+        );
+        return { ...c, messages: msgs };
+      });
+    };
+
+    // Finalize a single column the moment ITS stream resolves. Earlier
+    // shape was forEach-after-allSettled, which gated every column's
+    // "done" transition (Keep button, tokens footer) on the slowest
+    // stream. With per-stream finalize the UI matches Ollama's actual
+    // parallelism — fast columns flip to "done" while slow ones keep
+    // streaming. Reads the multiStreamAccumRef snapshot as a fallback
+    // in case `value` is null (which only happens if the promise
+    // rejected before streamModelToMessage's try/catch — streamModel-
+    // ToMessage normally returns a structured shape on every path).
+    const finalizeColumn = (asstId, model, value) => {
+      const lastAccum = multiStreamAccumRef.current.get(asstId) || '';
+      multiStreamAccumRef.current.delete(asstId);
+
+      const finalContent = value?.content || lastAccum;
+      const ok = value?.ok ?? false;
+      const tokensIn = value?.tokensIn ?? 0;
+      const tokensOut = value?.tokensOut ?? 0;
+      const elapsedMs = value?.elapsedMs ?? 0;
+
+      const errorHint = !ok && !finalContent
+        ? `(error: model ${model} unavailable or fetch failed)`
+        : null;
+      const renderedContent = finalContent || errorHint || '';
+
+      setChat(c => {
+        const msgs = c.messages.map(m =>
+          m.id === asstId ? {
+            ...m,
+            content: renderedContent,
+            streaming: false,
+            tokens: (tokensIn || tokensOut)
+              ? { in: tokensIn, out: tokensOut, ms: elapsedMs }
+              : undefined,
+            incomplete: errorHint ? true : undefined,
+          } : m,
+        );
+        return { ...c, messages: msgs };
+      });
+
+      persistMessage({
+        id: asstId,
+        chatId: activeTab,
+        role: 'assistant',
+        content: renderedContent,
+        model,
+        time: now(),
+        tokensIn: tokensIn || null,
+        tokensOut: tokensOut || null,
+        tokensMs: elapsedMs || null,
+        promptsJson: null,
+        seq: userSeq + 1,
+        variantGroupId,
+        isPicked: null,
+      }).catch(console.error);
+    };
+
+    // Fan out. Each stream's then() finalizes its own column as soon
+    // as it resolves — no waiting on siblings. allSettled at the
+    // bottom only gates the global streaming=false transition (Send/
+    // Stop-all UI state); per-column readiness happens earlier.
+    const streams = models.map((model, i) => {
+      const asstId = asstIds[i];
+      return streamModelToMessage({
+        asstId,
+        model,
+        messages: convoMessages,
+        onChunk,
+      }).then(
+        (value) => { finalizeColumn(asstId, model, value); return value; },
+        (_err) => { finalizeColumn(asstId, model, null); return null; },
+      );
+    });
+    await Promise.allSettled(streams);
+
+    setStreaming(false);
+  };
+
+  // handleStopMultiModel: cancel in-flight compare-mode streams.
+  //   • asstId given → cancel that one column only (the others keep
+  //     streaming). The aborted column's content stays as whatever
+  //     accumulated so far; handleSendMultiModel's finalize step will
+  //     mark it `incomplete` if no content arrived at all.
+  //   • asstId absent → "Stop all" — cancel every in-flight controller
+  //     and flip streaming=false immediately, since the user has
+  //     explicitly given up on the whole turn.
+  const handleStopMultiModel = (asstId) => {
+    const map = multiStreamControllersRef.current;
+    if (asstId) {
+      const ctrl = map.get(asstId);
+      if (ctrl) {
+        try { ctrl.abort(); } catch (_) {}
+        map.delete(asstId);
+      }
+      return;
+    }
+    for (const [, ctrl] of map) {
+      try { ctrl.abort(); } catch (_) {}
+    }
+    map.clear();
+    setStreaming(false);
+  };
+
+  // keepVariant: the user has clicked "Keep this" on one of the compare-mode
+  // columns. Flip is_picked to 1 on the chosen row and 0 on its siblings,
+  // transition the tab from 'multi-pending' to 'single-from-multi', and
+  // re-route the active model to the kept one so any subsequent turn goes
+  // through the single-model handleSend with the picked model.
+  //
+  // Persistence: every variant row gets re-upserted with its original seq
+  // and content but the new is_picked value. db_load_messages on a later
+  // session returns them all; render-site filtering (isPicked !== 0) hides
+  // the unpicked siblings from ChatPane while leaving them available in
+  // the DB for a future "▸ N alternatives" disclosure (Phase 5).
+  const keepVariant = (asstId) => {
+    const variant = chat.messages?.find(m => m.id === asstId);
+    if (!variant || !variant.variantGroupId) {
+      console.error('keepVariant: target variant not found or missing group', asstId);
+      return;
+    }
+    const groupId = variant.variantGroupId;
+    const pickedModel = variant.model;
+    const nowTs = Math.floor(Date.now() / 1000);
+
+    // Snapshot the sibling rows before any state change so we have a
+    // stable view of what to persist below. After setChat the variants
+    // are mutated (isPicked changes) but we want the original content +
+    // tokens + seq preserved on each row.
+    const siblings = chat.messages.filter(m => m.variantGroupId === groupId);
+
+    // Update chat state: flip isPicked across the group, mark the chat
+    // as single-from-multi so the next render routes to ChatPane.
+    setChat(c => {
+      const msgs = c.messages.map(m =>
+        m.variantGroupId === groupId
+          ? { ...m, isPicked: m.id === asstId ? 1 : 0 }
+          : m,
+      );
+      return { ...c, messages: msgs, tabType: 'single-from-multi' };
+    });
+
+    // Update the tab: tabType transitions and model becomes the picked
+    // one so the ChatPane header + future Composer sends use it.
+    setTabs(ts => ts.map(t =>
+      t.id === activeTab
+        ? { ...t, tabType: 'single-from-multi', model: pickedModel }
+        : t,
+    ));
+    setModelId(pickedModel);
+
+    // Persist the chat row's new tabType. multi_models is preserved so
+    // future "▸ N alternatives" rendering knows which models participated.
+    persistChat({
+      id: activeTab,
+      title: chat.title,
+      model: pickedModel,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+      tabType: 'single-from-multi',
+      multiModels: Array.isArray(chat.models) ? JSON.stringify(chat.models) : null,
+    }).catch(console.error);
+
+    // Persist each variant's new is_picked. We re-send every field
+    // because db_upsert_message's ON CONFLICT DO UPDATE writes the
+    // full row — partial-update would clobber content / tokens with
+    // null. seq is preserved from the in-memory shape (carried over
+    // by handleSendMultiModel + openChatInTab).
+    siblings.forEach((v) => {
+      const isPicked = v.id === asstId ? 1 : 0;
+      // Preserve incomplete/sources blob shape used by the rest of the
+      // codebase. For variants that already had it (errored streams),
+      // re-serialise so the marker survives the upsert.
+      const sourcesBlob = (v.sources?.length || v.imagesSkipped || v.incomplete)
+        ? JSON.stringify({
+            items: v.sources || [],
+            imagesSkipped: !!v.imagesSkipped,
+            incomplete: !!v.incomplete,
+          })
+        : null;
+      persistMessage({
+        id: v.id,
+        chatId: activeTab,
+        role: 'assistant',
+        content: v.content || '',
+        model: v.model,
+        time: v.time,
+        tokensIn: v.tokens?.in ?? null,
+        tokensOut: v.tokens?.out ?? null,
+        tokensMs: v.tokens?.ms ?? null,
+        promptsJson: null,
+        sourcesJson: sourcesBlob,
+        seq: v.seq,
+        variantGroupId: groupId,
+        isPicked,
+      }).catch(console.error);
+    });
+  };
+
   const handleStop = () => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -1771,7 +2301,7 @@ function App() {
     const tab = tabs.find(t => t.id === id);
     const model = tab?.model || chats[id]?.model || modelId || '';
     const nowTs = Math.floor(Date.now() / 1000);
-    persistChat({ id, title, model, createdAt: nowTs, updatedAt: nowTs }).catch(console.error);
+    persistChat({ id, title, model, createdAt: nowTs, updatedAt: nowTs, ...multiFieldsForChat(id) }).catch(console.error);
   };
 
   const deleteChat = (id) => {
@@ -1892,11 +2422,23 @@ function App() {
   };
 
   const openChatInTab = async (c) => {
+    // Multi-model tabs carry their tabType + models list through to the
+    // tab/chat state. groupChatsByDate parses multiModels from JSON into
+    // an array on the sidebar item, so by the time we get here `c.models`
+    // is already a string[] (or null/undefined for single-mode chats).
+    const tabType = c.tabType || null;
+    const models = Array.isArray(c.models) ? c.models : null;
     if (!tabs.find(t => t.id === c.id)) {
-      setTabs(ts => [...ts, { id: c.id, title: c.title, model: c.model || modelId }]);
+      const baseTab = { id: c.id, title: c.title, model: c.model || modelId };
+      if (tabType) baseTab.tabType = tabType;
+      if (models) baseTab.models = models;
+      setTabs(ts => [...ts, baseTab]);
     }
     if (!chats[c.id]?.loaded) {
-      setChats(cs => ({ ...cs, [c.id]: { id: c.id, title: c.title, messages: [], loaded: false } }));
+      const baseChat = { id: c.id, title: c.title, messages: [], loaded: false };
+      if (tabType) baseChat.tabType = tabType;
+      if (models) baseChat.models = models;
+      setChats(cs => ({ ...cs, [c.id]: baseChat }));
       try {
         const rows = await invoke('db_load_messages', { chatId: c.id });
         // role='tool' rows hold raw JSON tool-result payloads — useful for
@@ -1923,6 +2465,12 @@ function App() {
             sources: blob?.items?.length ? blob.items : undefined,
             imagesSkipped: blob?.imagesSkipped || undefined,
             incomplete: blob?.incomplete || undefined,
+            // Multi-model fields carried through from the row so
+            // CompareChatPane can identify variants on reload and
+            // keepVariant can re-persist with the original seq.
+            seq: r.seq,
+            variantGroupId: r.variantGroupId || undefined,
+            isPicked: r.isPicked,
           };
         });
 
@@ -1955,7 +2503,15 @@ function App() {
           }
         } catch (_) { /* chips silently absent on failure */ }
 
-        setChats(cs => ({ ...cs, [c.id]: { id: c.id, title: c.title, messages, loaded: true } }));
+        // Preserve multi-model fields on the chat after messages load.
+        // Without this, the loaded: true entry would wipe tabType/models
+        // that the placeholder set above, breaking compare-mode restore.
+        setChats(cs => {
+          const next = { id: c.id, title: c.title, messages, loaded: true };
+          if (tabType) next.tabType = tabType;
+          if (models) next.models = models;
+          return { ...cs, [c.id]: next };
+        });
         // Hydrate the composer's attached-prompts slot for this chat
         // from the LAST user message's prompts metadata. We don't store
         // the composer's attached set per-chat in the DB — instead we
@@ -1982,7 +2538,12 @@ function App() {
         refreshAttachments(c.id);
       } catch (e) {
         console.error('Failed to load messages:', e);
-        setChats(cs => ({ ...cs, [c.id]: { id: c.id, title: c.title, messages: [], loaded: true } }));
+        setChats(cs => {
+          const next = { id: c.id, title: c.title, messages: [], loaded: true };
+          if (tabType) next.tabType = tabType;
+          if (models) next.models = models;
+          return { ...cs, [c.id]: next };
+        });
       }
     }
     setActiveTab(c.id);
@@ -2038,9 +2599,16 @@ function App() {
 
   const newTab = () => {
     const id = genId();
-    setTabs(ts => [...ts, { id, title: 'New chat', model: model.id }]);
+    // Read the user's STABLE preferred model from localStorage rather
+    // than the current modelId. modelId follows whatever tab is active
+    // (including historical chats whose model isn't the user's
+    // preferred default), so falling back to it here would drift the
+    // default away from the user's actual preference.
+    const preferred = readPersistedComposerModel();
+    setTabs(ts => [...ts, { id, title: 'New chat', model: preferred }]);
     setChats(cs => ({ ...cs, [id]: { id, title: 'New chat', messages: [], loaded: true } }));
     setActiveTab(id);
+    setModelId(preferred);
   };
 
   // Private chat (Phase 4b): same as newTab, but registers the chat id
@@ -2052,12 +2620,70 @@ function App() {
   const newPrivateTab = () => {
     const id = genId();
     ephemeralChatIdsRef.current.add(id);
-    setTabs(ts => [...ts, { id, title: 'Private chat', model: model.id, ephemeral: true }]);
+    const preferred = readPersistedComposerModel();
+    setTabs(ts => [...ts, { id, title: 'Private chat', model: preferred, ephemeral: true }]);
     setChats(cs => ({
       ...cs,
       [id]: { id, title: 'Private chat', messages: [], loaded: true, ephemeral: true },
     }));
     setActiveTab(id);
+    setModelId(preferred);
+  };
+
+  // Compare-mode tab creation (Phase 2). Entry point is the sidebar's
+  // "compare" icon button; that opens the CompareModelPickerModal, which
+  // calls onConfirm with the chosen 2-3 model ids. We then mint a new
+  // tab+chat with tabType='multi-pending' and persist the row so re-
+  // opening from history hydrates back into compare mode.
+  //
+  // The tab's `model` field gets the first selected model as a sensible
+  // fallback for any single-model code path that hasn't been taught
+  // about multi-mode yet (e.g. token-count widgets that read the active
+  // model). Once the user picks a winner in Phase 4, `model` gets
+  // rewritten to the chosen one and `tabType` flips to 'single-from-
+  // multi' — see Phase 4 plan.
+  const newCompareTab = () => setCompareModalOpen(true);
+
+  const confirmCompareModels = (selected) => {
+    setCompareModalOpen(false);
+    if (!Array.isArray(selected) || selected.length < 2) return;
+    const id = genId();
+    const firstModel = selected[0];
+    const nowTs = Math.floor(Date.now() / 1000);
+    setTabs(ts => [
+      ...ts,
+      {
+        id,
+        title: 'New comparison chat',
+        model: firstModel,
+        tabType: 'multi-pending',
+        models: selected,
+      },
+    ]);
+    setChats(cs => ({
+      ...cs,
+      [id]: {
+        id,
+        title: 'New comparison chat',
+        messages: [],
+        loaded: true,
+        tabType: 'multi-pending',
+        models: selected,
+      },
+    }));
+    setActiveTab(id);
+    // Persist immediately so the chat survives an app relaunch even if
+    // the user never sends a first message. multiModels is stored as a
+    // JSON string (matches the Rust Option<String> column).
+    persistChat({
+      id,
+      title: 'New comparison chat',
+      model: firstModel,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+      tabType: 'multi-pending',
+      multiModels: JSON.stringify(selected),
+    }).catch(console.error);
   };
 
   // Screenshot pipeline (Phase 5). Called from the `screenshot:captured`
@@ -2343,6 +2969,11 @@ function App() {
   // null = create mode; watch object = edit mode. Cleared after close so a
   // subsequent "+ Configure" click reliably lands in create mode.
   const [editingWatch, setEditingWatch] = useS(null);
+  // Multi-model "compare" creation modal (Phase 2). When open, user picks
+  // 2 or 3 models; confirmation creates a new tab with tabType='multi-
+  // pending'. Closed state means the modal is not mounted at all (see
+  // CompareModelPickerModal's early-return on !open).
+  const [compareModalOpen, setCompareModalOpen] = useS(false);
   // First-launch onboarding tour (Phase 6). Opens automatically when the
   // app_settings flag is absent; closes on Skip / Get started, both of
   // which write the flag so the tour stays hidden across launches.
@@ -2440,6 +3071,11 @@ function App() {
         notifPermission={notifPermission}
         refreshNotifPermission={refreshNotifPermission}
       />
+      <CompareModelPickerModal
+        open={compareModalOpen}
+        onClose={() => setCompareModalOpen(false)}
+        onConfirm={confirmCompareModels}
+      />
 
       <div style={{
         width: '100vw', height: '100vh',
@@ -2496,6 +3132,7 @@ function App() {
                 onQuery={setQuery}
                 onNew={newTab}
                 onNewPrivate={newPrivateTab}
+                onNewCompare={newCompareTab}
                 width={sidebarWidth}
                 // Full-text hits + click handler. The hit carries chatModel
                 // so we don't have to look it up from history (which is
@@ -2536,49 +3173,110 @@ function App() {
                 busy={reindexingStale}
               />
             )}
-            <ChatPane
-              chat={chat} model={tabModel}
-              isStreaming={streaming}
-              onRename={renameChat}
-              // Propagate the sidebar search query so messages can highlight
-              // matches in-place. Empty/whitespace queries are handled inside
-              // ChatPane (regex becomes null, render is unchanged).
-              searchQuery={query}
-              // Edit + retry (Phase 3). Both go through truncateAndResend,
-              // gated by streaming inside the handlers themselves so the UI
-              // doesn't need to know.
-              onEditMessage={handleEditAndResubmit}
-              onRetryMessage={handleRetryAssistant}
-            />
-            <Composer
-              model={tabModel}
-              onModelChange={(id) => {
-                setModelId(id);
-                setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, model: id } : t));
-              }}
-              onSend={handleSend}
-              isStreaming={streaming}
-              onStop={handleStop}
-              attachedPrompts={attachedPrompts}
-              onDetachPrompt={detachPrompt}
-              // Full library for the in-composer slash-command picker.
-              // Filter out _virtual prompts (watch-notes carriers) per
-              // the rule in CLAUDE.md — they're context blobs that
-              // shouldn't appear as user-selectable presets.
-              prompts={prompts.filter(p => !p._virtual)}
-              onPickPrompt={togglePromptAttach}
-              attachments={attachments}
-              onAttachFile={onAttachFile}
-              onAttachFolder={onAttachFolder}
-              onDetachAttachment={onDetachAttachment}
-              onReindexAttachment={onReindexAttachment}
-              modelHasVision={activeModelHasVision}
-              modelHasTools={activeModelHasTools}
-              seedText={composerSeedText}
-              seedKey={composerSeedKey}
-              // Hide attach buttons in private mode — see Composer notes.
-              ephemeral={!!chat.ephemeral}
-            />
+            {chat.tabType === 'multi-pending' ? (
+              // Compare-mode chats route to the panel UI. handleSendMultiModel
+              // fans out the first message to every model in chat.models;
+              // keepVariant transitions the tab to 'single-from-multi' and
+              // re-routes future renders through the branch below.
+              <CompareChatPane
+                chat={chat}
+                isStreaming={streaming}
+                onSend={handleSendMultiModel}
+                onStopAll={() => handleStopMultiModel()}
+                onStopColumn={(asstId) => handleStopMultiModel(asstId)}
+                onKeep={keepVariant}
+                onCancel={() => closeTab(activeTab)}
+                attachedPrompts={attachedPrompts}
+                onDetachPrompt={detachPrompt}
+              />
+            ) : (
+              <>
+                <ChatPane
+                  // Pre-process so picked variants carry their unpicked
+                  // siblings as m.alternatives, then drop the unpicked
+                  // rows from the rendered list. Single-mode chats have
+                  // isPicked=null/undefined everywhere, so the pipeline
+                  // is a no-op for them (no group → no alternatives).
+                  //
+                  // The unpicked rows stay in the DB and in chat.messages
+                  // (we only filter at the render-site copy here), so a
+                  // future feature that wants them — re-comparing, picking
+                  // again, exporting variant history — can read from
+                  // chat.messages directly.
+                  chat={(() => {
+                    const raw = chat.messages || [];
+                    // Group unpicked siblings by variantGroupId. Keys
+                    // are stable opaque ids generated at send time;
+                    // O(N) build is fine since N is small.
+                    const unpickedByGroup = new Map();
+                    for (const m of raw) {
+                      if (m.isPicked === 0 && m.variantGroupId) {
+                        const list = unpickedByGroup.get(m.variantGroupId) || [];
+                        list.push(m);
+                        unpickedByGroup.set(m.variantGroupId, list);
+                      }
+                    }
+                    const messages = raw
+                      .filter(m => m.isPicked !== 0)
+                      .map(m => {
+                        if (m.isPicked === 1 && m.variantGroupId) {
+                          const alts = unpickedByGroup.get(m.variantGroupId);
+                          if (alts?.length) return { ...m, alternatives: alts };
+                        }
+                        return m;
+                      });
+                    return { ...chat, messages };
+                  })()}
+                  model={tabModel}
+                  isStreaming={streaming}
+                  onRename={renameChat}
+                  // Propagate the sidebar search query so messages can highlight
+                  // matches in-place. Empty/whitespace queries are handled inside
+                  // ChatPane (regex becomes null, render is unchanged).
+                  searchQuery={query}
+                  // Edit + retry (Phase 3). Both go through truncateAndResend,
+                  // gated by streaming inside the handlers themselves so the UI
+                  // doesn't need to know.
+                  onEditMessage={handleEditAndResubmit}
+                  onRetryMessage={handleRetryAssistant}
+                />
+                <Composer
+                  model={tabModel}
+                  onModelChange={(id) => {
+                    setModelId(id);
+                    setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, model: id } : t));
+                    // User explicitly picked a model — persist as the
+                    // stable default for future new chats. This is the
+                    // ONLY place we write to COMPOSER_MODEL_LS_KEY (no
+                    // auto-persist on modelId change), so opening an
+                    // old chat doesn't drift the default.
+                    persistComposerModel(id);
+                  }}
+                  onSend={handleSend}
+                  isStreaming={streaming}
+                  onStop={handleStop}
+                  attachedPrompts={attachedPrompts}
+                  onDetachPrompt={detachPrompt}
+                  // Full library for the in-composer slash-command picker.
+                  // Filter out _virtual prompts (watch-notes carriers) per
+                  // the rule in CLAUDE.md — they're context blobs that
+                  // shouldn't appear as user-selectable presets.
+                  prompts={prompts.filter(p => !p._virtual)}
+                  onPickPrompt={togglePromptAttach}
+                  attachments={attachments}
+                  onAttachFile={onAttachFile}
+                  onAttachFolder={onAttachFolder}
+                  onDetachAttachment={onDetachAttachment}
+                  onReindexAttachment={onReindexAttachment}
+                  modelHasVision={activeModelHasVision}
+                  modelHasTools={activeModelHasTools}
+                  seedText={composerSeedText}
+                  seedKey={composerSeedKey}
+                  // Hide attach buttons in private mode — see Composer notes.
+                  ephemeral={!!chat.ephemeral}
+                />
+              </>
+            )}
           </div>
 
           {rightPanelOpen && (

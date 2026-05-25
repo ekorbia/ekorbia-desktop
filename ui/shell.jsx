@@ -124,6 +124,7 @@ function Sidebar({
   onQuery,
   onNew,
   onNewPrivate,
+  onNewCompare,
   width,
   // Full-text-search hits (from messages_fts MATCH bm25). Empty when no
   // query is active. Owner: App in main.jsx, populated by a debounced
@@ -247,6 +248,31 @@ function Sidebar({
             aria-label="New private chat"
           >
             <I.Lock size={11} />
+          </button>
+        )}
+        {onNewCompare && (
+          <button
+            onClick={onNewCompare}
+            title="Compare 2–3 models on the same prompt"
+            style={{
+              padding: "6px 8px",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              background: T.bg2,
+              border: `1px solid ${T.border}`,
+              borderRadius: 5,
+              color: T.fg2,
+              fontFamily: T.mono,
+              fontSize: 11.5,
+              cursor: "pointer",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = T.fg; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = T.fg2; }}
+            aria-label="New comparison chat"
+            data-new-compare
+          >
+            <I.Columns size={11} />
           </button>
         )}
       </div>
@@ -513,9 +539,30 @@ function ChatRow({ chat, model, active, onClick, onDelete, query }) {
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
           }}
         >
-          {highlight(chat.title)}
+          {(chat.tabType === "multi-pending" ||
+            chat.tabType === "single-from-multi") && (
+            <I.Columns
+              size={10}
+              style={{ color: T.amber, flexShrink: 0 }}
+              title={`Comparison chat (${chat.models?.length || 0} models)`}
+              data-compare-badge
+            />
+          )}
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {highlight(chat.title)}
+          </span>
         </div>
       </div>
       {hover || active ? (

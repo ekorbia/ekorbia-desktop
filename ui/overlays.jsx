@@ -35,7 +35,19 @@ function ModelPicker({ active, onPick, onClose }) {
       signal: AbortSignal.timeout(3000),
     })
       .then((r) => r.json())
-      .then((data) => setModels(data.models || []))
+      .then((data) => {
+        // Sort alphabetically by name. /api/tags returns modified_at DESC
+        // which is unstable across launches and surprising in a picker
+        // (the active model's relative position would shift just from
+        // re-pulling it). localeCompare gives a deterministic, case-
+        // insensitive order.
+        const sorted = (data.models || []).slice().sort((a, b) =>
+          (a.name || "").localeCompare(b.name || "", undefined, {
+            sensitivity: "base",
+          }),
+        );
+        setModels(sorted);
+      })
       .catch(() => {
         setModels([]);
         setError("Ollama not running");
@@ -224,6 +236,297 @@ function ModelPicker({ active, onPick, onClose }) {
     </div>
   );
 }
+// Centered modal for picking the 2 or 3 models that will populate a
+// compare-mode tab's columns. Distinct from ModelPicker (popover, single-
+// select). Lifecycle: parent passes `open` to mount it; on `Done` the modal
+// calls `onConfirm(selected)` with a 2- or 3-entry string array of model
+// ids; on Cancel/backdrop click it calls `onClose()`. The compose-mode
+// column-count cap (2 or 3) is enforced inside this component: a Done
+// click outside that range is disabled.
+function CompareModelPickerModal({ open, onClose, onConfirm }) {
+  const [models, setModels] = useState(null);
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState(() => new Set());
+
+  useEffect(() => {
+    if (!open) return;
+    // Reset on each open so a previous session's selection doesn't leak.
+    setSelected(new Set());
+    setError("");
+    setModels(null);
+    fetch("http://localhost:11434/api/tags", {
+      signal: AbortSignal.timeout(3000),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        // Same alphabetical sort as the single-model ModelPicker so
+        // both pickers feel consistent. Embed models (nomic-embed-text
+        // etc.) stay in the list — caller may want to compare them too.
+        const sorted = (data.models || []).slice().sort((a, b) =>
+          (a.name || "").localeCompare(b.name || "", undefined, {
+            sensitivity: "base",
+          }),
+        );
+        setModels(sorted);
+      })
+      .catch(() => {
+        setModels([]);
+        setError("Ollama not running");
+      });
+  }, [open]);
+
+  if (!open) return null;
+
+  const toggle = (name) => {
+    setSelected((curr) => {
+      const next = new Set(curr);
+      if (next.has(name)) {
+        next.delete(name);
+      } else if (next.size < 3) {
+        // Hard cap at 3 (per v1 column-count decision). Clicking a 4th
+        // checkbox silently no-ops — the help text below shows "2 or 3".
+        next.add(name);
+      }
+      return next;
+    });
+  };
+
+  const canConfirm = selected.size === 2 || selected.size === 3;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        paddingTop: 100,
+        zIndex: 1000,
+      }}
+    >
+      <div
+        data-compare-picker
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 480,
+          maxHeight: "70vh",
+          background: T.bg1,
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 8,
+          boxShadow: "0 30px 80px rgba(0,0,0,0.6)",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            padding: "12px 16px",
+            borderBottom: `1px solid ${T.border}`,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: T.sans,
+              fontSize: 13,
+              color: T.fg,
+              fontWeight: 500,
+            }}
+          >
+            New comparison chat
+          </div>
+          <div
+            style={{
+              fontFamily: T.mono,
+              fontSize: 11,
+              color: T.fg3,
+              marginTop: 4,
+            }}
+          >
+            Pick 2 or 3 models. Your first message goes to all of them in
+            parallel; you pick a winner and the chat continues with that one.
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: 4 }}>
+          {models === null && (
+            <div
+              style={{
+                padding: "12px 14px",
+                fontFamily: T.mono,
+                fontSize: 11,
+                color: T.fg3,
+              }}
+            >
+              <span className="typing-dot">●</span>{" "}
+              <span className="typing-dot">●</span>{" "}
+              <span className="typing-dot">●</span>
+            </div>
+          )}
+          {error && (
+            <div
+              style={{
+                padding: "12px 14px",
+                fontFamily: T.mono,
+                fontSize: 11,
+                color: T.fg3,
+              }}
+            >
+              {error}
+            </div>
+          )}
+          {models &&
+            models.length === 0 &&
+            !error && (
+              <div
+                style={{
+                  padding: "12px 14px",
+                  fontFamily: T.mono,
+                  fontSize: 11,
+                  color: T.fg3,
+                }}
+              >
+                No models pulled yet.
+              </div>
+            )}
+          {(models || []).map((m) => {
+            const isChecked = selected.has(m.name);
+            const color = modelColor(m.name);
+            const size = m.details?.parameter_size || "";
+            const sizeOnDisk = fmt_size(m.size);
+            return (
+              <label
+                key={m.name}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "auto auto 1fr auto",
+                  gap: 10,
+                  alignItems: "center",
+                  padding: "7px 12px",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  background: isChecked ? T.bg4 : "transparent",
+                }}
+                onMouseEnter={(e) =>
+                  !isChecked && (e.currentTarget.style.background = T.bg3)
+                }
+                onMouseLeave={(e) =>
+                  !isChecked &&
+                  (e.currentTarget.style.background = "transparent")
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => toggle(m.name)}
+                  aria-label={`Compare with ${m.name}`}
+                />
+                <ModelDot color={color} size={7} />
+                <div style={{ minWidth: 0 }}>
+                  <span
+                    style={{
+                      fontFamily: T.sans,
+                      fontSize: 12.5,
+                      color: T.fg,
+                      fontWeight: 500,
+                    }}
+                  >
+                    {m.name}
+                  </span>
+                  {size && (
+                    <span
+                      style={{
+                        fontFamily: T.mono,
+                        fontSize: 10,
+                        color: T.fg2,
+                        marginLeft: 6,
+                      }}
+                    >
+                      {size}
+                    </span>
+                  )}
+                </div>
+                {sizeOnDisk && (
+                  <span
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 10,
+                      color: T.fg3,
+                    }}
+                  >
+                    {sizeOnDisk}
+                  </span>
+                )}
+              </label>
+            );
+          })}
+        </div>
+
+        <div
+          style={{
+            padding: "10px 16px",
+            borderTop: `1px solid ${T.border}`,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <span
+            style={{
+              flex: 1,
+              fontFamily: T.mono,
+              fontSize: 11,
+              color: canConfirm ? T.fg2 : T.fg3,
+            }}
+          >
+            {selected.size === 0 && "Select 2 or 3 models"}
+            {selected.size === 1 && "Pick 1 more"}
+            {selected.size === 2 && "2 selected — Done, or add 1 more"}
+            {selected.size === 3 && "3 selected"}
+          </span>
+          <button
+            onClick={onClose}
+            style={{
+              padding: "5px 12px",
+              background: "transparent",
+              border: `1px solid ${T.border}`,
+              borderRadius: 4,
+              color: T.fg2,
+              fontFamily: T.mono,
+              fontSize: 11.5,
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            disabled={!canConfirm}
+            onClick={() => {
+              if (!canConfirm) return;
+              onConfirm(Array.from(selected));
+            }}
+            style={{
+              padding: "5px 14px",
+              background: canConfirm ? T.bg4 : T.bg2,
+              border: `1px solid ${canConfirm ? T.borderStrong : T.border}`,
+              borderRadius: 4,
+              color: canConfirm ? T.fg : T.fg3,
+              fontFamily: T.mono,
+              fontSize: 11.5,
+              cursor: canConfirm ? "pointer" : "not-allowed",
+            }}
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CommandPalette({ open, onClose, chats, onPick }) {
   const [q, setQ] = useState("");
   const inputRef = useRef(null);
