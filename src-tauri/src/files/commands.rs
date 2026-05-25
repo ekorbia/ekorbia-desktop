@@ -192,10 +192,7 @@ pub(crate) fn chat_file_reveal(app: tauri::AppHandle, file_id: String) -> Result
 /// we go straight to the chat row. Sandboxed to chats that actually have
 /// an output_dir set (NULL / empty rejected).
 #[tauri::command]
-pub(crate) fn chat_output_dir_reveal(
-    app: tauri::AppHandle,
-    chat_id: String,
-) -> Result<(), String> {
+pub(crate) fn chat_output_dir_reveal(app: tauri::AppHandle, chat_id: String) -> Result<(), String> {
     let state = app.state::<DbState>();
     let db = state.0.lock().map_err(|e| e.to_string())?;
     let dir = get_chat_output_dir(&db, &chat_id)?;

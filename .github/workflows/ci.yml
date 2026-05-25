@@ -1,18 +1,14 @@
 # Continuous Integration for Ekorbia.
 #
-# Runs the three test gates on every push to main and every pull request:
-#   1. clippy with warnings as errors (Rust lint)
-#   2. cargo test --lib (86 Rust unit tests)
-#   3. ./scripts/run-ui-tests.sh (Node helpers + Playwright WebKit smokes)
+# Runs the test gates on every push to main and every pull request:
+#   1. cargo fmt --check (Rust style)
+#   2. clippy with warnings as errors (Rust lint)
+#   3. cargo test --lib (86 Rust unit tests)
+#   4. ./scripts/run-ui-tests.sh (Node helpers + Playwright WebKit smokes)
 #
 # Plus a license-attribution drift check via cargo-about, so a new
 # dependency landing with an unaccepted license fails CI immediately
 # rather than silently slipping into THIRD_PARTY_LICENSES.md.
-#
-# We intentionally do NOT enforce `cargo fmt --check` yet — the existing
-# codebase has fmt deviations that would block every PR until cleaned up.
-# Once the user runs `cargo fmt` across the tree and commits the result,
-# add a `cargo fmt --check` step here.
 
 name: CI
 
@@ -43,7 +39,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - name: Install Node 20
         uses: actions/setup-node@v5
@@ -59,6 +55,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      # Fast style gate — fails in seconds without compiling, so a fmt
+      # regression surfaces before the multi-minute clippy build.
+      - name: Cargo fmt (style gate)
+        working-directory: src-tauri
+        run: cargo fmt --check
 
       - name: Clippy (lint gate)
         working-directory: src-tauri

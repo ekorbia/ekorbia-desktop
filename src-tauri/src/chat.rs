@@ -57,51 +57,65 @@ pub(crate) struct MessageRow {
 #[tauri::command]
 pub(crate) fn db_load_chats(state: tauri::State<'_, DbState>) -> Result<Vec<ChatRow>, String> {
     let db = state.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = db.prepare(
-        "SELECT id, title, model, created_at, updated_at FROM chats ORDER BY updated_at DESC"
-    ).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| {
-        Ok(ChatRow {
-            id: row.get(0)?,
-            title: row.get(1)?,
-            model: row.get(2)?,
-            created_at: row.get(3)?,
-            updated_at: row.get(4)?,
+    let mut stmt = db
+        .prepare(
+            "SELECT id, title, model, created_at, updated_at FROM chats ORDER BY updated_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ChatRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                model: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
         })
-    }).map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub(crate) fn db_load_messages(state: tauri::State<'_, DbState>, chat_id: String) -> Result<Vec<MessageRow>, String> {
+pub(crate) fn db_load_messages(
+    state: tauri::State<'_, DbState>,
+    chat_id: String,
+) -> Result<Vec<MessageRow>, String> {
     let db = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = db.prepare(
         "SELECT id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, prompts_json, sources_json, tool_calls_json, tool_call_id, seq \
          FROM messages WHERE chat_id = ?1 ORDER BY seq ASC"
     ).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([&chat_id], |row| {
-        Ok(MessageRow {
-            id: row.get(0)?,
-            chat_id: row.get(1)?,
-            role: row.get(2)?,
-            content: row.get(3)?,
-            model: row.get(4)?,
-            time: row.get(5)?,
-            tokens_in: row.get(6)?,
-            tokens_out: row.get(7)?,
-            tokens_ms: row.get(8)?,
-            prompts_json: row.get(9)?,
-            sources_json: row.get(10)?,
-            tool_calls_json: row.get(11)?,
-            tool_call_id: row.get(12)?,
-            seq: row.get(13)?,
+    let rows = stmt
+        .query_map([&chat_id], |row| {
+            Ok(MessageRow {
+                id: row.get(0)?,
+                chat_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                model: row.get(4)?,
+                time: row.get(5)?,
+                tokens_in: row.get(6)?,
+                tokens_out: row.get(7)?,
+                tokens_ms: row.get(8)?,
+                prompts_json: row.get(9)?,
+                sources_json: row.get(10)?,
+                tool_calls_json: row.get(11)?,
+                tool_call_id: row.get(12)?,
+                seq: row.get(13)?,
+            })
         })
-    }).map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub(crate) fn db_upsert_chat(state: tauri::State<'_, DbState>, chat: ChatRow) -> Result<(), String> {
+pub(crate) fn db_upsert_chat(
+    state: tauri::State<'_, DbState>,
+    chat: ChatRow,
+) -> Result<(), String> {
     let db = state.0.lock().map_err(|e| e.to_string())?;
     // CRITICAL: must NOT use INSERT OR REPLACE here. The messages table
     // foreign-keys to chats(id) with ON DELETE CASCADE and `PRAGMA
@@ -122,13 +136,23 @@ pub(crate) fn db_upsert_chat(state: tauri::State<'_, DbState>, chat: ChatRow) ->
             title = excluded.title, \
             model = excluded.model, \
             updated_at = excluded.updated_at",
-        (&chat.id, &chat.title, &chat.model, chat.created_at, chat.updated_at),
-    ).map_err(|e| e.to_string())?;
+        (
+            &chat.id,
+            &chat.title,
+            &chat.model,
+            chat.created_at,
+            chat.updated_at,
+        ),
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn db_upsert_message(state: tauri::State<'_, DbState>, msg: MessageRow) -> Result<(), String> {
+pub(crate) fn db_upsert_message(
+    state: tauri::State<'_, DbState>,
+    msg: MessageRow,
+) -> Result<(), String> {
     let db = state.0.lock().map_err(|e| e.to_string())?;
     // Use ON CONFLICT DO UPDATE to keep the row's identity stable. Messages
     // are themselves the parent of the FTS triggers (AFTER UPDATE OF content
@@ -168,7 +192,8 @@ pub(crate) fn db_upsert_message(state: tauri::State<'_, DbState>, msg: MessageRo
 #[tauri::command]
 pub(crate) fn db_delete_chat(state: tauri::State<'_, DbState>, id: String) -> Result<(), String> {
     let db = state.0.lock().map_err(|e| e.to_string())?;
-    db.execute("DELETE FROM chats WHERE id = ?1", [&id]).map_err(|e| e.to_string())?;
+    db.execute("DELETE FROM chats WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

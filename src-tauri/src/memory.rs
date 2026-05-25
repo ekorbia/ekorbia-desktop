@@ -152,15 +152,12 @@ pub(crate) fn memory_set_path(app: tauri::AppHandle, path: String) -> Result<(),
 pub(crate) fn memory_open(app: tauri::AppHandle) -> Result<(), String> {
     let path = current_memory_path(&app);
     if path.is_empty() {
-        return Err(
-            "could not resolve a default memory path — pick one in Settings".to_string(),
-        );
+        return Err("could not resolve a default memory path — pick one in Settings".to_string());
     }
     let p = std::path::Path::new(&path);
     if !p.exists() {
         if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create memory dir: {e}"))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("create memory dir: {e}"))?;
         }
         // Seed with a small template so the user has somewhere to start.
         // Markdown headers + a one-line example help the model recognise

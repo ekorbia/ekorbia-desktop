@@ -64,7 +64,10 @@ pub(crate) fn chunk_text(text: &str) -> Vec<(usize, usize, String)> {
             if best.is_none() {
                 for i in (0..slice.len()).rev() {
                     let c = slice[i].1;
-                    let next_ws = slice.get(i + 1).map(|(_, c)| c.is_whitespace()).unwrap_or(true);
+                    let next_ws = slice
+                        .get(i + 1)
+                        .map(|(_, c)| c.is_whitespace())
+                        .unwrap_or(true);
                     if matches!(c, '.' | '!' | '?') && next_ws {
                         best = Some(lookback_floor + i + 1);
                         break;
@@ -97,7 +100,9 @@ pub(crate) fn chunk_text(text: &str) -> Vec<(usize, usize, String)> {
         }
         // Advance with overlap. Subtract overlap from end_idx; clamp so we
         // always make forward progress (defensive against tiny chunks).
-        let next = end_idx.saturating_sub(CHUNK_OVERLAP_CHARS).max(start_idx + 1);
+        let next = end_idx
+            .saturating_sub(CHUNK_OVERLAP_CHARS)
+            .max(start_idx + 1);
         start_idx = next;
     }
     out
@@ -186,11 +191,7 @@ pub(crate) fn norm_squared(v: &[f32]) -> f32 {
 /// stray row with the wrong dimensionality doesn't poison rankings. The
 /// retrieval query already filters by `embed_model`, so a mismatch here
 /// implies corrupt data, but defensive is cheap.
-pub(crate) fn cosine_blob_with_query(
-    q: &[f32],
-    q_norm_sq: f32,
-    blob: &[u8],
-) -> Option<f32> {
+pub(crate) fn cosine_blob_with_query(q: &[f32], q_norm_sq: f32, blob: &[u8]) -> Option<f32> {
     if q.is_empty() {
         return None;
     }
@@ -339,7 +340,9 @@ pub(crate) async fn index_attachment(
     // `cancel_index`'s comment.
     macro_rules! check_cancelled {
         () => {
-            if cancel.load(Ordering::Relaxed) { return Ok(()); }
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(());
+            }
         };
     }
 
@@ -365,7 +368,8 @@ pub(crate) async fn index_attachment(
         Ok(s) => s,
         Err(e) => {
             check_cancelled!();
-            let _ = set_attachment_status(&app, &id, "error", Some(&format!("Extract failed: {e}")));
+            let _ =
+                set_attachment_status(&app, &id, "error", Some(&format!("Extract failed: {e}")));
             return Err(e);
         }
     };
@@ -381,9 +385,10 @@ pub(crate) async fn index_attachment(
         {
             let state = app.state::<DbState>();
             let db = state.0.lock().map_err(|e| e.to_string())?;
-            if let Err(e) =
-                db.execute("DELETE FROM attachment_chunks WHERE attachment_id = ?1", [&id])
-            {
+            if let Err(e) = db.execute(
+                "DELETE FROM attachment_chunks WHERE attachment_id = ?1",
+                [&id],
+            ) {
                 log_warn!("clear-chunks for {id} failed: {e}");
             }
         }
@@ -424,9 +429,13 @@ pub(crate) async fn index_attachment(
         let state = app.state::<DbState>();
         let mut db = state.0.lock().map_err(|e| e.to_string())?;
         let tx = db.transaction().map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM attachment_chunks WHERE attachment_id = ?1", [&id])
-            .map_err(|e| e.to_string())?;
-        for (i, ((start, end, chunk_text), emb)) in chunks.iter().zip(embeddings.iter()).enumerate() {
+        tx.execute(
+            "DELETE FROM attachment_chunks WHERE attachment_id = ?1",
+            [&id],
+        )
+        .map_err(|e| e.to_string())?;
+        for (i, ((start, end, chunk_text), emb)) in chunks.iter().zip(embeddings.iter()).enumerate()
+        {
             let blob = pack_embedding(emb);
             tx.execute(
                 "INSERT INTO attachment_chunks \
@@ -507,7 +516,8 @@ pub(crate) async fn retrieve_chunks(
                 ))
             })
             .map_err(|e| e.to_string())?;
-        it.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        it.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
     };
     if candidates.is_empty() {
         return Ok(Vec::new());
@@ -526,18 +536,24 @@ pub(crate) async fn retrieve_chunks(
     // or an old row written before the dimensionality was locked to model).
     let mut scored: Vec<RetrievedChunk> = candidates
         .into_iter()
-        .filter_map(|(attachment_id, source_path, text, blob, char_start, char_end)| {
-            cosine_blob_with_query(&q_embed, q_norm_sq, &blob).map(|score| RetrievedChunk {
-                attachment_id,
-                source_path,
-                text,
-                score,
-                char_start,
-                char_end,
-            })
-        })
+        .filter_map(
+            |(attachment_id, source_path, text, blob, char_start, char_end)| {
+                cosine_blob_with_query(&q_embed, q_norm_sq, &blob).map(|score| RetrievedChunk {
+                    attachment_id,
+                    source_path,
+                    text,
+                    score,
+                    char_start,
+                    char_end,
+                })
+            },
+        )
         .collect();
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored.truncate(top_k);
     Ok(scored)
 }
@@ -553,11 +569,9 @@ pub(crate) async fn attachment_reindex(app: tauri::AppHandle, id: String) -> Res
     let kind = {
         let state = app.state::<DbState>();
         let db = state.0.lock().map_err(|e| e.to_string())?;
-        db.query_row(
-            "SELECT kind FROM attachments WHERE id = ?1",
-            [&id],
-            |row| row.get::<_, String>(0),
-        )
+        db.query_row("SELECT kind FROM attachments WHERE id = ?1", [&id], |row| {
+            row.get::<_, String>(0)
+        })
         .unwrap_or_else(|_| "text".to_string())
     };
     set_attachment_status(&app, &id, "indexing", None)?;
@@ -607,7 +621,11 @@ mod tests {
         let para_b = "b".repeat(200);
         let text = format!("{para_a}\n\n{para_b}");
         let chunks = chunk_text(&text);
-        assert!(chunks.len() >= 2, "expected ≥2 chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "expected ≥2 chunks, got {}",
+            chunks.len()
+        );
         // First chunk should be just `aaaa…` — the paragraph break is the
         // boundary, so no `b` characters leak in.
         assert!(
@@ -789,8 +807,7 @@ mod tests {
         let v = vec![2.0_f32, -3.0, 5.0, 1.0];
         let packed = pack_embedding(&v);
         let n = norm_squared(&v);
-        let score = cosine_blob_with_query(&v, n, &packed)
-            .expect("identical dims should score");
+        let score = cosine_blob_with_query(&v, n, &packed).expect("identical dims should score");
         assert!(
             (score - 1.0).abs() < 1e-5,
             "expected ~1.0 for identical vectors, got {score}"

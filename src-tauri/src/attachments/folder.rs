@@ -9,14 +9,14 @@
 //! "(N/M indexed)" live.
 
 use crate::attachments::cancel::register_cancel;
-use crate::attachments::config::{current_embedding_model, current_folder_exts, current_folder_ignore};
+use crate::attachments::config::{
+    current_embedding_model, current_folder_exts, current_folder_ignore,
+};
 use crate::attachments::pipeline::{
     chunk_text, emit_attachment_phase, emit_folder_progress, pack_embedding,
     set_attachment_file_count, set_attachment_status,
 };
-use crate::attachments::types::{
-    AttachmentRow, ATTACHMENT_MAX_BYTES, FOLDER_MAX_FILES,
-};
+use crate::attachments::types::{AttachmentRow, ATTACHMENT_MAX_BYTES, FOLDER_MAX_FILES};
 use crate::db::{ensure_chat_row, gen_id, mtime_unix_from_meta, now_unix, DbState};
 use crate::log::log_warn;
 use crate::ollama::ollama_embed;
@@ -78,11 +78,7 @@ fn should_index_file(name: &str, ext: &str, bytes: u64, exts: &[String]) -> bool
 /// `(absolute path, byte size, mtime-as-unix-seconds)`.
 type WalkEntry = (String, u64, i64);
 
-fn walk_folder(
-    root: &Path,
-    exts: &[String],
-    ignore: &[String],
-) -> (Vec<WalkEntry>, bool) {
+fn walk_folder(root: &Path, exts: &[String], ignore: &[String]) -> (Vec<WalkEntry>, bool) {
     let mut out: Vec<WalkEntry> = Vec::new();
     let mut hit_cap = false;
     // Iterative stack-based DFS to avoid recursion blowing the stack on
@@ -207,15 +203,15 @@ pub(crate) async fn index_folder(
     id: String,
     cancel: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    if cancel.load(Ordering::Relaxed) { return Ok(()); }
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(());
+    }
     let folder_path = {
         let state = app.state::<DbState>();
         let db = state.0.lock().map_err(|e| e.to_string())?;
-        db.query_row(
-            "SELECT path FROM attachments WHERE id = ?1",
-            [&id],
-            |row| row.get::<_, String>(0),
-        )
+        db.query_row("SELECT path FROM attachments WHERE id = ?1", [&id], |row| {
+            row.get::<_, String>(0)
+        })
         .map_err(|e| e.to_string())?
     };
     let root = Path::new(&folder_path).to_path_buf();
@@ -227,12 +223,13 @@ pub(crate) async fn index_folder(
     // the walk itself, which can take several seconds on a deep tree.
     emit_attachment_phase(&app, &id, "walking");
     // 1. Walk. Off-thread so a huge tree doesn't stall the async runtime.
-    let (entries, hit_cap) = tauri::async_runtime::spawn_blocking(move || {
-        walk_folder(&root, &exts, &ignore)
-    })
-        .await
-        .map_err(|e| e.to_string())?;
-    if cancel.load(Ordering::Relaxed) { return Ok(()); }
+    let (entries, hit_cap) =
+        tauri::async_runtime::spawn_blocking(move || walk_folder(&root, &exts, &ignore))
+            .await
+            .map_err(|e| e.to_string())?;
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(());
+    }
     if entries.is_empty() {
         let _ = set_attachment_status(&app, &id, "error", Some("No matching files in folder"));
         return Err("No matching files in folder".to_string());
@@ -365,9 +362,7 @@ pub(crate) async fn index_folder(
         let db = state.0.lock().map_err(|e| e.to_string())?;
         for (path, (sid, _, _)) in existing.iter() {
             if !visited_paths.contains(path) {
-                if let Err(e) =
-                    db.execute("DELETE FROM attachment_sources WHERE id = ?1", [sid])
-                {
+                if let Err(e) = db.execute("DELETE FROM attachment_sources WHERE id = ?1", [sid]) {
                     // Non-fatal: orphan source row + its cascaded chunks.
                     // Stale chunks still ship to retrieval (they reference a
                     // file that's no longer in the walk). Logged so a pattern
@@ -378,7 +373,10 @@ pub(crate) async fn index_folder(
         }
     }
     if reused_count > 0 {
-        log_warn!("Folder {id}: reused {reused_count} unchanged file(s), reindexed {}", done - reused_count);
+        log_warn!(
+            "Folder {id}: reused {reused_count} unchanged file(s), reindexed {}",
+            done - reused_count
+        );
     }
     emit_folder_progress(&app, &id, done, total);
     let final_status = if indexed_count == 0 { "error" } else { "ready" };
@@ -455,8 +453,8 @@ fn classify_walk_entries(
     for (file_path, bytes, mtime) in entries {
         visited_paths.insert(file_path.clone());
         let existing_for_path = existing.get(file_path);
-        let reuse = existing_for_path
-            .is_some_and(|(_, e_mtime, fresh)| *e_mtime == *mtime && *fresh);
+        let reuse =
+            existing_for_path.is_some_and(|(_, e_mtime, fresh)| *e_mtime == *mtime && *fresh);
         if reuse {
             if let Some((sid, _, _)) = existing_for_path {
                 reuse_updates.push((sid.clone(), *bytes));
@@ -642,7 +640,13 @@ async fn process_file_batch(
             tx.execute(
                 "INSERT INTO attachment_sources (id, attachment_id, path, mtime, bytes) \
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                (&cf.source_id, attachment_id, &cf.file_path, cf.mtime, bytes_i64),
+                (
+                    &cf.source_id,
+                    attachment_id,
+                    &cf.file_path,
+                    cf.mtime,
+                    bytes_i64,
+                ),
             )
         } else {
             // Update first, then nuke old chunks. Both must land or this
@@ -708,9 +712,7 @@ mod tests {
 
     /// Helper: build an `existing` map entry. Mirrors what the DB query in
     /// `index_folder` produces — `(source_id, mtime, has_fresh_chunks)`.
-    fn make_existing(
-        pairs: &[(&str, &str, i64, bool)],
-    ) -> HashMap<String, (String, i64, bool)> {
+    fn make_existing(pairs: &[(&str, &str, i64, bool)]) -> HashMap<String, (String, i64, bool)> {
         pairs
             .iter()
             .map(|(path, sid, mtime, fresh)| {
@@ -853,11 +855,7 @@ mod tests {
         // (entries in `existing` not in `visited_paths`). Every walked
         // entry — regardless of reuse/reindex/new disposition — must end
         // up in the set.
-        let entries = vec![
-            entry("/a", 1, 1),
-            entry("/b", 1, 1),
-            entry("/c", 1, 1),
-        ];
+        let entries = vec![entry("/a", 1, 1), entry("/b", 1, 1), entry("/c", 1, 1)];
         let existing = make_existing(&[("/a", "src_old_0", 1, true)]);
         let out = classify_walk_entries(&entries, &existing, "v");
         assert!(out.visited_paths.contains("/a"));

@@ -3,7 +3,6 @@
 //! Public Tauri commands for the Watch feature surface.
 #![allow(clippy::needless_pass_by_value)]
 
-
 use crate::db::DbState;
 use crate::watch::cancel::cancel_watch;
 use crate::watch::http::{fetch_url_html, html_to_text_with_selector};
@@ -20,7 +19,8 @@ pub(crate) fn watch_list(state: tauri::State<'_, DbState>) -> Result<Vec<Watch>,
     let rows = stmt
         .query_map([], map_watch_row)
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -34,7 +34,11 @@ pub(crate) fn watch_create(state: tauri::State<'_, DbState>, watch: Watch) -> Re
     // Normalise the cadence: a UI-side default of 0 (or anything below 10s)
     // means "pick the kind-appropriate default" — keeps the JS form simple
     // and prevents users from accidentally hammering remote servers.
-    let kind = if watch.kind.is_empty() { "folder".to_string() } else { watch.kind.clone() };
+    let kind = if watch.kind.is_empty() {
+        "folder".to_string()
+    } else {
+        watch.kind.clone()
+    };
     let interval = if watch.interval_secs < 10 {
         default_interval_for_kind(&kind)
     } else {
@@ -214,10 +218,7 @@ pub(crate) async fn watch_run_once(app: tauri::AppHandle) -> Result<(), String> 
 /// user disabled the watch on save, "run" was their explicit choice —
 /// no point silently no-op'ing.
 #[tauri::command]
-pub(crate) async fn watch_run_one(
-    app: tauri::AppHandle,
-    id: String,
-) -> Result<(), String> {
+pub(crate) async fn watch_run_one(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let watch: Watch = {
         let state = app.state::<DbState>();
         let db = state.0.lock().map_err(|e| e.to_string())?;

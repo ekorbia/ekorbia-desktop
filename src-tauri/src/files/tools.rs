@@ -49,11 +49,11 @@ pub(crate) fn write_file_tool_schema() -> Value {
         "function": {
             "name": "write_file",
             "description": "Save a file to the user's project directory for this chat. \
-Use this whenever you want to deliver a file the user can open or run \
-(HTML, CSS, JS, Python, scripts, configs, etc.). Prefer this over fenced \
-code blocks for any file the user will keep. Sub-directories are allowed; \
-they will be created if needed. Always send the full file contents — \
-partial edits are not supported.",
+    Use this whenever you want to deliver a file the user can open or run \
+    (HTML, CSS, JS, Python, scripts, configs, etc.). Prefer this over fenced \
+    code blocks for any file the user will keep. Sub-directories are allowed; \
+    they will be created if needed. Always send the full file contents — \
+    partial edits are not supported.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -178,12 +178,9 @@ fn write_chat_file_impl(
             // the modal, and return a typed error the JS retry loop can
             // catch. The event payload carries the suggested default path
             // so the modal pre-populates sensibly.
-            let suggested = default_output_dir_for_chat(
-                app.clone(),
-                chat_id.to_string(),
-                chat_title.clone(),
-            )
-            .unwrap_or_default();
+            let suggested =
+                default_output_dir_for_chat(app.clone(), chat_id.to_string(), chat_title.clone())
+                    .unwrap_or_default();
             let _ = app.emit(
                 "chat:needs_output_dir",
                 json!({
@@ -276,7 +273,14 @@ pub(crate) async fn tool_write_file(
     path: String,
     contents: String,
 ) -> Result<ToolWriteFileResult, String> {
-    write_chat_file_impl(&app, &chat_id, message_id.as_deref(), &path, &contents, "tool")
+    write_chat_file_impl(
+        &app,
+        &chat_id,
+        message_id.as_deref(),
+        &path,
+        &contents,
+        "tool",
+    )
 }
 
 /// User-driven write — invoked when the user clicks "Save" on a fenced
@@ -295,5 +299,12 @@ pub(crate) async fn chat_save_manual_file(
     path: String,
     contents: String,
 ) -> Result<ToolWriteFileResult, String> {
-    write_chat_file_impl(&app, &chat_id, message_id.as_deref(), &path, &contents, "manual")
+    write_chat_file_impl(
+        &app,
+        &chat_id,
+        message_id.as_deref(),
+        &path,
+        &contents,
+        "manual",
+    )
 }

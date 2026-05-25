@@ -461,7 +461,8 @@ mod tests {
 
     fn fresh_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(SCHEMA).expect("SCHEMA must apply cleanly");
+        conn.execute_batch(SCHEMA)
+            .expect("SCHEMA must apply cleanly");
         conn
     }
 

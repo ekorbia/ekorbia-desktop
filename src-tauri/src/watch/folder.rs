@@ -41,7 +41,15 @@ pub(crate) async fn process_file(
                        or the file is empty)"
                 .to_string();
             let event_id = gen_event_id();
-            insert_event(app, &event_id, &watch.id, &path_str, "error", None, Some(&msg))?;
+            insert_event(
+                app,
+                &event_id,
+                &watch.id,
+                &path_str,
+                "error",
+                None,
+                Some(&msg),
+            )?;
             let _ = app.emit("watch:event_changed", &event_id);
             notify_batch.push(NotifyEntry {
                 success: false,
@@ -53,7 +61,15 @@ pub(crate) async fn process_file(
         Ok(t) => t,
         Err(e) => {
             let event_id = gen_event_id();
-            insert_event(app, &event_id, &watch.id, &path_str, "error", None, Some(&e))?;
+            insert_event(
+                app,
+                &event_id,
+                &watch.id,
+                &path_str,
+                "error",
+                None,
+                Some(&e),
+            )?;
             let _ = app.emit("watch:event_changed", &event_id);
             notify_batch.push(NotifyEntry {
                 success: false,
@@ -65,7 +81,14 @@ pub(crate) async fn process_file(
     };
 
     process_item(
-        app, watch, system_msg, &path_str, &filename, text, notify_batch, cancel,
+        app,
+        watch,
+        system_msg,
+        &path_str,
+        &filename,
+        text,
+        notify_batch,
+        cancel,
     )
     .await
 }
@@ -78,7 +101,11 @@ pub(crate) async fn run_folder_watch(app: &tauri::AppHandle, watch: &Watch, canc
     let entries = match std::fs::read_dir(&watch.folder_path) {
         Ok(e) => e,
         Err(e) => {
-            log_warn!("watch '{}': cannot read {}: {e}", watch.name, watch.folder_path);
+            log_warn!(
+                "watch '{}': cannot read {}: {e}",
+                watch.name,
+                watch.folder_path
+            );
             return;
         }
     };
@@ -125,7 +152,9 @@ pub(crate) async fn run_folder_watch(app: &tauri::AppHandle, watch: &Watch, canc
                 continue;
             }
         }
-        if let Err(e) = process_file(app, watch, &system_msg, &path, &mut notify_batch, cancel).await {
+        if let Err(e) =
+            process_file(app, watch, &system_msg, &path, &mut notify_batch, cancel).await
+        {
             log_warn!("watch '{}': process_file {path_str}: {e}", watch.name);
         }
     }

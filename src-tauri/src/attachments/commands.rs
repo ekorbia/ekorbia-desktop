@@ -20,9 +20,7 @@
 use crate::attachments::cancel::{cancel_index, register_cancel};
 use crate::attachments::config::{current_embedding_model, current_top_k};
 use crate::attachments::folder::index_folder;
-use crate::attachments::pipeline::{
-    index_attachment, retrieve_chunks, set_attachment_status,
-};
+use crate::attachments::pipeline::{index_attachment, retrieve_chunks, set_attachment_status};
 use crate::attachments::types::{
     classify_attachment, map_attachment_row, AttachmentPayload, AttachmentRow, PreparedAttachment,
     PreparedHit, RetrievedChunk, ATTACHMENT_COLUMNS, ATTACHMENT_MAX_BYTES, SMALL_TEXT_THRESHOLD,
@@ -48,7 +46,8 @@ pub(crate) fn attachment_list(
     let rows = stmt
         .query_map([&chat_id], map_attachment_row)
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -74,8 +73,7 @@ pub(crate) fn attachment_add_files(
             let Some(kind) = classify_attachment(p) else {
                 return Err(format!("Unsupported file type: {raw}"));
             };
-            let meta = std::fs::metadata(p)
-                .map_err(|e| format!("Cannot read {raw}: {e}"))?;
+            let meta = std::fs::metadata(p).map_err(|e| format!("Cannot read {raw}: {e}"))?;
             let bytes = meta.len();
             if bytes > ATTACHMENT_MAX_BYTES {
                 return Err(format!(
@@ -230,10 +228,7 @@ pub(crate) fn attachment_hit_open(
             "attachment_hit_open only valid for folder attachments (got '{kind}')"
         ));
     }
-    let abs = crate::files::sandbox::resolve_within(
-        std::path::Path::new(&root),
-        &sub_path,
-    )?;
+    let abs = crate::files::sandbox::resolve_within(std::path::Path::new(&root), &sub_path)?;
     if !abs.exists() {
         return Err(format!("sub-path does not exist: {}", abs.display()));
     }
@@ -275,7 +270,8 @@ pub(crate) async fn attachment_prepare_for_send(
         let it = stmt
             .query_map([&chat_id], map_attachment_row)
             .map_err(|e| e.to_string())?;
-        it.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        it.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
     };
 
     if rows.is_empty() {
@@ -308,8 +304,7 @@ pub(crate) async fn attachment_prepare_for_send(
         let path = Path::new(&att.path);
         match att.kind.as_str() {
             "text" => {
-                let is_large = (att.bytes as usize) > SMALL_TEXT_THRESHOLD
-                    && att.status == "ready";
+                let is_large = (att.bytes as usize) > SMALL_TEXT_THRESHOLD && att.status == "ready";
                 if is_large {
                     retrieval_attachments.push((i, att));
                 } else if att.status == "indexing" {
@@ -359,8 +354,7 @@ pub(crate) async fn attachment_prepare_for_send(
                     match std::fs::read(path) {
                         Ok(bytes) => {
                             use base64::Engine;
-                            let b64 = base64::engine::general_purpose::STANDARD
-                                .encode(&bytes);
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                             images_b64.push(b64);
                         }
                         Err(_) => images_skipped = true,
@@ -374,7 +368,8 @@ pub(crate) async fn attachment_prepare_for_send(
     }
 
     if !retrieval_attachments.is_empty() && !query.trim().is_empty() {
-        let hits = retrieve_chunks(&app, &chat_id, &query, current_top_k(&app)).await
+        let hits = retrieve_chunks(&app, &chat_id, &query, current_top_k(&app))
+            .await
             .unwrap_or_else(|e| {
                 log_warn!("retrieve_chunks failed: {e}");
                 Vec::new()
@@ -387,7 +382,11 @@ pub(crate) async fn attachment_prepare_for_send(
         for (i, att) in &retrieval_attachments {
             let citation_index = (*i as i32) + 1;
             let chunks_for = by_att.remove(&att.id).unwrap_or_default();
-            let kind_suffix = if att.kind == "folder" { " (folder)" } else { "" };
+            let kind_suffix = if att.kind == "folder" {
+                " (folder)"
+            } else {
+                ""
+            };
             if chunks_for.is_empty() {
                 text_blocks.push(format!(
                     "[{citation_index}] {label}{kind_suffix}\n<no chunks matched the query>",
@@ -435,7 +434,11 @@ pub(crate) async fn attachment_prepare_for_send(
         // file/folder by index if it has prior context about it.
         for (i, att) in &retrieval_attachments {
             let citation_index = (*i as i32) + 1;
-            let kind_suffix = if att.kind == "folder" { " (folder)" } else { "" };
+            let kind_suffix = if att.kind == "folder" {
+                " (folder)"
+            } else {
+                ""
+            };
             text_blocks.push(format!(
                 "[{citation_index}] {label}{kind_suffix}\n<indexed; no query to retrieve from>",
                 label = att.path,

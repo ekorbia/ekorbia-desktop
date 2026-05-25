@@ -69,12 +69,10 @@ static MODEL_TOOLS_CACHE: std::sync::OnceLock<
 > = std::sync::OnceLock::new();
 
 fn vision_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, bool>> {
-    MODEL_VISION_CACHE
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    MODEL_VISION_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 fn tools_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, bool>> {
-    MODEL_TOOLS_CACHE
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    MODEL_TOOLS_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Generic capability check against /api/show. Reads the `capabilities`
@@ -94,10 +92,7 @@ async fn probe_capability(model: &str, needle: &str) -> Result<bool, String> {
     let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
     Ok(json["capabilities"]
         .as_array()
-        .is_some_and(|caps| {
-            caps.iter()
-                .any(|v| v.as_str().is_some_and(|s| s == needle))
-        }))
+        .is_some_and(|caps| caps.iter().any(|v| v.as_str().is_some_and(|s| s == needle))))
 }
 
 pub(crate) async fn model_has_vision(model: &str) -> Result<bool, String> {
@@ -164,8 +159,10 @@ pub(crate) async fn ollama_chat(model: &str, system: &str, user: &str) -> Result
     if !resp.status().is_success() {
         return Err(format!("Ollama returned HTTP {}", resp.status()));
     }
-    let json: serde_json::Value =
-        resp.json().await.map_err(|e| format!("Bad JSON from Ollama: {e}"))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Bad JSON from Ollama: {e}"))?;
     json["message"]["content"]
         .as_str()
         .map(|s| s.trim().to_string())
@@ -253,7 +250,9 @@ pub(crate) struct EmbeddingModelCheck {
 /// returns 200 the model exists; 404 means not pulled; anything else (e.g.
 /// connection refused) is treated as "unknown" → installed: false.
 #[tauri::command]
-pub(crate) async fn embedding_model_check(app: tauri::AppHandle) -> Result<EmbeddingModelCheck, String> {
+pub(crate) async fn embedding_model_check(
+    app: tauri::AppHandle,
+) -> Result<EmbeddingModelCheck, String> {
     let model = crate::attachments::config::current_embedding_model(&app);
     let body = serde_json::json!({ "model": &model });
     // UI feedback probe — override the shared client's generous default to
@@ -403,4 +402,3 @@ pub(crate) async fn start_ollama(app: tauri::AppHandle) -> Result<(), String> {
             .to_string()
     }))
 }
-

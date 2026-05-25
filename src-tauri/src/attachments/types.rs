@@ -39,10 +39,22 @@ pub(crate) const FOLDER_MAX_FILES: usize = 1000;
 /// build / VCS / IDE noise; the goal is to keep "Add my repo" working
 /// without forcing the user to configure anything first.
 pub(crate) const FOLDER_IGNORE_DIRS: &[&str] = &[
-    ".git", ".hg", ".svn",
-    "node_modules", "target", "dist", "build", "out", ".next", ".cache",
-    ".venv", "venv", "env", "__pycache__",
-    ".idea", ".vscode",
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
+    ".next",
+    ".cache",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    ".idea",
+    ".vscode",
     ".DS_Store",
 ];
 
@@ -78,7 +90,9 @@ pub(crate) struct AttachmentRow {
     pub(crate) file_count: i64,
 }
 
-fn default_status() -> String { "ready".to_string() }
+fn default_status() -> String {
+    "ready".to_string()
+}
 
 /// SQL column list for `SELECT … FROM attachments`, in `AttachmentRow`
 /// field-declaration order. `map_attachment_row` depends on this ordering.

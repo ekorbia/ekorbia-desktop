@@ -59,7 +59,8 @@ pub(crate) fn load_enabled_watches(app: &tauri::AppHandle) -> Result<Vec<Watch>,
     let rows = stmt
         .query_map([], map_watch_row)
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// Record `now` as the latest poll attempt for this watch. Called from
@@ -115,7 +116,15 @@ pub(crate) fn insert_event(
         "INSERT OR REPLACE INTO watch_events \
          (id, watch_id, file_path, status, summary, error, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        (event_id, watch_id, file_path, status, summary, error, now_unix()),
+        (
+            event_id,
+            watch_id,
+            file_path,
+            status,
+            summary,
+            error,
+            now_unix(),
+        ),
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -147,7 +156,15 @@ pub(crate) fn record_fetch_error(
     notify_batch: &mut NotifyBatch,
 ) {
     let event_id = gen_event_id();
-    if let Err(e) = insert_event(app, &event_id, watch_id, item_id, "error", None, Some(error)) {
+    if let Err(e) = insert_event(
+        app,
+        &event_id,
+        watch_id,
+        item_id,
+        "error",
+        None,
+        Some(error),
+    ) {
         crate::log::log_warn!("record_fetch_error: insert_event failed for {watch_id}: {e}");
     }
     let _ = app.emit("watch:event_changed", &event_id);
@@ -175,8 +192,7 @@ fn fetch_prompt_body(app: &tauri::AppHandle, slug: &str) -> Result<Option<String
     Ok(Some(body))
 }
 
-const DEFAULT_SUMMARY_PROMPT: &str =
-    "Summarise the user's document in 3-5 concise bullet points. \
+const DEFAULT_SUMMARY_PROMPT: &str = "Summarise the user's document in 3-5 concise bullet points. \
      Be specific; cite numbers and names where present. \
      Output Markdown bullets only — no preamble.";
 
@@ -209,9 +225,7 @@ fn append_to_notes(notes_path: &Path, filename: &str, summary: &str) -> Result<(
         .open(notes_path)
         .map_err(|e| format!("Open notes file: {e}"))?;
     let ts = now_unix();
-    let block = format!(
-        "\n## {filename}\n_{ts} (unix)_\n\n{summary}\n\n---\n",
-    );
+    let block = format!("\n## {filename}\n_{ts} (unix)_\n\n{summary}\n\n---\n",);
     f.write_all(block.as_bytes())
         .map_err(|e| format!("Write notes file: {e}"))
 }
@@ -289,11 +303,7 @@ pub(crate) fn new_notify_batch() -> NotifyBatch {
 /// State invariant: if both successes and errors occurred this cycle, the
 /// new `last_notified_status` is 'success' — successes mean the watch is
 /// healthy at cycle's end, so the next error cycle fires as a fresh alert.
-pub(crate) fn flush_notify_batch(
-    app: &tauri::AppHandle,
-    watch: &Watch,
-    batch: &[NotifyEntry],
-) {
+pub(crate) fn flush_notify_batch(app: &tauri::AppHandle, watch: &Watch, batch: &[NotifyEntry]) {
     if !watch.notify || batch.is_empty() {
         return;
     }
@@ -304,7 +314,11 @@ pub(crate) fn flush_notify_batch(
     // Persist the new dedup state regardless of whether banners actually
     // show (foreground suppression doesn't reset dedup). Prefer 'success'
     // when both happened — see the doc comment.
-    let new_status = if !successes.is_empty() { "success" } else { "error" };
+    let new_status = if !successes.is_empty() {
+        "success"
+    } else {
+        "error"
+    };
     update_notify_state(app, &watch.id, new_status);
 
     // Foreground suppression: dedup state above is already up to date.
@@ -329,7 +343,11 @@ pub(crate) fn flush_notify_batch(
         let body = if successes.len() == 1 {
             // Single item: label + first non-empty line of the summary.
             let e = successes[0];
-            let first_line = e.detail.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+            let first_line = e
+                .detail
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("");
             if first_line.is_empty() {
                 e.item_label.clone()
             } else {
@@ -343,11 +361,7 @@ pub(crate) fn flush_notify_batch(
                 .map(|e| e.item_label.as_str())
                 .collect();
             if successes.len() > 3 {
-                format!(
-                    "{} (+ {} more)",
-                    preview.join(", "),
-                    successes.len() - 3
-                )
+                format!("{} (+ {} more)", preview.join(", "), successes.len() - 3)
             } else {
                 preview.join(", ")
             }
@@ -449,7 +463,15 @@ pub(crate) async fn process_item(
     // (rather than a row stuck in 'processing' forever).
     if is_cancelled(cancel) {
         let msg = WATCH_CANCELLED_MSG.to_string();
-        insert_event(app, &event_id, &watch.id, item_id, "error", None, Some(&msg))?;
+        insert_event(
+            app,
+            &event_id,
+            &watch.id,
+            item_id,
+            "error",
+            None,
+            Some(&msg),
+        )?;
         let _ = app.emit("watch:event_changed", &event_id);
         notify_batch.push(NotifyEntry {
             success: false,
@@ -461,7 +483,15 @@ pub(crate) async fn process_item(
 
     if text.trim().is_empty() {
         let msg = "No text to summarise (source returned empty)".to_string();
-        insert_event(app, &event_id, &watch.id, item_id, "error", None, Some(&msg))?;
+        insert_event(
+            app,
+            &event_id,
+            &watch.id,
+            item_id,
+            "error",
+            None,
+            Some(&msg),
+        )?;
         let _ = app.emit("watch:event_changed", &event_id);
         notify_batch.push(NotifyEntry {
             success: false,
@@ -498,7 +528,15 @@ pub(crate) async fn process_item(
     // off should mean "I don't want any more output from this watch".
     if is_cancelled(cancel) {
         let msg = WATCH_CANCELLED_MSG.to_string();
-        insert_event(app, &event_id, &watch.id, item_id, "error", None, Some(&msg))?;
+        insert_event(
+            app,
+            &event_id,
+            &watch.id,
+            item_id,
+            "error",
+            None,
+            Some(&msg),
+        )?;
         let _ = app.emit("watch:event_changed", &event_id);
         notify_batch.push(NotifyEntry {
             success: false,
@@ -509,7 +547,15 @@ pub(crate) async fn process_item(
     }
 
     if let Err(e) = append_to_notes(Path::new(&watch.notes_path), item_label, &summary) {
-        insert_event(app, &event_id, &watch.id, item_id, "error", Some(&summary), Some(&e))?;
+        insert_event(
+            app,
+            &event_id,
+            &watch.id,
+            item_id,
+            "error",
+            Some(&summary),
+            Some(&e),
+        )?;
         let _ = app.emit("watch:event_changed", &event_id);
         notify_batch.push(NotifyEntry {
             success: false,
@@ -519,7 +565,15 @@ pub(crate) async fn process_item(
         return Err(e);
     }
 
-    insert_event(app, &event_id, &watch.id, item_id, "done", Some(&summary), None)?;
+    insert_event(
+        app,
+        &event_id,
+        &watch.id,
+        item_id,
+        "done",
+        Some(&summary),
+        None,
+    )?;
     let _ = app.emit("watch:event_changed", &event_id);
     notify_batch.push(NotifyEntry {
         success: true,

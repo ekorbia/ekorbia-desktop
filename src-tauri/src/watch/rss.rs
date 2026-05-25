@@ -144,17 +144,21 @@ pub(crate) async fn run_rss_watch(app: &tauri::AppHandle, watch: &Watch, cancel:
                     Err(e) => {
                         // Network-level errors on the link are non-fatal;
                         // we still try to summarise from feed-supplied text.
-                        log_warn!(
-                            "watch '{}': follow link {}: {e}",
-                            watch.name, link.href
-                        );
+                        log_warn!("watch '{}': follow link {}: {e}", watch.name, link.href);
                     }
                 }
             }
         }
 
         if let Err(e) = process_item(
-            app, watch, &system_msg, &item_id, &label, text, &mut notify_batch, cancel,
+            app,
+            watch,
+            &system_msg,
+            &item_id,
+            &label,
+            text,
+            &mut notify_batch,
+            cancel,
         )
         .await
         {

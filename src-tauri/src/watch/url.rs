@@ -50,7 +50,9 @@ fn truncate_for_storage(s: &str) -> String {
 fn update_watch_content(app: &tauri::AppHandle, watch_id: &str, content: &str) {
     let stored = truncate_for_storage(content);
     let db = app.state::<DbState>();
-    let Ok(conn) = db.0.lock() else { return; };
+    let Ok(conn) = db.0.lock() else {
+        return;
+    };
     if let Err(e) = conn.execute(
         "UPDATE watches SET last_content = ?1 WHERE id = ?2",
         (&stored, watch_id),
@@ -137,11 +139,13 @@ pub(crate) async fn run_url_watch(app: &tauri::AppHandle, watch: &Watch, cancel:
         }
     };
 
-    let extracted =
-        html_to_text_with_selector(&html, watch.url_selector.as_deref());
+    let extracted = html_to_text_with_selector(&html, watch.url_selector.as_deref());
 
     if extracted.trim().is_empty() {
-        log_warn!("watch '{}': URL extraction empty for {page_url}", watch.name);
+        log_warn!(
+            "watch '{}': URL extraction empty for {page_url}",
+            watch.name
+        );
         return;
     }
 

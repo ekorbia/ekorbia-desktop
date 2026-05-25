@@ -61,37 +61,127 @@ pub(crate) struct Prompt {
 /// built-ins into the user's prompts directory; after that they're just
 /// regular files the user can edit, rename, or delete.
 const BUILTIN_PROMPTS: &[(&str, &str)] = &[
-    ("explain-simply", include_str!("../builtin-prompts/explain-simply.md")),
+    (
+        "explain-simply",
+        include_str!("../builtin-prompts/explain-simply.md"),
+    ),
     ("summarize", include_str!("../builtin-prompts/summarize.md")),
-    ("translate-spanish", include_str!("../builtin-prompts/translate-spanish.md")),
-    ("translate-french", include_str!("../builtin-prompts/translate-french.md")),
-    ("translate-german", include_str!("../builtin-prompts/translate-german.md")),
-    ("brainstorm", include_str!("../builtin-prompts/brainstorm.md")),
-    ("sensitive-doc-qa", include_str!("../builtin-prompts/sensitive-doc-qa.md")),
-    ("notes-synthesizer", include_str!("../builtin-prompts/notes-synthesizer.md")),
-    ("email-draft", include_str!("../builtin-prompts/email-draft.md")),
-    ("website-personal", include_str!("../builtin-prompts/website-personal.md")),
-    ("website-professional", include_str!("../builtin-prompts/website-professional.md")),
-    ("game-text-adventure", include_str!("../builtin-prompts/game-text-adventure.md")),
-    ("game-lateral-thinking", include_str!("../builtin-prompts/game-lateral-thinking.md")),
-    ("game-murder-mystery", include_str!("../builtin-prompts/game-murder-mystery.md")),
-    ("log-triage", include_str!("../builtin-prompts/log-triage.md")),
-    ("resume-coach", include_str!("../builtin-prompts/resume-coach.md")),
-    ("cover-letter", include_str!("../builtin-prompts/cover-letter.md")),
-    ("careers-watcher", include_str!("../builtin-prompts/careers-watcher.md")),
-    ("tone-reframer", include_str!("../builtin-prompts/tone-reframer.md")),
-    ("devils-advocate", include_str!("../builtin-prompts/devils-advocate.md")),
-    ("paper-tracker", include_str!("../builtin-prompts/paper-tracker.md")),
-    ("wikipedia-watch", include_str!("../builtin-prompts/wikipedia-watch.md")),
-    ("price-watcher", include_str!("../builtin-prompts/price-watcher.md")),
-    ("new-listings-watcher", include_str!("../builtin-prompts/new-listings-watcher.md")),
-    ("rental-watcher", include_str!("../builtin-prompts/rental-watcher.md")),
-    ("gcp-uptime", include_str!("../builtin-prompts/gcp-uptime.md")),
-    ("cloudflare-uptime", include_str!("../builtin-prompts/cloudflare-uptime.md")),
-    ("how-does-it-end", include_str!("../builtin-prompts/how-does-it-end.md")),
-    ("cliff-notes", include_str!("../builtin-prompts/cliff-notes.md")),
-    ("should-i-watch", include_str!("../builtin-prompts/should-i-watch.md")),
-    ("album-deep-dive", include_str!("../builtin-prompts/album-deep-dive.md")),
+    (
+        "translate-spanish",
+        include_str!("../builtin-prompts/translate-spanish.md"),
+    ),
+    (
+        "translate-french",
+        include_str!("../builtin-prompts/translate-french.md"),
+    ),
+    (
+        "translate-german",
+        include_str!("../builtin-prompts/translate-german.md"),
+    ),
+    (
+        "brainstorm",
+        include_str!("../builtin-prompts/brainstorm.md"),
+    ),
+    (
+        "sensitive-doc-qa",
+        include_str!("../builtin-prompts/sensitive-doc-qa.md"),
+    ),
+    (
+        "notes-synthesizer",
+        include_str!("../builtin-prompts/notes-synthesizer.md"),
+    ),
+    (
+        "email-draft",
+        include_str!("../builtin-prompts/email-draft.md"),
+    ),
+    (
+        "website-personal",
+        include_str!("../builtin-prompts/website-personal.md"),
+    ),
+    (
+        "website-professional",
+        include_str!("../builtin-prompts/website-professional.md"),
+    ),
+    (
+        "game-text-adventure",
+        include_str!("../builtin-prompts/game-text-adventure.md"),
+    ),
+    (
+        "game-lateral-thinking",
+        include_str!("../builtin-prompts/game-lateral-thinking.md"),
+    ),
+    (
+        "game-murder-mystery",
+        include_str!("../builtin-prompts/game-murder-mystery.md"),
+    ),
+    (
+        "log-triage",
+        include_str!("../builtin-prompts/log-triage.md"),
+    ),
+    (
+        "resume-coach",
+        include_str!("../builtin-prompts/resume-coach.md"),
+    ),
+    (
+        "cover-letter",
+        include_str!("../builtin-prompts/cover-letter.md"),
+    ),
+    (
+        "careers-watcher",
+        include_str!("../builtin-prompts/careers-watcher.md"),
+    ),
+    (
+        "tone-reframer",
+        include_str!("../builtin-prompts/tone-reframer.md"),
+    ),
+    (
+        "devils-advocate",
+        include_str!("../builtin-prompts/devils-advocate.md"),
+    ),
+    (
+        "paper-tracker",
+        include_str!("../builtin-prompts/paper-tracker.md"),
+    ),
+    (
+        "wikipedia-watch",
+        include_str!("../builtin-prompts/wikipedia-watch.md"),
+    ),
+    (
+        "price-watcher",
+        include_str!("../builtin-prompts/price-watcher.md"),
+    ),
+    (
+        "new-listings-watcher",
+        include_str!("../builtin-prompts/new-listings-watcher.md"),
+    ),
+    (
+        "rental-watcher",
+        include_str!("../builtin-prompts/rental-watcher.md"),
+    ),
+    (
+        "gcp-uptime",
+        include_str!("../builtin-prompts/gcp-uptime.md"),
+    ),
+    (
+        "cloudflare-uptime",
+        include_str!("../builtin-prompts/cloudflare-uptime.md"),
+    ),
+    (
+        "how-does-it-end",
+        include_str!("../builtin-prompts/how-does-it-end.md"),
+    ),
+    (
+        "cliff-notes",
+        include_str!("../builtin-prompts/cliff-notes.md"),
+    ),
+    (
+        "should-i-watch",
+        include_str!("../builtin-prompts/should-i-watch.md"),
+    ),
+    (
+        "album-deep-dive",
+        include_str!("../builtin-prompts/album-deep-dive.md"),
+    ),
 ];
 
 fn is_builtin_slug(slug: &str) -> bool {
@@ -142,7 +232,11 @@ fn ensure_prompts_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, Stri
 /// available.
 fn slugify(s: &str) -> String {
     let v = crate::db::slugify(s, None);
-    if v.is_empty() { "prompt".into() } else { v }
+    if v.is_empty() {
+        "prompt".into()
+    } else {
+        v
+    }
 }
 
 /// Resolve a fresh, non-colliding slug under `dir`. If the candidate doesn't
@@ -214,8 +308,7 @@ pub(crate) fn prompts_dir_get(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub(crate) fn prompts_dir_set(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
-    std::fs::create_dir_all(&p)
-        .map_err(|e| format!("Could not create directory {path}: {e}"))?;
+    std::fs::create_dir_all(&p).map_err(|e| format!("Could not create directory {path}: {e}"))?;
     let db = app.state::<DbState>();
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     set_setting(&conn, "prompts_dir", &path)
@@ -243,8 +336,7 @@ pub(crate) fn prompts_list(app: tauri::AppHandle) -> Result<Vec<Prompt>, String>
     let conn = db.0.lock().map_err(|e| e.to_string())?;
 
     let mut out: Vec<Prompt> = Vec::new();
-    let entries = std::fs::read_dir(&dir)
-        .map_err(|e| format!("Read prompts dir failed: {e}"))?;
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("Read prompts dir failed: {e}"))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {

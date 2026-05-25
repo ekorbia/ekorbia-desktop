@@ -106,8 +106,12 @@ pub(crate) struct Watch {
     pub(crate) last_notified_at: i64,
 }
 
-pub(crate) fn default_watch_kind() -> String { "folder".to_string() }
-pub(crate) fn default_interval_secs() -> i64 { 30 }
+pub(crate) fn default_watch_kind() -> String {
+    "folder".to_string()
+}
+pub(crate) fn default_interval_secs() -> i64 {
+    30
+}
 
 /// SQL column list for `SELECT … FROM watches`, in field-declaration order.
 /// `map_watch_row` depends on this ordering. **Keep this string and the

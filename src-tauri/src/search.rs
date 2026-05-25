@@ -83,22 +83,19 @@ pub(crate) fn search_chats(
     // sanitisation (rare, but e.g. an all-stopword query). Treat any query
     // error as "no results" rather than surfacing a scary message to the
     // user — empty results is the expected UX for a malformed query.
-    let mapped = stmt.query_map(
-        (&fts_query, SNIPPET_START, SNIPPET_END),
-        |row| {
-            Ok(SearchHit {
-                msg_id: row.get(0)?,
-                chat_id: row.get(1)?,
-                chat_title: row.get(2)?,
-                chat_model: row.get(3)?,
-                role: row.get(4)?,
-                snippet: row.get(5)?,
-                time: row.get(6)?,
-                seq: row.get(7)?,
-                updated_at: row.get(8)?,
-            })
-        },
-    );
+    let mapped = stmt.query_map((&fts_query, SNIPPET_START, SNIPPET_END), |row| {
+        Ok(SearchHit {
+            msg_id: row.get(0)?,
+            chat_id: row.get(1)?,
+            chat_title: row.get(2)?,
+            chat_model: row.get(3)?,
+            role: row.get(4)?,
+            snippet: row.get(5)?,
+            time: row.get(6)?,
+            seq: row.get(7)?,
+            updated_at: row.get(8)?,
+        })
+    });
     let Ok(rows) = mapped else { return Ok(vec![]) };
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())
