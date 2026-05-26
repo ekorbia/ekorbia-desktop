@@ -46,52 +46,84 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 }/*EDITMODE-END*/;
 
 // ── Helper functions ──────────────────────────────────────────────────────────
+//
+// groupChatsForSidebar lives in ui/utils.js (unit-tested under node:test).
+// It returns `{ groups, dateSections }` where `groups` is per-folder and
+// `dateSections` is the Today/Yesterday/… bucketing of *ungrouped* chats.
+//
+// relativeTime, tryParseJson, genId also live in `ui/utils.js`. All of
+// these are on `window` before main.jsx loads (script-tag order in
+// ui/index.html), so they're available as bare names below.
 
-function groupChatsByDate(chatRows) {
-  const now = new Date();
-  const startOf = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
-  const todayStart = startOf(now);
-  const yesterdayStart = startOf(new Date(now - 86400000));
-  const weekStart = startOf(new Date(now - 7 * 86400000));
-  const monthStart = startOf(new Date(now - 30 * 86400000));
+// EMPTY_HISTORY is the canonical empty sidebar shape. Used as the initial
+// state, the "wipe all chats" reset value, and the safe fallback when a
+// load fails. Keeping it as a const (rather than constructing inline at
+// each callsite) makes the shape easy to grep for during refactors.
+const EMPTY_HISTORY = { groups: [], dateSections: [] };
 
-  const buckets = [
-    { section: 'Today', items: [] },
-    { section: 'Yesterday', items: [] },
-    { section: 'Last 7 days', items: [] },
-    { section: 'Last 30 days', items: [] },
-    { section: 'Older', items: [] },
-  ];
-  for (const r of chatRows) {
-    const d = new Date(r.createdAt * 1000);
-    // Multi-model fields hitch a ride into the sidebar item so chat-row
-    // renderers can show a "compare" badge and openChatInTab can re-
-    // hydrate the tab without a second DB round-trip. multiModels is
-    // JSON in the DB; parse here once rather than at every render.
-    // tryParseJson returns the fallback on malformed payloads — we
-    // treat that as "not multi-mode" and let the chat behave as single.
-    const parsedModels = r.multiModels
-      ? tryParseJson(r.multiModels, null)
-      : null;
-    const item = {
-      id: r.id,
-      title: r.title,
-      model: r.model,
-      when: relativeTime(r.updatedAt),
-      tabType: r.tabType || null,
-      models: Array.isArray(parsedModels) ? parsedModels : null,
-    };
-    if (d >= todayStart) buckets[0].items.push(item);
-    else if (d >= yesterdayStart) buckets[1].items.push(item);
-    else if (d >= weekStart) buckets[2].items.push(item);
-    else if (d >= monthStart) buckets[3].items.push(item);
-    else buckets[4].items.push(item);
-  }
-  return buckets.filter(b => b.items.length > 0);
+// Has any group OR date section in `hs` got a chat with this id? Used to
+// short-circuit prepend-to-sidebar mutations so we don't double-add a chat
+// that's already represented (race between handleSend's setHistory and the
+// overlay:open_chat listener firing during the same tick).
+function sidebarContainsChatId(hs, chatId) {
+  if ((hs.groups || []).some((g) => g.items.some((c) => c.id === chatId))) return true;
+  if ((hs.dateSections || []).some((s) => s.items.some((c) => c.id === chatId))) return true;
+  return false;
 }
 
-// relativeTime, tryParseJson, genId live in `ui/utils.js` so they're
-// unit-testable under node:test. They're on `window` before main.jsx loads.
+// Prepend a sidebar-item to the Today date section, creating the section
+// if it doesn't exist yet. Group placement is NOT considered here —
+// brand-new chats from the composer / overlay always start ungrouped
+// (group_id NULL) and are surfaced under date buckets; the user can
+// move them into a group via drag or right-click afterwards.
+function prependChatToToday(hs, item) {
+  const dateSections = hs.dateSections || [];
+  const todayIdx = dateSections.findIndex((s) => s.section === 'Today');
+  if (todayIdx >= 0) {
+    return {
+      ...hs,
+      dateSections: dateSections.map((s, i) =>
+        i === todayIdx ? { ...s, items: [item, ...s.items] } : s,
+      ),
+    };
+  }
+  return {
+    ...hs,
+    dateSections: [{ section: 'Today', items: [item] }, ...dateSections],
+  };
+}
+
+// Apply `mapItem` to every chat-item across BOTH groups and dateSections,
+// keeping container structure intact. Used by renameChat to update a chat's
+// title wherever it lives.
+function mapItemsAcrossHistory(hs, mapItem) {
+  return {
+    groups: (hs.groups || []).map((g) => ({
+      ...g,
+      items: g.items.map(mapItem),
+    })),
+    dateSections: (hs.dateSections || []).map((s) => ({
+      ...s,
+      items: s.items.map(mapItem),
+    })),
+  };
+}
+
+// Remove a single chat from history wherever it lives. Empty date sections
+// are pruned (matches pre-groups behaviour); empty GROUPS are kept (the
+// user wants to see their folder even if it's currently empty — same
+// reasoning as in groupChatsForSidebar).
+function removeChatFromHistory(hs, chatId) {
+  return {
+    groups: (hs.groups || []).map((g) => ({
+      ...g,
+      items: g.items.filter((c) => c.id !== chatId),
+    })),
+    dateSections: (hs.dateSections || [])
+      .map((s) => ({ ...s, items: s.items.filter((c) => c.id !== chatId) }))
+      .filter((s) => s.items.length),
+  };
+}
 
 // Persist a piece of state to localStorage so it survives app restart.
 // Initial value comes from localStorage if present; otherwise falls back to
@@ -862,7 +894,15 @@ function App() {
   const [streaming, setStreaming] = useS(false);
   const [ramUsed, setRamUsed] = useS(28);
 
-  const [history, setHistory] = useS([]);
+  // Sidebar shape: `{ groups: [...], dateSections: [...] }`. groups come
+  // first (user-defined folders, displayed above); dateSections holds the
+  // Today/Yesterday/… bucketing of ungrouped chats. See EMPTY_HISTORY and
+  // the helpers above for shape details.
+  const [history, setHistory] = useS(EMPTY_HISTORY);
+  // Raw chat_groups rows from `db_load_groups` — needed by the context
+  // menu so it can list "Move to {group name}" for every existing group,
+  // independent of which groups currently have items in `history`.
+  const [groups, setGroups] = useS([]);
 
   // ── Backend load on mount ───────────────────────────────────────────────────
   // Prompts now live as Markdown files in the configured prompts directory.
@@ -893,8 +933,15 @@ function App() {
   useE(() => {
     (async () => {
       try {
-        const chatRows = await invoke('db_load_chats');
-        setHistory(groupChatsByDate(chatRows));
+        // Load chats + groups together so the sidebar reshape sees both
+        // in one pass. Promise.all keeps startup latency at max(t1, t2)
+        // rather than t1 + t2.
+        const [chatRows, groupRows] = await Promise.all([
+          invoke('db_load_chats'),
+          invoke('db_load_groups'),
+        ]);
+        setGroups(groupRows || []);
+        setHistory(groupChatsForSidebar(chatRows, groupRows));
         // Auto-open the most-recently-updated chat on launch so the app
         // resumes where the user left off instead of dumping them into a
         // blank "New chat". chatRows is ordered `updated_at DESC` by the
@@ -1356,12 +1403,12 @@ function App() {
     if (isNewChat) {
       setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, title } : t));
       if (!ephemeral) {
-        const newItem = { id: activeTab, title, model: modelId, when: 'now' };
-        setHistory(hs => {
-          const todayIdx = hs.findIndex(s => s.section === 'Today');
-          if (todayIdx >= 0) return hs.map((s, i) => i === todayIdx ? { ...s, items: [newItem, ...s.items] } : s);
-          return [{ section: 'Today', items: [newItem] }, ...hs];
-        });
+        // Brand-new chats from the composer start ungrouped (NULL group_id);
+        // they land in Today. The user can drag or right-click to file.
+        const newItem = {
+          id: activeTab, title, model: modelId, when: 'now', groupId: null,
+        };
+        setHistory(hs => prependChatToToday(hs, newItem));
       }
       persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs, ...multiFieldsForChat(activeTab) }).catch(console.error);
     } else {
@@ -1976,17 +2023,13 @@ function App() {
       if (!ephemeral) {
         const newItem = {
           id: activeTab, title, model: models[0], when: 'now',
-          tabType: tab.tabType, models,
+          tabType: tab.tabType, models, groupId: null,
         };
         setHistory(hs => {
-          if (hs.some(s => s.items.some(c => c.id === activeTab))) return hs;
-          const todayIdx = hs.findIndex(s => s.section === 'Today');
-          if (todayIdx >= 0) {
-            return hs.map((s, i) =>
-              i === todayIdx ? { ...s, items: [newItem, ...s.items] } : s,
-            );
-          }
-          return [{ section: 'Today', items: [newItem] }, ...hs];
+          // Guard against double-add: confirmCompareModels' persist may
+          // race with a parallel mount-time refresh.
+          if (sidebarContainsChatId(hs, activeTab)) return hs;
+          return prependChatToToday(hs, newItem);
         });
       }
     }
@@ -2289,10 +2332,7 @@ function App() {
     setChats(cs => (cs[id] ? { ...cs, [id]: { ...cs[id], title } } : cs));
     setTabs(ts => ts.map(t => (t.id === id ? { ...t, title } : t)));
     setHistory(hs =>
-      hs.map(s => ({
-        ...s,
-        items: s.items.map(it => (it.id === id ? { ...it, title } : it)),
-      })),
+      mapItemsAcrossHistory(hs, (it) => (it.id === id ? { ...it, title } : it)),
     );
     // Use the current tab's model if available, else fall back to whatever
     // the chats state has, else the active model. created_at is ignored on
@@ -2310,7 +2350,7 @@ function App() {
     if (!isEphemeralChat(id)) {
       invoke('db_delete_chat', { id }).catch(console.error);
     }
-    setHistory(hs => hs.map(s => ({ ...s, items: s.items.filter(c => c.id !== id) })).filter(s => s.items.length));
+    setHistory(hs => removeChatFromHistory(hs, id));
     setTabs(ts => {
       const next = ts.filter(t => t.id !== id);
       if (id === activeTab && next.length) setActiveTab(next[0].id);
@@ -2350,7 +2390,11 @@ function App() {
     ephemeralChatIdsRef.current.clear();
     const freshId = genId();
     const freshModel = readPersistedComposerModel();
-    setHistory([]);
+    setHistory(EMPTY_HISTORY);
+    // Groups themselves survive a "clear chats" — db_clear_all_chats only
+    // wipes the chats table. Reloading from disk keeps the in-memory list
+    // in sync with reality (in particular, FK SET NULL on fresh installs
+    // would have already detached every chat by the time we land here).
     setTabs([{ id: freshId, title: 'New chat', model: freshModel }]);
     setChats({ [freshId]: { id: freshId, title: 'New chat', messages: [], loaded: true } });
     setActiveTab(freshId);
@@ -2360,12 +2404,96 @@ function App() {
     setAttachedPromptsByChat({});
   };
 
+  // ── Chat groups (sidebar folders) ──────────────────────────────────────
+  //
+  // All four handlers below mutate via the Rust commands first, then
+  // refresh from the backend rather than splicing in-memory state. The
+  // refresh is cheap (one SELECT each for chats + groups, both indexed)
+  // and keeps the sidebar exactly in lockstep with the DB on the next
+  // tick — no chance of a stale group_id pointing to a deleted group.
+  //
+  // Concurrency note: every handler awaits the invoke before touching
+  // setState. If two handlers fire in quick succession (e.g. user
+  // creates a group then drops a chat onto it before the first refresh
+  // returns), they serialize cleanly — each is a fire-and-await
+  // sequence, and React batches the setState pairs naturally.
+  const reloadHistoryAndGroups = async () => {
+    try {
+      const [chatRows, groupRows] = await Promise.all([
+        invoke('db_load_chats'),
+        invoke('db_load_groups'),
+      ]);
+      setGroups(groupRows || []);
+      setHistory(groupChatsForSidebar(chatRows, groupRows));
+    } catch (e) {
+      console.error('reloadHistoryAndGroups failed:', e);
+    }
+  };
+
+  // Create a new group. Caller supplies the display name; id is generated
+  // here so the group exists immediately in the sidebar after the refresh
+  // (no UI-side waiting on a server-assigned id).
+  const createGroup = async (name) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return null;
+    const id = genId();
+    try {
+      await invoke('db_create_group', { id, name: trimmed });
+      await reloadHistoryAndGroups();
+      return id;
+    } catch (e) {
+      console.error('db_create_group failed:', e);
+      return null;
+    }
+  };
+
+  const renameGroup = async (id, name) => {
+    const trimmed = (name || '').trim();
+    if (!id || !trimmed) return;
+    try {
+      await invoke('db_rename_group', { id, name: trimmed });
+      await reloadHistoryAndGroups();
+    } catch (e) {
+      console.error('db_rename_group failed:', e);
+    }
+  };
+
+  // Delete a group. Chats are NOT deleted — `db_delete_group` unfiles them
+  // (sets group_id NULL) inside a transaction so the UI never sees a chat
+  // pointing at a missing group.
+  const deleteGroup = async (id) => {
+    if (!id) return;
+    try {
+      await invoke('db_delete_group', { id });
+      await reloadHistoryAndGroups();
+    } catch (e) {
+      console.error('db_delete_group failed:', e);
+    }
+  };
+
+  // Move a chat into a group, or unfile it (pass null for `groupId`).
+  // The single write path for chats.group_id from the UI side.
+  const moveChatToGroup = async (chatId, groupId) => {
+    if (!chatId) return;
+    try {
+      await invoke('db_move_chat_to_group', {
+        chatId,
+        groupId: groupId || null,
+      });
+      await reloadHistoryAndGroups();
+    } catch (e) {
+      console.error('db_move_chat_to_group failed:', e);
+    }
+  };
+
   // Total persisted-chat count, used for the Danger-zone confirm copy
   // ("Delete N chats?"). history is the grouped-by-date sidebar shape;
   // sum item counts across sections. Ephemeral chats aren't in history
   // so they're not counted — matches the user's mental model that
   // "history" is the persisted list they see in the sidebar.
-  const totalChatCount = history.reduce((n, s) => n + (s.items?.length || 0), 0);
+  const totalChatCount =
+    (history.groups || []).reduce((n, g) => n + (g.items?.length || 0), 0) +
+    (history.dateSections || []).reduce((n, s) => n + (s.items?.length || 0), 0);
 
   const activeTabModelId = tabs.find(t => t.id === activeTab)?.model || modelId;
   const tabModel = MODELS_BY_ID[activeTabModelId] || { id: activeTabModelId, name: activeTabModelId, color: '#9bbf83' };
@@ -2423,9 +2551,10 @@ function App() {
 
   const openChatInTab = async (c) => {
     // Multi-model tabs carry their tabType + models list through to the
-    // tab/chat state. groupChatsByDate parses multiModels from JSON into
-    // an array on the sidebar item, so by the time we get here `c.models`
-    // is already a string[] (or null/undefined for single-mode chats).
+    // tab/chat state. groupChatsForSidebar parses multiModels from JSON
+    // into an array on the sidebar item, so by the time we get here
+    // `c.models` is already a string[] (or null/undefined for single-
+    // mode chats).
     const tabType = c.tabType || null;
     const models = Array.isArray(c.models) ? c.models : null;
     if (!tabs.find(t => t.id === c.id)) {
@@ -2569,15 +2698,10 @@ function App() {
       if (!id) return;
       // Prepend to "Today" — same shape as a new chat born in the composer.
       setHistory(hs => {
-        if (hs.some(s => s.items.some(c => c.id === id))) return hs;
-        const newItem = { id, title, model, when: 'now' };
-        const todayIdx = hs.findIndex(s => s.section === 'Today');
-        if (todayIdx >= 0) {
-          return hs.map((s, i) =>
-            i === todayIdx ? { ...s, items: [newItem, ...s.items] } : s
-          );
-        }
-        return [{ section: 'Today', items: [newItem] }, ...hs];
+        if (sidebarContainsChatId(hs, id)) return hs;
+        return prependChatToToday(hs, {
+          id, title, model, when: 'now', groupId: null,
+        });
       });
       openChatInTabRef.current?.({ id, title, model });
       // Carry the overlay's attached prompt into the new chat's slot
@@ -3134,6 +3258,16 @@ function App() {
                 onNewPrivate={newPrivateTab}
                 onNewCompare={newCompareTab}
                 width={sidebarWidth}
+                // ── Group/folder management ────────────────────────────
+                // `groups` is the raw chat_groups list (id + name), used
+                // by the right-click "Move to group" submenu so it can
+                // list every group, not just ones with items in view.
+                groups={groups}
+                onCreateGroup={(name) => createGroup(name)}
+                onRenameGroup={renameGroup}
+                onDeleteGroup={deleteGroup}
+                onMoveChatToGroup={moveChatToGroup}
+                onRename={renameChat}
                 // Full-text hits + click handler. The hit carries chatModel
                 // so we don't have to look it up from history (which is
                 // grouped/filtered and awkward to scan).

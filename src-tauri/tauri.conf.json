@@ -18,7 +18,8 @@
         "center": true,
         "label": "main",
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "hiddenTitle": true,
+        "dragDropEnabled": false
       },
       {
         "label": "overlay",

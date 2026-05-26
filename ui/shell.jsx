@@ -115,36 +115,186 @@ function TitleBar({
 }
 
 // ─── Sidebar ────────────────────────────────────────────────
+//
+// History layout (top → bottom):
+//   • Search box
+//   • New chat / private / compare buttons
+//   • Groups (user-defined folders), with [+ New group] button below
+//   • An "Ungrouped" drop-zone (only while a drag is in progress, and only
+//     if at least one group exists — otherwise dragging a chat would have
+//     nowhere to go)
+//   • Date sections (Today / Yesterday / …) for ungrouped chats
+//   • Message-content hits from full-text search (only when searching)
+//
+// `chats` is the new `{ groups, dateSections }` shape from
+// `groupChatsForSidebar` in utils.js. Filtering by the search query is
+// done across BOTH lists; empty groups stay visible (so a just-created
+// folder doesn't disappear before the user files anything into it).
 function Sidebar({
   chats,
   activeId,
   onPick,
   onDelete,
+  onRename,
   query,
   onQuery,
   onNew,
   onNewPrivate,
   onNewCompare,
   width,
+  // Group management. `groups` is the raw [{id, name}, ...] list — the
+  // context menu needs every group, not just ones with items in view.
+  groups = [],
+  onCreateGroup,
+  onRenameGroup,
+  onDeleteGroup,
+  onMoveChatToGroup,
   // Full-text-search hits (from messages_fts MATCH bm25). Empty when no
   // query is active. Owner: App in main.jsx, populated by a debounced
   // invoke to the `search_chats` Rust command.
   messageHits = [],
   onPickHit,
 }) {
+  // ── Search filter ──
+  // Apply the query across BOTH groups and dateSections in one pass. Empty
+  // groups are filtered out *while searching only* (showing an empty
+  // group during a search would imply "no results" with extra noise).
   const filtered = useMemo(() => {
     if (!query.trim()) return chats;
     const q = query.toLowerCase();
-    return chats
-      .map((s) => ({
-        ...s,
-        items: s.items.filter((c) => c.title.toLowerCase().includes(q)),
-      }))
-      .filter((s) => s.items.length);
+    const matches = (c) => c.title.toLowerCase().includes(q);
+    return {
+      groups: (chats.groups || [])
+        .map((g) => ({ ...g, items: g.items.filter(matches) }))
+        .filter((g) => g.items.length),
+      dateSections: (chats.dateSections || [])
+        .map((s) => ({ ...s, items: s.items.filter(matches) }))
+        .filter((s) => s.items.length),
+    };
   }, [chats, query]);
   const searching = !!query.trim();
-  const anyResults =
-    filtered.some((s) => s.items.length > 0) || messageHits.length > 0;
+  const totalItems =
+    (filtered.groups || []).reduce((n, g) => n + g.items.length, 0) +
+    (filtered.dateSections || []).reduce((n, s) => n + s.items.length, 0);
+  const anyResults = totalItems > 0 || messageHits.length > 0;
+
+  // ── Collapsed-state per group (localStorage-backed) ──
+  // Persist across launches so a user's collapsed Research folder stays
+  // collapsed after a restart. Keyed by group id; missing key = expanded.
+  // We inline the read/write (rather than calling usePersistedState) to
+  // avoid the script-load-order trap: this file loads before main.jsx
+  // where usePersistedState is defined.
+  const COLLAPSE_LS_KEY = "ekorbia.groupCollapsed";
+  const [collapsedGroups, setCollapsedGroups] = useState(() => {
+    try {
+      const raw = localStorage.getItem(COLLAPSE_LS_KEY);
+      if (raw !== null) return JSON.parse(raw) || {};
+    } catch {}
+    return {};
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLLAPSE_LS_KEY, JSON.stringify(collapsedGroups));
+    } catch {}
+  }, [collapsedGroups]);
+  const toggleCollapse = (groupId) =>
+    setCollapsedGroups((m) => ({ ...m, [groupId]: !m[groupId] }));
+
+  // ── Right-click context menu state ──
+  // Single instance at a time — opening a new menu closes any prior.
+  // `chat` is the sidebar-item (with id, title, groupId, …); `x`/`y` come
+  // from the right-click coords (viewport-relative for `position: fixed`).
+  const [rowMenu, setRowMenu] = useState(null);
+
+  // ── Group-name modal state ──
+  // `mode` is 'create' or 'rename'. For rename, `group` carries the
+  // existing row so the input pre-fills with its current name.
+  const [nameModal, setNameModal] = useState(null);
+  const openCreateGroupModal = () =>
+    setNameModal({ mode: "create", initial: "" });
+  const openRenameGroupModal = (group) =>
+    setNameModal({ mode: "rename", group, initial: group.name });
+
+  // ── Chat rename + chat delete modal states ──
+  // window.prompt() / window.confirm() are blocked in Tauri's WKWebView
+  // (return null silently), so all naming + confirming goes through
+  // proper modals. `renameChatModal.chat` carries the chat row so the
+  // input pre-fills with its current title; `confirmDeleteChat.chat`
+  // carries the row so the body copy can name it.
+  const [renameChatModal, setRenameChatModal] = useState(null);
+  const [confirmDeleteChat, setConfirmDeleteChat] = useState(null);
+
+  // ── Action handlers wired into the row context menu ──
+  const handleMenuMove = (groupId) => {
+    if (!rowMenu) return;
+    const chatId = rowMenu.chat.id;
+    setRowMenu(null);
+    onMoveChatToGroup && onMoveChatToGroup(chatId, groupId);
+  };
+  const handleMenuNewGroup = () => {
+    if (!rowMenu) return;
+    const chatId = rowMenu.chat.id;
+    setRowMenu(null);
+    // Open the name modal; on save, create the group and move the chat
+    // into it as a single user-perceived action.
+    setNameModal({
+      mode: "create",
+      initial: "",
+      andMoveChatId: chatId,
+    });
+  };
+  const handleMenuRename = () => {
+    if (!rowMenu) return;
+    const chat = rowMenu.chat;
+    setRowMenu(null);
+    setRenameChatModal({ chat });
+  };
+  const handleMenuDelete = () => {
+    if (!rowMenu) return;
+    const chat = rowMenu.chat;
+    setRowMenu(null);
+    setConfirmDeleteChat({ chat });
+  };
+  const handleMenuOpen = () => {
+    if (!rowMenu) return;
+    const chat = rowMenu.chat;
+    setRowMenu(null);
+    onPick(chat);
+  };
+
+  // ── Name-modal submit ──
+  // Wraps create vs. rename in one place so the modal stays dumb. The
+  // create-then-move case (from the "+ New group…" context-menu item)
+  // chains the two ops in sequence.
+  const handleNameModalSubmit = async (name) => {
+    const m = nameModal;
+    setNameModal(null);
+    if (!m) return;
+    if (m.mode === "create") {
+      const newId = onCreateGroup ? await onCreateGroup(name) : null;
+      if (newId && m.andMoveChatId && onMoveChatToGroup) {
+        await onMoveChatToGroup(m.andMoveChatId, newId);
+      }
+    } else if (m.mode === "rename") {
+      onRenameGroup && onRenameGroup(m.group.id, name);
+    }
+  };
+
+  const handleRenameChatSubmit = (newTitle) => {
+    const m = renameChatModal;
+    setRenameChatModal(null);
+    if (!m) return;
+    if (newTitle && newTitle !== m.chat.title) {
+      onRename && onRename(m.chat.id, newTitle);
+    }
+  };
+
+  const handleConfirmDeleteChat = () => {
+    const m = confirmDeleteChat;
+    setConfirmDeleteChat(null);
+    if (!m) return;
+    onDelete(m.chat.id);
+  };
 
   return (
     <aside
@@ -286,22 +436,19 @@ function Sidebar({
           padding: "4px 0 12px",
         }}
       >
-        {filtered.map((section) => (
-          <div key={section.section} style={{ marginBottom: 6 }}>
-            <div
-              style={{
-                padding: "8px 14px 4px",
-                fontFamily: T.mono,
-                fontSize: 10,
-                fontWeight: 500,
-                color: T.fg3,
-                textTransform: "uppercase",
-                letterSpacing: 0.6,
-              }}
-            >
-              {section.section}
-            </div>
-            {section.items.map((c) => {
+        {/* ── Groups (user-defined folders) ── */}
+        {(filtered.groups || []).map((g) => (
+          <GroupSection
+            key={g.id}
+            group={g}
+            collapsed={!!collapsedGroups[g.id]}
+            onToggle={() => toggleCollapse(g.id)}
+            onRename={() => openRenameGroupModal(g)}
+            onDelete={() => onDeleteGroup && onDeleteGroup(g.id)}
+            onDropChat={(chatId) =>
+              onMoveChatToGroup && onMoveChatToGroup(chatId, g.id)
+            }
+            renderChild={(c) => {
               const active = c.id === activeId;
               const model = MODELS_BY_ID[c.model];
               return (
@@ -312,12 +459,104 @@ function Sidebar({
                   active={active}
                   onClick={() => onPick(c)}
                   onDelete={() => onDelete(c.id)}
+                  onContextMenu={(e) =>
+                    setRowMenu({ x: e.clientX, y: e.clientY, chat: c })
+                  }
                   query={query}
                 />
               );
-            })}
-          </div>
+            }}
+          />
         ))}
+
+        {/* [+ New group] — always visible at the bottom of the groups
+            stack so the affordance is discoverable on first launch even
+            before any groups exist (matches default #3 in the plan). */}
+        {!searching && onCreateGroup && (
+          <button
+            onClick={openCreateGroupModal}
+            data-new-group
+            style={{
+              margin: "2px 8px 10px",
+              padding: "5px 10px",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              background: "transparent",
+              border: `1px dashed ${T.border}`,
+              borderRadius: 4,
+              color: T.fg3,
+              fontFamily: T.mono,
+              fontSize: 10.5,
+              cursor: "pointer",
+              width: "calc(100% - 16px)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = T.fg1;
+              e.currentTarget.style.borderColor = T.borderStrong;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = T.fg3;
+              e.currentTarget.style.borderColor = T.border;
+            }}
+          >
+            <I.Plus size={9} />
+            <span>New group</span>
+          </button>
+        )}
+
+        {/* ── Date sections (ungrouped chats), wrapped in a permanent
+            drop target ──
+            This wrapper is ALWAYS rendered (even when there are no
+            ungrouped chats), so the DOM doesn't shift mid-drag. That
+            shift was the root cause of the "can't drag ungrouped → group"
+            bug: WebKit cancels an in-flight drag when the source's
+            preceding DOM is mutated, and a conditionally-rendered
+            ungrouped-drop-zone above the source's date section triggered
+            exactly that mutation on drag-start.
+            Drops here move the chat to NULL group (unfile). */}
+        <UngroupedSectionsDropTarget
+          hasGroups={(chats.groups || []).length > 0}
+          onDropChat={(chatId) =>
+            onMoveChatToGroup && onMoveChatToGroup(chatId, null)
+          }
+        >
+          {(filtered.dateSections || []).map((section) => (
+            <div key={section.section} style={{ marginBottom: 6 }}>
+              <div
+                style={{
+                  padding: "8px 14px 4px",
+                  fontFamily: T.mono,
+                  fontSize: 10,
+                  fontWeight: 500,
+                  color: T.fg3,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.6,
+                }}
+              >
+                {section.section}
+              </div>
+              {section.items.map((c) => {
+                const active = c.id === activeId;
+                const model = MODELS_BY_ID[c.model];
+                return (
+                  <ChatRow
+                    key={c.id}
+                    chat={c}
+                    model={model}
+                    active={active}
+                    onClick={() => onPick(c)}
+                    onDelete={() => onDelete(c.id)}
+                    onContextMenu={(e) =>
+                      setRowMenu({ x: e.clientX, y: e.clientY, chat: c })
+                    }
+                    query={query}
+                  />
+                );
+              })}
+            </div>
+          ))}
+        </UngroupedSectionsDropTarget>
         {/* Message-content hits (full-text search). Only rendered while a */}
         {/* query is active. Sits below title-matched chats so the user can */}
         {/* see the high-confidence matches (titles) first, then dig into   */}
@@ -365,7 +604,7 @@ function Sidebar({
             fires when the user has never created a chat (or has deleted
             them all). Shown only when not searching, so a typo-search on
             a fresh install still gets the search-miss copy above. */}
-        {!searching && filtered.every((s) => s.items.length === 0) && (
+        {!searching && totalItems === 0 && (
           <div
             style={{
               padding: "24px 16px",
@@ -386,7 +625,785 @@ function Sidebar({
           </div>
         )}
       </div>
+
+      {/* Right-click context menu — appears over everything (z-index 50).
+          The fixed positioning is anchored at the click coords; the menu
+          handles its own click-outside / Esc dismiss. */}
+      {rowMenu && (
+        <ChatContextMenu
+          x={rowMenu.x}
+          y={rowMenu.y}
+          chat={rowMenu.chat}
+          groups={groups}
+          onOpen={handleMenuOpen}
+          onRename={handleMenuRename}
+          onDelete={handleMenuDelete}
+          onMove={handleMenuMove}
+          onNewGroup={handleMenuNewGroup}
+          onClose={() => setRowMenu(null)}
+        />
+      )}
+
+      {/* Group-name modal — shared for both "create new group" and
+          "rename group". Mode-driven so the title + button copy change
+          to match. */}
+      {nameModal && (
+        <NameModal
+          title={nameModal.mode === "rename" ? "Rename group" : "New group"}
+          confirmLabel={nameModal.mode === "rename" ? "Save" : "Create"}
+          initial={nameModal.initial}
+          placeholder="Group name"
+          onCancel={() => setNameModal(null)}
+          onSubmit={handleNameModalSubmit}
+        />
+      )}
+
+      {/* Chat-rename modal — replaces the Tauri-blocked window.prompt(). */}
+      {renameChatModal && (
+        <NameModal
+          title="Rename chat"
+          confirmLabel="Save"
+          initial={renameChatModal.chat.title}
+          placeholder="Chat title"
+          onCancel={() => setRenameChatModal(null)}
+          onSubmit={handleRenameChatSubmit}
+        />
+      )}
+
+      {/* Delete-chat confirm — destructive action, requires explicit
+          confirmation rather than firing on the bare menu click. */}
+      {confirmDeleteChat && (
+        <ConfirmModal
+          title="Delete chat?"
+          body={
+            <span>
+              <strong>{confirmDeleteChat.chat.title || "This chat"}</strong>{" "}
+              and its messages will be permanently removed. This can't be
+              undone.
+            </span>
+          }
+          cancelLabel="Cancel"
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setConfirmDeleteChat(null)}
+          onConfirm={handleConfirmDeleteChat}
+        />
+      )}
     </aside>
+  );
+}
+
+// ─── GroupSection ───────────────────────────────────────────
+//
+// One collapsible folder header + its child chats. Drops a chat onto the
+// header (or anywhere in the body) by listening for `text/x-ekorbia-chat-id`
+// in the dataTransfer. Drop-target hover state highlights the header so
+// the user can see what they're about to commit to.
+//
+// Children are rendered via the `renderChild` prop so the Sidebar stays
+// the single source of truth for ChatRow wiring (onPick / onDelete /
+// onContextMenu / drag handlers). Keeps GroupSection presentation-only.
+function GroupSection({
+  group,
+  collapsed,
+  onToggle,
+  onRename,
+  onDelete,
+  onDropChat,
+  renderChild,
+}) {
+  const [dropHover, setDropHover] = useState(false);
+  const [headerHover, setHeaderHover] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuBtnRef = useRef(null);
+
+  // Drop-target plumbing. preventDefault on dragover is required for the
+  // drop event to fire at all (HTML5 D&D quirk). We DON'T gate on the
+  // dataTransfer.types list here — WebKit historically returned a
+  // DOMStringList (no .includes()) and also hides custom MIME types from
+  // `types` during dragover for security, so a check would false-negative
+  // and the drop would never enable. We accept all drags at dragover time
+  // and filter for our custom MIME at drop time instead, where the
+  // dataTransfer is fully readable.
+  const onDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (!dropHover) setDropHover(true);
+  };
+  const onDragLeave = () => setDropHover(false);
+  const onDrop = (e) => {
+    setDropHover(false);
+    const chatId = e.dataTransfer.getData("text/x-ekorbia-chat-id");
+    if (chatId) {
+      e.preventDefault();
+      onDropChat && onDropChat(chatId);
+    }
+  };
+
+  return (
+    <div
+      style={{ marginBottom: 4 }}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {/* Folder header — chevron + 📁 + name + (count) + overflow menu */}
+      <div
+        onMouseEnter={() => setHeaderHover(true)}
+        onMouseLeave={() => setHeaderHover(false)}
+        style={{
+          margin: "0 6px",
+          padding: "4px 8px",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          background: dropHover
+            ? `${T.amber}33`
+            : headerHover
+              ? T.bg2
+              : "transparent",
+          border: dropHover
+            ? `1px solid ${T.amber}`
+            : "1px solid transparent",
+          borderRadius: 4,
+          cursor: "pointer",
+          fontFamily: T.mono,
+          fontSize: 10.5,
+          color: T.fg1,
+          textTransform: "uppercase",
+          letterSpacing: 0.4,
+          userSelect: "none",
+        }}
+        onClick={onToggle}
+        data-group-header
+        data-group-id={group.id}
+      >
+        <span style={{ fontSize: 9, color: T.fg2, width: 8, textAlign: "center" }}>
+          {collapsed ? "▶" : "▼"}
+        </span>
+        <span style={{ color: T.fg2 }}>📁</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+          {group.name}
+        </span>
+        <span style={{ color: T.fg3, fontSize: 10 }}>
+          {group.items.length}
+        </span>
+        {/* Overflow menu (rename / delete). Hidden until hover so the
+            row stays clean in the resting state. */}
+        {headerHover && (
+          <button
+            ref={menuBtnRef}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((v) => !v);
+            }}
+            title="Group actions"
+            style={{
+              width: 14,
+              height: 14,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              border: "none",
+              background: "transparent",
+              color: T.fg3,
+              cursor: "pointer",
+              padding: 0,
+              fontSize: 12,
+              lineHeight: 1,
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
+            onMouseLeave={(e) => (e.currentTarget.style.color = T.fg3)}
+          >
+            ⋯
+          </button>
+        )}
+      </div>
+
+      {/* Overflow menu pop-out. Positioned absolutely below the button so
+          it doesn't shift layout when it appears. */}
+      {menuOpen && menuBtnRef.current && (
+        <GroupOverflowMenu
+          anchor={menuBtnRef.current}
+          onRename={() => {
+            setMenuOpen(false);
+            onRename();
+          }}
+          onDelete={() => {
+            setMenuOpen(false);
+            onDelete();
+          }}
+          onClose={() => setMenuOpen(false)}
+        />
+      )}
+
+      {/* Folder body — children when expanded. When collapsed, the drop
+          target still works (covers the header), so dropping a chat onto
+          a collapsed folder files it without expanding. */}
+      {!collapsed && (
+        <div style={{ paddingTop: 2 }}>
+          {group.items.length === 0 ? (
+            <div
+              style={{
+                margin: "2px 14px 4px",
+                padding: "4px 0",
+                color: T.fg3,
+                fontFamily: T.sans,
+                fontSize: 11,
+                fontStyle: "italic",
+              }}
+            >
+              Empty — drag a chat here
+            </div>
+          ) : (
+            group.items.map((c) => renderChild(c))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── GroupOverflowMenu ──────────────────────────────────────
+// Small popover anchored under a group's "⋯" button. Two items: Rename
+// and Delete. Dismisses via a transparent backdrop (catches outside
+// clicks bulletproof) and via Esc.
+//
+// Backdrop pattern explanation: rather than attach a `mousedown` listener
+// to document and check `e.target` containment (which races with React
+// re-renders and has subtle ordering bugs vs. menu-item clicks), we
+// render a full-viewport transparent div at one z-index below the menu.
+// Any click that lands on the backdrop is by definition "outside the
+// menu" — backdrop's onClick calls onClose. Clicks on menu items hit
+// the menu (which is above the backdrop), so they fire normally and the
+// item handler runs.
+function GroupOverflowMenu({ anchor, onRename, onDelete, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Anchor positioning: read the button's rect each render so the menu
+  // stays glued to it even if the sidebar scrolls.
+  const rect = anchor.getBoundingClientRect();
+  return (
+    <Fragment>
+      <div
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 55,
+          background: "transparent",
+        }}
+      />
+      <div
+        style={{
+          position: "fixed",
+          top: rect.bottom + 4,
+          left: rect.left - 100,
+          zIndex: 60,
+          background: T.bg2,
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 5,
+          padding: 4,
+          minWidth: 120,
+          boxShadow: "0 8px 20px rgba(0,0,0,0.4)",
+        }}
+      >
+        <MenuItem onClick={onRename}>Rename group</MenuItem>
+        <MenuItem onClick={onDelete} danger>
+          Delete group
+        </MenuItem>
+      </div>
+    </Fragment>
+  );
+}
+
+// ─── UngroupedSectionsDropTarget ────────────────────────────
+//
+// Permanent wrapper around the date sections that acts as a drop target
+// for "unfile" (move chat to NULL group). Always rendered — never
+// conditionally based on drag state. This is load-bearing for drag
+// correctness: HTML5 D&D cancels the in-flight drag whenever the
+// source's preceding-DOM gets shifted, and an earlier version that
+// only mounted a drop zone WHILE dragging triggered exactly that shift
+// on drag-start from a date-section chat. The cure is to never mutate
+// the DOM around the source on dragstart at all.
+//
+// Visual: invisible in the resting state (renders as a plain wrapper
+// around the existing date sections). When a drag enters during which
+// the user is filed-into-a-group → ungroup intent, the wrapper picks up
+// a soft amber background to confirm the drop will land. When there
+// are zero ungrouped chats but the user has groups and is dragging out
+// of one, we surface a small "Drop here to ungroup" hint so the
+// affordance is still discoverable.
+function UngroupedSectionsDropTarget({ hasGroups, onDropChat, children }) {
+  const [hover, setHover] = useState(false);
+  // See GroupSection.onDragOver for why we don't gate on dataTransfer
+  // types here — WebKit hides custom MIME type names during dragover.
+  const onDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (!hover) setHover(true);
+  };
+  const onDragLeave = () => setHover(false);
+  const onDrop = (e) => {
+    setHover(false);
+    const chatId = e.dataTransfer.getData("text/x-ekorbia-chat-id");
+    if (chatId) {
+      e.preventDefault();
+      onDropChat && onDropChat(chatId);
+    }
+  };
+  // React.Children.count is the cheapest "are there any rendered date
+  // sections?" check. When there are zero AND the user has groups, we
+  // surface a thin hint so the drop affordance stays discoverable —
+  // otherwise the wrapper would be completely empty (just whitespace).
+  const dateSectionsCount = React.Children.count(children);
+  const showEmptyHint = hasGroups && dateSectionsCount === 0;
+  return (
+    <div
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      data-ungrouped-dropzone
+      style={{
+        margin: "0 6px 8px",
+        padding: "2px 0",
+        background: hover ? `${T.amber}22` : "transparent",
+        border: hover
+          ? `1px dashed ${T.amber}`
+          : "1px dashed transparent",
+        borderRadius: 4,
+        minHeight: 24,
+        transition: "background-color 120ms",
+      }}
+    >
+      {showEmptyHint && (
+        <div
+          style={{
+            padding: "10px 8px",
+            color: hover ? T.fg1 : T.fg3,
+            fontFamily: T.mono,
+            fontSize: 10.5,
+            textAlign: "center",
+          }}
+        >
+          Drop here to ungroup
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+// ─── ChatContextMenu ────────────────────────────────────────
+// Fixed-position menu anchored at the right-click coordinates. Items:
+// Open, Rename, divider, Move-to-group list (with current group marked,
+// "(none)" entry to unfile, "+ New group…" to create), divider, Delete.
+//
+// Dismisses on click-outside, Esc, or any menu action. Clicks inside
+// the menu must stopPropagation to avoid the document listener closing
+// before the item handler runs.
+function ChatContextMenu({
+  x, y, chat, groups,
+  onOpen, onRename, onDelete, onMove, onNewGroup, onClose,
+}) {
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Clamp the menu within the viewport so a right-click near the right/
+  // bottom edge doesn't render off-screen. 200px is the wider-than-most
+  // estimate of the menu's natural width.
+  const menuW = 200;
+  const menuH = 220;
+  const clampedX = Math.min(x, window.innerWidth - menuW - 8);
+  const clampedY = Math.min(y, window.innerHeight - menuH - 8);
+
+  // Backdrop pattern: a transparent full-viewport div at z-index 49 catches
+  // any click that isn't on a menu item; its onClick closes the menu. The
+  // menu itself sits at z-index 50 so item clicks land on the menu (not
+  // the backdrop) and fire normally. Bulletproof vs. the older
+  // document.addEventListener('mousedown') approach, which raced with
+  // React re-renders and could close the menu before the item's click
+  // event fired.
+  return (
+    <Fragment>
+      <div
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 49,
+          background: "transparent",
+        }}
+      />
+      <div
+        role="menu"
+        data-chat-context-menu
+        style={{
+          position: "fixed",
+          top: clampedY,
+          left: clampedX,
+          zIndex: 50,
+          background: T.bg2,
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 5,
+          padding: 4,
+          minWidth: menuW,
+          maxHeight: "70vh",
+          overflowY: "auto",
+          boxShadow: "0 8px 20px rgba(0,0,0,0.4)",
+          fontFamily: T.sans,
+          fontSize: 12,
+        }}
+      >
+      <MenuItem onClick={onOpen}>Open</MenuItem>
+      <MenuItem onClick={onRename}>Rename…</MenuItem>
+      <MenuDivider />
+      <MenuLabel>Move to group</MenuLabel>
+      <MenuItem
+        onClick={() => onMove(null)}
+        selected={!chat.groupId}
+        indent
+      >
+        (none)
+      </MenuItem>
+      {(groups || []).map((g) => (
+        <MenuItem
+          key={g.id}
+          onClick={() => onMove(g.id)}
+          selected={chat.groupId === g.id}
+          indent
+        >
+          {g.name}
+        </MenuItem>
+      ))}
+      <MenuItem onClick={onNewGroup} indent>
+        <span style={{ color: T.fg2 }}>+ New group…</span>
+      </MenuItem>
+      <MenuDivider />
+      <MenuItem onClick={onDelete} danger>
+        Delete chat
+      </MenuItem>
+      </div>
+    </Fragment>
+  );
+}
+
+// Generic single menu item — used by both the row context menu and the
+// group overflow menu. `selected` marks the current state with a leading
+// checkmark glyph; `danger` colours destructive actions red on hover.
+function MenuItem({ children, onClick, selected, danger, indent }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      role="menuitem"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick && onClick();
+      }}
+      style={{
+        padding: indent ? "4px 8px 4px 24px" : "4px 8px",
+        borderRadius: 3,
+        cursor: "pointer",
+        color: danger
+          ? hover
+            ? T.red || "#d87e7e"
+            : T.fg1
+          : hover
+            ? T.fg
+            : T.fg1,
+        background: hover ? T.bg3 : "transparent",
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
+      {selected ? (
+        <span style={{ width: 12, color: T.amber, fontSize: 11 }}>✓</span>
+      ) : indent ? (
+        <span style={{ width: 12 }} />
+      ) : null}
+      <span style={{ flex: 1 }}>{children}</span>
+    </div>
+  );
+}
+
+function MenuDivider() {
+  return (
+    <div
+      style={{
+        height: 1,
+        margin: "4px 0",
+        background: T.border,
+      }}
+    />
+  );
+}
+
+function MenuLabel({ children }) {
+  return (
+    <div
+      style={{
+        padding: "4px 8px 2px",
+        color: T.fg3,
+        fontFamily: T.mono,
+        fontSize: 9.5,
+        textTransform: "uppercase",
+        letterSpacing: 0.5,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ─── NameModal ──────────────────────────────────────────────
+// Shared single-input modal for naming things — used here for:
+//   • Create group  (title="New group",   confirm="Create")
+//   • Rename group  (title="Rename group", confirm="Save")
+//   • Rename chat   (title="Rename chat",  confirm="Save")
+//
+// window.prompt() is the obvious alternative, BUT Tauri's WKWebView
+// disables it (returns null silently). This modal is the substitute.
+//
+// Submits on Enter; cancels on Esc. Pre-fills with `initial` and selects
+// the text so the user can type-to-replace. Trims input and refuses
+// empty submissions (button greyed; Enter is a no-op).
+function NameModal({
+  title,
+  confirmLabel,
+  initial,
+  placeholder,
+  onCancel,
+  onSubmit,
+}) {
+  const [name, setName] = useState(initial || "");
+  const inputRef = useRef(null);
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, []);
+  const trimmed = name.trim();
+  const submit = () => {
+    if (!trimmed) return;
+    onSubmit(trimmed);
+  };
+  return (
+    <div
+      role="dialog"
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1100,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <div
+        style={{
+          width: 320,
+          padding: 16,
+          background: T.bg1,
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 8,
+          fontFamily: T.sans,
+          color: T.fg,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+        }}
+      >
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
+          {title}
+        </div>
+        <input
+          ref={inputRef}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+            else if (e.key === "Escape") onCancel();
+          }}
+          placeholder={placeholder || ""}
+          spellCheck={false}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "6px 8px",
+            background: T.bg2,
+            border: `1px solid ${T.border}`,
+            borderRadius: 5,
+            color: T.fg,
+            fontFamily: T.mono,
+            fontSize: 12,
+            marginBottom: 12,
+          }}
+        />
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: "5px 12px",
+              background: "transparent",
+              border: `1px solid ${T.border}`,
+              borderRadius: 5,
+              color: T.fg2,
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!trimmed}
+            style={{
+              padding: "5px 14px",
+              background: trimmed ? T.amber : T.bg3,
+              border: "none",
+              borderRadius: 5,
+              color: trimmed ? T.bg0 : T.fg3,
+              cursor: trimmed ? "pointer" : "not-allowed",
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ConfirmModal ───────────────────────────────────────────
+// Generic confirm dialog. Title + body + Cancel/Confirm buttons.
+// `danger` styles the confirm button red. Used by the chat-row context
+// menu's "Delete chat" so an accidental click can't wipe a conversation.
+//
+// Esc cancels; Enter confirms. The confirm button auto-focuses so the
+// user can hit Enter to follow through quickly — but the default action
+// (button focus, Enter) is intentionally on the *confirm* side, not on
+// a destructive default-click while the user is mid-keystroke elsewhere.
+function ConfirmModal({
+  title,
+  body,
+  cancelLabel,
+  confirmLabel,
+  danger,
+  onCancel,
+  onConfirm,
+}) {
+  const btnRef = useRef(null);
+  useEffect(() => {
+    if (btnRef.current) btnRef.current.focus();
+    const onKey = (e) => {
+      if (e.key === "Escape") onCancel();
+      else if (e.key === "Enter") onConfirm();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel, onConfirm]);
+  return (
+    <div
+      role="dialog"
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1100,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <div
+        style={{
+          width: 360,
+          padding: 18,
+          background: T.bg1,
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 8,
+          fontFamily: T.sans,
+          color: T.fg,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+        }}
+      >
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
+          {title}
+        </div>
+        <div
+          style={{
+            fontSize: 12,
+            color: T.fg1,
+            lineHeight: 1.5,
+            marginBottom: 16,
+          }}
+        >
+          {body}
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: "5px 12px",
+              background: "transparent",
+              border: `1px solid ${T.border}`,
+              borderRadius: 5,
+              color: T.fg2,
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            {cancelLabel || "Cancel"}
+          </button>
+          <button
+            ref={btnRef}
+            onClick={onConfirm}
+            data-confirm-button
+            style={{
+              padding: "5px 14px",
+              background: danger ? (T.red || "#d87e7e") : T.amber,
+              border: "none",
+              borderRadius: 5,
+              color: T.bg0,
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            {confirmLabel || "Confirm"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -480,7 +1497,17 @@ function MessageHitRow({ hit, onClick }) {
   );
 }
 
-function ChatRow({ chat, model, active, onClick, onDelete, query }) {
+function ChatRow({
+  chat,
+  model,
+  active,
+  onClick,
+  onDelete,
+  onContextMenu,
+  onDragStart,
+  onDragEnd,
+  query,
+}) {
   const [hover, setHover] = useState(false);
   const highlight = (text) => {
     if (!query.trim()) return text;
@@ -505,11 +1532,32 @@ function ChatRow({ chat, model, active, onClick, onDelete, query }) {
       ),
     );
   };
+  // Drag source. We use a custom MIME type so unrelated drops (text, files
+  // dragged in from Finder, prompts in a future feature) don't accidentally
+  // match the GroupSection drop handler.
+  const handleDragStart = (e) => {
+    e.dataTransfer.setData("text/x-ekorbia-chat-id", chat.id);
+    e.dataTransfer.effectAllowed = "move";
+    onDragStart && onDragStart(chat.id);
+  };
+  const handleDragEnd = () => {
+    onDragEnd && onDragEnd(chat.id);
+  };
   return (
     <div
       onClick={onClick}
+      onContextMenu={(e) => {
+        if (!onContextMenu) return;
+        e.preventDefault();
+        onContextMenu(e);
+      }}
+      draggable={true}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      data-chat-row
+      data-chat-id={chat.id}
       style={{
         margin: "0 6px",
         padding: "5px 8px",

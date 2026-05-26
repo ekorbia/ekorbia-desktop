@@ -17,6 +17,7 @@ const {
   genId,
   defaultIntervalForKind,
   ekFilesGroupByPath,
+  groupChatsForSidebar,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -346,4 +347,156 @@ test("ekFilesGroupByPath: sorted by head.savedAt desc", () => {
     groups.map((g) => g.relPath),
     ["new.txt", "mid.txt", "old.txt"]
   );
+});
+
+// ── groupChatsForSidebar ─────────────────────────────────────────────────
+
+// Convenience: build a chat row with date-aware createdAt + updatedAt.
+// All tests fix `now` to a known timestamp so bucket boundaries are stable.
+function mkChat(overrides) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  return Object.assign(
+    {
+      id: "c-x",
+      title: "untitled",
+      model: "m",
+      createdAt: nowSec,
+      updatedAt: nowSec,
+      tabType: null,
+      multiModels: null,
+      groupId: null,
+    },
+    overrides
+  );
+}
+
+test("groupChatsForSidebar: no groups + no chats returns empty shape", () => {
+  const out = groupChatsForSidebar([], []);
+  assert.deepEqual(out, { groups: [], dateSections: [] });
+});
+
+test("groupChatsForSidebar: handles null/undefined args without crashing", () => {
+  // Defensive: callers may invoke this before the first db_load_groups
+  // returns. Should not throw — empty shape is the right answer.
+  assert.deepEqual(groupChatsForSidebar(null, null), {
+    groups: [],
+    dateSections: [],
+  });
+  assert.deepEqual(groupChatsForSidebar(undefined, undefined), {
+    groups: [],
+    dateSections: [],
+  });
+});
+
+test("groupChatsForSidebar: chats with no groups fall into date sections", () => {
+  const chats = [mkChat({ id: "c1", title: "today" })];
+  const out = groupChatsForSidebar(chats, []);
+  assert.equal(out.groups.length, 0);
+  assert.equal(out.dateSections.length, 1);
+  assert.equal(out.dateSections[0].section, "Today");
+  assert.equal(out.dateSections[0].items[0].id, "c1");
+});
+
+test("groupChatsForSidebar: empty groups are KEPT in output (just-created folder visibility)", () => {
+  // A user who just created "Work" must see it in the sidebar even
+  // before they've filed anything into it.
+  const out = groupChatsForSidebar([], [{ id: "g1", name: "Work" }]);
+  assert.equal(out.groups.length, 1);
+  assert.equal(out.groups[0].id, "g1");
+  assert.equal(out.groups[0].name, "Work");
+  assert.deepEqual(out.groups[0].items, []);
+});
+
+test("groupChatsForSidebar: empty DATE buckets are filtered (no 'Older' if nothing's old)", () => {
+  // Symmetric assertion to the previous test: empty groups stay, empty
+  // date buckets go. Matches the legacy groupChatsByDate behaviour.
+  const chats = [mkChat({ id: "c1", title: "today" })];
+  const out = groupChatsForSidebar(chats, []);
+  // Only the Today section, no Yesterday/Last 7 days/etc.
+  assert.equal(out.dateSections.length, 1);
+  assert.equal(out.dateSections[0].section, "Today");
+});
+
+test("groupChatsForSidebar: chats route to their group, not to date sections", () => {
+  const chats = [
+    mkChat({ id: "c1", title: "filed", groupId: "g1" }),
+    mkChat({ id: "c2", title: "loose" }),
+  ];
+  const out = groupChatsForSidebar(chats, [{ id: "g1", name: "Work" }]);
+  // c1 in the group; c2 in Today.
+  assert.equal(out.groups[0].items.length, 1);
+  assert.equal(out.groups[0].items[0].id, "c1");
+  assert.equal(out.dateSections.length, 1);
+  assert.equal(out.dateSections[0].items[0].id, "c2");
+});
+
+test("groupChatsForSidebar: chat referencing a deleted group falls through to date sections", () => {
+  // Defensive: race between db_delete_group and the sidebar render. The
+  // stale groupId on the chat row points to a group that's no longer in
+  // the list — shouldn't crash, shouldn't lose the chat. It surfaces in
+  // its date bucket until the next reload picks up the NULLed column.
+  const chats = [mkChat({ id: "c1", groupId: "ghost-group" })];
+  const out = groupChatsForSidebar(chats, []);
+  assert.equal(out.groups.length, 0);
+  assert.equal(out.dateSections.length, 1);
+  assert.equal(out.dateSections[0].items[0].id, "c1");
+});
+
+test("groupChatsForSidebar: group display order matches input order (sort_order)", () => {
+  // The Rust side returns groups already sorted by sort_order ASC. We
+  // preserve that order verbatim — no re-sort here.
+  const out = groupChatsForSidebar(
+    [],
+    [
+      { id: "g2", name: "Personal" },
+      { id: "g1", name: "Work" },
+      { id: "g3", name: "Research" },
+    ]
+  );
+  assert.deepEqual(
+    out.groups.map((g) => g.id),
+    ["g2", "g1", "g3"]
+  );
+});
+
+test("groupChatsForSidebar: groupId is exposed on each item", () => {
+  // The context menu needs this to grey out "Move to {currentGroup}".
+  const chats = [
+    mkChat({ id: "c1", groupId: "g1" }),
+    mkChat({ id: "c2" }),
+  ];
+  const out = groupChatsForSidebar(chats, [{ id: "g1", name: "Work" }]);
+  assert.equal(out.groups[0].items[0].groupId, "g1");
+  assert.equal(out.dateSections[0].items[0].groupId, null);
+});
+
+test("groupChatsForSidebar: multiModels JSON is parsed once per chat", () => {
+  // Same per-row reshape as the legacy date grouper — sidebar items get
+  // a parsed `models` array (or null on malformed/absent).
+  const chats = [
+    mkChat({
+      id: "c1",
+      tabType: "multi-pending",
+      multiModels: '["llama3","gemma4"]',
+    }),
+    mkChat({ id: "c2", multiModels: "not valid json" }),
+  ];
+  const out = groupChatsForSidebar(chats, []);
+  const items = out.dateSections[0].items;
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+  assert.deepEqual(byId.c1.models, ["llama3", "gemma4"]);
+  assert.equal(byId.c1.tabType, "multi-pending");
+  // Malformed JSON falls back to null — chat behaves as single-mode.
+  assert.equal(byId.c2.models, null);
+});
+
+test("groupChatsForSidebar: filed chat does NOT also appear in a date section", () => {
+  // Bug guard: each chat must be in EXACTLY one place across the two
+  // output lists, never both.
+  const chats = [mkChat({ id: "c1", groupId: "g1" })];
+  const out = groupChatsForSidebar(chats, [{ id: "g1", name: "Work" }]);
+  const idsInDateSections = out.dateSections.flatMap((s) =>
+    s.items.map((i) => i.id)
+  );
+  assert.ok(!idsInDateSections.includes("c1"));
 });

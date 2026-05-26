@@ -43,7 +43,26 @@ CREATE TABLE IF NOT EXISTS chats (
     -- '[''gemma4:26b'',''llama3:70b'',''qwen2.5:32b'']'. NULL for
     -- single-mode. Capped at 3 entries by the UI per the v1 column-
     -- count decision.
-    multi_models TEXT
+    multi_models TEXT,
+    -- Optional user-defined group (folder) this chat belongs to. NULL
+    -- means ungrouped — the chat shows under the date buckets at the
+    -- bottom of the sidebar. Fresh installs get the FK below; upgrade
+    -- installs only get the bare column (ALTER TABLE can't add an FK),
+    -- and `db_delete_group` does the cleanup in app code instead.
+    group_id TEXT REFERENCES chat_groups(id) ON DELETE SET NULL
+);
+
+-- ── Chat groups (user-defined folders in the sidebar) ─────────────────────
+-- Single-membership grouping: each chat row's `group_id` points to 0 or 1
+-- entry here. Groups are displayed above the date buckets in the sidebar;
+-- chats with NULL group_id fall through to the date sections. Ordering is
+-- user-controlled via `sort_order` (set by `db_reorder_groups`); ties break
+-- on creation time.
+CREATE TABLE IF NOT EXISTS chat_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -357,6 +376,25 @@ pub(crate) fn apply_migrations(conn: &Connection) -> Result<(), String> {
     add_column_if_missing(conn, "chats", "multi_models", "TEXT")?;
     add_column_if_missing(conn, "messages", "variant_group_id", "TEXT")?;
     add_column_if_missing(conn, "messages", "is_picked", "INTEGER")?;
+
+    // ── Chat groups (sidebar folders) ───────────────────────────────────
+    // The `chat_groups` table itself is in SCHEMA (CREATE TABLE IF NOT
+    // EXISTS handles both fresh and upgrade installs uniformly). The
+    // `chats.group_id` column also lives in SCHEMA — but on upgrade
+    // installs CREATE TABLE IF NOT EXISTS is a no-op, so we add the
+    // column here. Note ALTER TABLE can't add an FK, so upgrade DBs
+    // get the bare column without the ON DELETE SET NULL action; the
+    // `db_delete_group` command does that cleanup in app code instead.
+    //
+    // The index lives HERE (not in SCHEMA) per the CLAUDE.md migration-
+    // ordering gotcha: an index on a migration-added column would fail
+    // on upgrade installs if it ran in SCHEMA before this ALTER TABLE.
+    add_column_if_missing(conn, "chats", "group_id", "TEXT")?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chats_group ON chats(group_id)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -609,6 +647,7 @@ mod tests {
             "attachment_sources",
             "attachments",
             "chat_files",
+            "chat_groups",
             "chats",
             "messages",
             "messages_fts",
@@ -1140,5 +1179,277 @@ mod tests {
             picked.is_none(),
             "legacy messages default to NULL is_picked"
         );
+    }
+
+    // ── Chat groups (sidebar folders) ──────────────────────────────────────
+    //
+    // These cover the schema shape and the upgrade-install path. The
+    // command-layer behaviour (move, delete, upsert-preserves-group_id) is
+    // exercised against the raw SQL the commands use, because wiring up
+    // tauri::State in a unit test is more ceremony than payoff.
+
+    #[test]
+    fn fresh_db_has_chat_groups_table_and_chats_group_id_column() {
+        let conn = fresh_db();
+        // Table exists with the expected shape.
+        let group_cols = columns_of(&conn, "chat_groups");
+        for expected in ["id", "name", "sort_order", "created_at"] {
+            assert!(
+                group_cols.iter().any(|c| c == expected),
+                "chat_groups.{expected} missing; got {group_cols:?}"
+            );
+        }
+        // chats has the new column too.
+        assert!(columns_of(&conn, "chats").iter().any(|c| c == "group_id"));
+    }
+
+    #[test]
+    fn migrations_add_group_id_and_index_to_legacy_db() {
+        // Upgrade-install path: the legacy_db helper deliberately omits
+        // group_id (and the chat_groups table doesn't exist at all). After
+        // SCHEMA + apply_migrations, chats.group_id must be present AND the
+        // covering index must exist. The index lives in apply_migrations
+        // per the migration-ordering gotcha — this test pins that.
+        let conn = legacy_db();
+        assert!(!columns_of(&conn, "chats").iter().any(|c| c == "group_id"));
+
+        // Simulate the real startup sequence: SCHEMA first (CREATE TABLE IF
+        // NOT EXISTS for chat_groups is a no-op for chats since it already
+        // exists, but it does create chat_groups), then migrations.
+        conn.execute_batch(SCHEMA)
+            .expect("SCHEMA must apply over legacy DB");
+        apply_migrations(&conn).expect("apply_migrations over legacy DB");
+
+        assert!(columns_of(&conn, "chats").iter().any(|c| c == "group_id"));
+        let indices: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type = 'index' AND tbl_name = 'chats'",
+                )
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        assert!(
+            indices.iter().any(|n| n == "idx_chats_group"),
+            "idx_chats_group missing after migration; got {indices:?}"
+        );
+    }
+
+    #[test]
+    fn move_chat_to_group_round_trips() {
+        // Mirrors `db_move_chat_to_group`'s SQL. Pin the round-trip so a
+        // refactor of the column type (e.g. switching to TEXT NOT NULL by
+        // accident) trips this.
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO chat_groups (id, name, sort_order) VALUES ('g1', 'Work', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chats (id, title, model) VALUES ('c1', 'Q2 plan', 'm')",
+            [],
+        )
+        .unwrap();
+        // Newly created chats start ungrouped.
+        let initial: Option<String> = conn
+            .query_row("SELECT group_id FROM chats WHERE id = 'c1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(initial.is_none(), "new chats start with NULL group_id");
+
+        // File it into the group.
+        conn.execute("UPDATE chats SET group_id = ?2 WHERE id = ?1", ("c1", "g1"))
+            .unwrap();
+        let filed: Option<String> = conn
+            .query_row("SELECT group_id FROM chats WHERE id = 'c1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(filed.as_deref(), Some("g1"));
+
+        // Unfile by setting back to NULL — same UPDATE shape, with a
+        // SQL NULL bound parameter as `db_move_chat_to_group` does.
+        let none_id: Option<String> = None;
+        conn.execute(
+            "UPDATE chats SET group_id = ?2 WHERE id = ?1",
+            ("c1", &none_id),
+        )
+        .unwrap();
+        let unfiled: Option<String> = conn
+            .query_row("SELECT group_id FROM chats WHERE id = 'c1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(unfiled.is_none(), "passing None must NULL the column");
+    }
+
+    #[test]
+    fn delete_group_unfiles_chats_without_deleting_them() {
+        // Mirrors `db_delete_group`. The transaction MUST unfile the chats
+        // (set group_id NULL) before dropping the group row, so a user
+        // doesn't lose chats when they remove a folder.
+        let mut conn = fresh_db();
+        conn.execute(
+            "INSERT INTO chat_groups (id, name, sort_order) VALUES ('g1', 'Work', 0)",
+            [],
+        )
+        .unwrap();
+        for id in ["c1", "c2"] {
+            conn.execute(
+                "INSERT INTO chats (id, title, model, group_id) \
+                 VALUES (?1, 'chat', 'm', 'g1')",
+                [id],
+            )
+            .unwrap();
+        }
+        // A third chat in NO group — must not be touched by the delete.
+        conn.execute(
+            "INSERT INTO chats (id, title, model) VALUES ('c3', 'lone', 'm')",
+            [],
+        )
+        .unwrap();
+
+        // Same shape as db_delete_group.
+        let tx = conn.transaction().unwrap();
+        tx.execute(
+            "UPDATE chats SET group_id = NULL WHERE group_id = ?1",
+            ["g1"],
+        )
+        .unwrap();
+        tx.execute("DELETE FROM chat_groups WHERE id = ?1", ["g1"])
+            .unwrap();
+        tx.commit().unwrap();
+
+        // All chats survive — none cascade-deleted.
+        let chat_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chats", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(chat_count, 3, "deleting a group must not delete chats");
+
+        // c1 and c2 are now unfiled.
+        let still_filed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chats WHERE group_id = 'g1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still_filed, 0, "chats must be unfiled, not orphan-pointing");
+
+        // Group is gone.
+        let groups: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chat_groups", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(groups, 0);
+    }
+
+    #[test]
+    fn upsert_chat_does_not_clobber_group_id_on_update() {
+        // CRITICAL: the SQL in `db_upsert_chat` deliberately omits
+        // `group_id` from the ON CONFLICT DO UPDATE SET clause — group
+        // membership is owned by db_move_chat_to_group. If a future
+        // refactor adds `group_id = excluded.group_id` to the SET list,
+        // every chat save from the UI would unfile chats whenever the JS
+        // ChatRow happened to be sent with group_id = null. This test
+        // pins that contract.
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO chat_groups (id, name, sort_order) VALUES ('g1', 'Work', 0)",
+            [],
+        )
+        .unwrap();
+        // Initial INSERT with a group — like a freshly-created chat.
+        conn.execute(
+            "INSERT INTO chats (id, title, model, created_at, updated_at, tab_type, multi_models, group_id) \
+             VALUES ('c1', 'orig', 'm', 100, 100, NULL, NULL, 'g1') \
+             ON CONFLICT(id) DO UPDATE SET \
+                title = excluded.title, \
+                model = excluded.model, \
+                updated_at = excluded.updated_at, \
+                tab_type = excluded.tab_type, \
+                multi_models = excluded.multi_models",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row("SELECT group_id FROM chats WHERE id = 'c1'", [], |r| r
+                .get::<_, Option<
+                String,
+            >>(
+                0
+            ))
+            .unwrap()
+            .as_deref(),
+            Some("g1")
+        );
+
+        // Now simulate a normal chat-save from the UI: same SQL, but
+        // group_id parameter is NULL (UI doesn't track filing). The
+        // UPDATE clause must NOT touch group_id.
+        let none_id: Option<String> = None;
+        conn.execute(
+            "INSERT INTO chats (id, title, model, created_at, updated_at, tab_type, multi_models, group_id) \
+             VALUES ('c1', 'renamed', 'm', 100, 200, NULL, NULL, ?1) \
+             ON CONFLICT(id) DO UPDATE SET \
+                title = excluded.title, \
+                model = excluded.model, \
+                updated_at = excluded.updated_at, \
+                tab_type = excluded.tab_type, \
+                multi_models = excluded.multi_models",
+            [&none_id],
+        )
+        .unwrap();
+
+        // Title updated, group_id preserved.
+        let (title, group_id): (String, Option<String>) = conn
+            .query_row(
+                "SELECT title, group_id FROM chats WHERE id = 'c1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "renamed", "title should update");
+        assert_eq!(
+            group_id.as_deref(),
+            Some("g1"),
+            "group_id must be preserved across upsert"
+        );
+    }
+
+    #[test]
+    fn deleting_a_chat_does_not_delete_its_group() {
+        // Defensive: the FK direction goes chats → chat_groups, not the
+        // other way around. Deleting a chat should NEVER take the group
+        // with it. (CASCADE on this FK would be wrong; SET NULL is what
+        // we declared in SCHEMA. ALTER-TABLE upgrade installs don't have
+        // the FK at all and rely on app code — see db_delete_group.)
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO chat_groups (id, name, sort_order) VALUES ('g1', 'Work', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chats (id, title, model, group_id) \
+             VALUES ('c1', 'chat', 'm', 'g1')",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM chats WHERE id = 'c1'", [])
+            .unwrap();
+        let groups: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_groups WHERE id = 'g1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(groups, 1, "group must survive chat deletion");
     }
 }

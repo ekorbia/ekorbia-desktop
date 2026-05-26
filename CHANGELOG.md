@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Chat groups (sidebar folders)** — organise the history sidebar into
+  user-defined folders that sit above the date buckets (Today / Yesterday /
+  …). Click "+ New group" to create one; drag any chat onto a folder header
+  to file it, or drag it back into the date sections to unfile. Right-click a
+  chat for a context menu.
 - **Compare 2-3 models side-by-side** — new comparison-chat mode. Pick 2 or 3
   installed models from the sidebar's columns button, send one prompt, see all
   responses stream into adjacent columns in parallel. Click "Keep this" on the
