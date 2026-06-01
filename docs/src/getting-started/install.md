@@ -37,10 +37,10 @@ On first run, Ekorbia creates a few things — all on your local disk, none on a
 
 | What | Where | Why |
 |---|---|---|
-| App data folder | `~/Library/Application Support/dev.ekorbia.desktop/` | Chats, settings, and attachment metadata |
+| App data folder | macOS: `~/Library/Application Support/com.ekorbia.desktop/`<br>Linux: `~/.local/share/com.ekorbia.desktop/`<br>Windows: `%APPDATA%\com.ekorbia.desktop\` | Chats, settings, and attachment metadata |
 | Prompts folder | `~/Documents/Ekorbia/Prompts/` | Your prompts library (28 built-ins shipped) |
 | Memory file | `~/Documents/Ekorbia/memory.md` | Your personal context file (empty by default) |
 
-Both the prompts folder and memory file paths are configurable in **Settings**. The app data folder is fixed by macOS convention.
+Both the prompts folder and memory file paths are configurable in **Settings**. The app data folder is fixed by each OS's convention.
 
 ## Next: [Pull your first model →](./pull-a-model.md)

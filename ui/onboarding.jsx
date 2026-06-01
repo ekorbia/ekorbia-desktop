@@ -107,7 +107,7 @@ function OnboardingTour({ open, onClose }) {
             </div>
           </div>
           <p style={{ margin: "0 0 10px", fontSize: 13.5, lineHeight: 1.55, color: T.fg }}>
-            A local AI desktop that runs entirely on your Mac.
+            A local AI desktop that runs entirely on your computer.
           </p>
           <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.6, color: T.fg2 }}>
             Your conversations, your files, your models — nothing leaves your
@@ -119,23 +119,45 @@ function OnboardingTour({ open, onClose }) {
       ),
     },
     {
-      title: "Two hotkeys to learn",
+      // Per-platform hotkey slide:
+      //   • macOS   → both Quick Query and Screenshot rows
+      //   • Windows → Quick Query only (screenshot pipeline deferred to W3)
+      //   • Linux   → neither hotkey is wired up; the slide reframes around
+      //              what IS available and points users to the macOS roadmap.
+      title: IS_LINUX
+        ? "What's in this build"
+        : (IS_MAC ? "Two hotkeys to learn" : "One hotkey to learn"),
       body: (
         <>
-          <HotkeyRow
-            keys={overlayHk}
-            label="Quick Query"
-            hint="Spotlight-style overlay from anywhere. Ask a fast question and either dismiss it or send the conversation to the main window."
-          />
-          <HotkeyRow
-            keys={shotHk}
-            label="Screenshot to Ekorbia"
-            hint="Drag to select a region (or Space for a window). The capture lands in a new chat with a vision-capable model so you can ask about what you grabbed."
-          />
-          <p style={{ marginTop: 14, marginBottom: 0, fontSize: 11.5, color: T.fg3, lineHeight: 1.55 }}>
-            Both are rebindable in{" "}
-            <span style={{ fontFamily: T.mono, color: T.fg2 }}>Settings → General</span>.
-          </p>
+          {!IS_LINUX && (
+            <HotkeyRow
+              keys={overlayHk}
+              label="Quick Query"
+              hint="Spotlight-style overlay from anywhere. Ask a fast question and either dismiss it or send the conversation to the main window."
+            />
+          )}
+          {IS_MAC && (
+            <HotkeyRow
+              keys={shotHk}
+              label="Screenshot to Ekorbia"
+              hint="Drag to select a region (or Space for a window). The capture lands in a new chat with a vision-capable model so you can ask about what you grabbed."
+            />
+          )}
+          {IS_LINUX && (
+            <p style={{ margin: "0 0 10px", fontSize: 12.5, color: T.fg2, lineHeight: 1.55 }}>
+              Chat, attachments + folder RAG, watches, prompts, the memory
+              file, and the file-saving tool are all wired up. The
+              Spotlight-style Quick Query overlay and one-keystroke
+              screenshot capture are macOS-only in this release — Linux
+              support is on the roadmap.
+            </p>
+          )}
+          {!IS_LINUX && (
+            <p style={{ marginTop: 14, marginBottom: 0, fontSize: 11.5, color: T.fg3, lineHeight: 1.55 }}>
+              {IS_MAC ? "Both are rebindable in " : "Rebindable in "}
+              <span style={{ fontFamily: T.mono, color: T.fg2 }}>Settings → General</span>.
+            </p>
+          )}
         </>
       ),
     },

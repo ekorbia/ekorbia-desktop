@@ -78,7 +78,7 @@ function TitleBar({
         icon={I.Sidebar}
         onClick={onToggleSidebar}
         active={sidebarOpen}
-        title="Toggle history (⌘\\)"
+        title={`Toggle history (${MOD_GLYPH}\\)`}
       >
         History
       </IconButton>
@@ -345,7 +345,7 @@ function Sidebar({
               letterSpacing: 0.5,
             }}
           >
-            ⌘K
+            {MOD_GLYPH}K
           </span>
         </div>
       </div>
@@ -374,7 +374,7 @@ function Sidebar({
           <I.Plus size={11} />
           <span>New chat</span>
           <span style={{ flex: 1 }} />
-          <span style={{ color: T.fg3, fontSize: 10 }}>⌘N</span>
+          <span style={{ color: T.fg3, fontSize: 10 }}>{MOD_GLYPH}N</span>
         </button>
         {onNewPrivate && (
           <button
@@ -618,7 +618,7 @@ function Sidebar({
             No conversations yet.
             <div style={{ marginTop: 6, fontSize: 11 }}>
               Hit{" "}
-              <span style={{ fontFamily: T.mono, color: T.fg2 }}>⌘N</span>{" "}
+              <span style={{ fontFamily: T.mono, color: T.fg2 }}>{MOD_GLYPH}N</span>{" "}
               or click <span style={{ color: T.fg2 }}>New chat</span> above
               to start one. Saved chats land here.
             </div>

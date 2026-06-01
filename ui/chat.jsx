@@ -461,10 +461,16 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                   padding: "10px 14px",
                 }}
               >
-                <div>
-                  <span style={{ color: T.amber }}>⌘⇧Space</span>{" "}
-                  <span style={{ color: T.fg2 }}>— quick-query overlay from anywhere</span>
-                </div>
+                {/* Quick-query hint: macOS + Windows only — the overlay
+                    isn't wired up on Linux yet (Phase L2). */}
+                {!IS_LINUX && (
+                  <div>
+                    <span style={{ color: T.amber }}>
+                      {formatHotkey("Super+Shift+Space")}
+                    </span>{" "}
+                    <span style={{ color: T.fg2 }}>— quick-query overlay from anywhere</span>
+                  </div>
+                )}
                 <div>
                   <span style={{ color: T.amber }}>Paperclip</span>{" "}
                   <span style={{ color: T.fg2 }}>— attach files or a folder for context</span>
@@ -1257,7 +1263,7 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
               Cancel
             </button>
             <span style={{ flex: 1 }} />
-            <span style={{ opacity: 0.7 }}>⌘↵ to save · Esc to cancel</span>
+            <span style={{ opacity: 0.7 }}>{MOD_GLYPH}{ENTER_GLYPH} to save · Esc to cancel</span>
           </div>
         </div>
       ) : (
@@ -1967,7 +1973,7 @@ function Composer({
 
   const placeholder = attachedPrompts.length
     ? `Continue with ${attachedPrompts.length} prompt${attachedPrompts.length > 1 ? "s" : ""} attached…`
-    : `Send a message  —  ⌘↵ to send, / for prompts`;
+    : `Send a message  —  ${MOD_GLYPH}${ENTER_GLYPH} to send, / for prompts`;
 
   return (
     <div
@@ -2440,7 +2446,7 @@ function Composer({
                   fontWeight: 600,
                 }}
               >
-                Send <span style={{ opacity: 0.6 }}>⌘↵</span>
+                Send <span style={{ opacity: 0.6 }}>{MOD_GLYPH}{ENTER_GLYPH}</span>
               </button>
             )}
           </div>

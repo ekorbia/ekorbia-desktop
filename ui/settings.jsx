@@ -1021,67 +1021,85 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                 />
               </Row>
 
-              <SectionLabel label="Quick Query" />
-              <Row label="Hotkey">
-                <HotkeyCapture value={hotkey} onChange={applyHotkey} />
-              </Row>
-              {hotkeyError && (
-                <div
-                  style={{
-                    marginTop: -2,
-                    padding: "4px 0",
-                    fontFamily: T.mono,
-                    fontSize: 10.5,
-                    color: T.red,
-                    textAlign: "right",
-                  }}
-                >
-                  {hotkeyError}
-                </div>
+              {/* Quick Query overlay: macOS + Windows (where transparent
+                  + always-on-top windows + per-window vibrancy all work).
+                  Linux falls through to Phase L2 — the overlay code path
+                  isn't wired up there yet, so showing the hotkey setting
+                  would be misleading. */}
+              {!IS_LINUX && (
+                <>
+                  <SectionLabel label="Quick Query" />
+                  <Row label="Hotkey">
+                    <HotkeyCapture value={hotkey} onChange={applyHotkey} />
+                  </Row>
+                  {hotkeyError && (
+                    <div
+                      style={{
+                        marginTop: -2,
+                        padding: "4px 0",
+                        fontFamily: T.mono,
+                        fontSize: 10.5,
+                        color: T.red,
+                        textAlign: "right",
+                      }}
+                    >
+                      {hotkeyError}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 10,
+                      color: T.fg3,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {IS_MAC
+                      ? "Click to capture. Needs at least one modifier (⌘/⌃/⌥)."
+                      : "Click to capture. Needs at least one modifier (Win / Ctrl / Alt)."}
+                  </div>
+                </>
               )}
-              <div
-                style={{
-                  fontFamily: T.mono,
-                  fontSize: 10,
-                  color: T.fg3,
-                  lineHeight: 1.5,
-                }}
-              >
-                Click to capture. Needs at least one modifier (⌘/⌃/⌥).
-              </div>
 
-              <SectionLabel label="Screenshot" />
-              <Row label="Hotkey">
-                <HotkeyCapture
-                  value={screenshotHotkey}
-                  onChange={applyScreenshotHotkey}
-                />
-              </Row>
-              {screenshotHotkeyError && (
-                <div
-                  style={{
-                    marginTop: -2,
-                    padding: "4px 0",
-                    fontFamily: T.mono,
-                    fontSize: 10.5,
-                    color: T.red,
-                    textAlign: "right",
-                  }}
-                >
-                  {screenshotHotkeyError}
-                </div>
+              {/* Screenshot capture: macOS only for now. Linux (Phase L3)
+                  and Windows (Phase W3) need their own capture pipelines —
+                  /usr/sbin/screencapture is mac-exclusive. */}
+              {IS_MAC && (
+                <>
+                  <SectionLabel label="Screenshot" />
+                  <Row label="Hotkey">
+                    <HotkeyCapture
+                      value={screenshotHotkey}
+                      onChange={applyScreenshotHotkey}
+                    />
+                  </Row>
+                  {screenshotHotkeyError && (
+                    <div
+                      style={{
+                        marginTop: -2,
+                        padding: "4px 0",
+                        fontFamily: T.mono,
+                        fontSize: 10.5,
+                        color: T.red,
+                        textAlign: "right",
+                      }}
+                    >
+                      {screenshotHotkeyError}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 10,
+                      color: T.fg3,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Captures a screen region (drag to select, Space for a window,
+                    Esc to cancel) and opens it in a new chat with a vision model.
+                  </div>
+                </>
               )}
-              <div
-                style={{
-                  fontFamily: T.mono,
-                  fontSize: 10,
-                  color: T.fg3,
-                  lineHeight: 1.5,
-                }}
-              >
-                Captures a screen region (drag to select, Space for a window,
-                Esc to cancel) and opens it in a new chat with a vision model.
-              </div>
 
               <SectionLabel label="Help" />
               <Row label="Onboarding tour">

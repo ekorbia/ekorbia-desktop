@@ -1025,7 +1025,12 @@ function App() {
   // Rust's setup() already registered the default (Super+Shift+Space) so
   // the overlay is reachable before this runs — this call re-registers
   // with the user's choice if they've customised it.
+  //
+  // Linux is skipped because the overlay isn't wired up there yet (Phase
+  // L2). Calling register_hotkey would still register an OS-level shortcut
+  // that does nothing on press — antisocial to the user's other apps.
   useE(() => {
+    if (IS_LINUX) return;
     let stored = null;
     try { stored = localStorage.getItem('ekorbia.overlay.hotkey'); } catch {}
     if (stored) {
@@ -1042,7 +1047,13 @@ function App() {
   // with the user's customisation if any. Independent of the overlay
   // bootstrap above because register_screenshot_hotkey operates on its
   // own registry slot.
+  //
+  // macOS only: screencapture(1) doesn't exist on Linux / Windows yet, so
+  // there's no capture pipeline to bind a hotkey to. Phases L3 / W3 will
+  // wire platform-specific capture (grim+slurp / ms-screenclip:) and lift
+  // this gate.
   useE(() => {
+    if (!IS_MAC) return;
     let stored = null;
     try { stored = localStorage.getItem('ekorbia.screenshot.hotkey'); } catch {}
     if (stored) {

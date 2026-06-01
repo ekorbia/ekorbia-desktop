@@ -5,6 +5,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert");
 const {
+  detectPlatform,
   formatHotkey,
   hotkeyFromEvent,
   parseFencedBlocks,
@@ -54,6 +55,45 @@ test("formatHotkey: equivalent modifier names map to same glyph", () => {
   assert.equal(formatHotkey("Cmd+KeyA"), "⌘A");
   assert.equal(formatHotkey("Meta+KeyA"), "⌘A");
   assert.equal(formatHotkey("Option+KeyA"), "⌥A");
+});
+
+// ── formatHotkey: cross-platform rendering (Phases L1 / W1) ─────────────
+
+test("formatHotkey: Linux renders modifiers as text with + separators", () => {
+  // Linux convention is plain text labels — the platform doesn't have a
+  // dedicated Spotlight-style icon vocabulary the way macOS does.
+  assert.equal(formatHotkey("Super+Shift+Space", "linux"), "Super+Shift+Space");
+  assert.equal(formatHotkey("Ctrl+Alt+KeyN", "linux"), "Ctrl+Alt+N");
+  assert.equal(formatHotkey("Super+Digit5", "linux"), "Super+5");
+});
+
+test("formatHotkey: Windows renders Super as 'Win' with + separators", () => {
+  // Windows users expect "Win+Shift+Space", not "Super+...". The Tauri
+  // underlying spec still uses "Super" — we translate at the UI layer
+  // so storage stays cross-platform.
+  assert.equal(formatHotkey("Super+Shift+Space", "windows"), "Win+Shift+Space");
+  assert.equal(formatHotkey("Super+KeyA", "windows"), "Win+A");
+  assert.equal(formatHotkey("Cmd+KeyA", "windows"), "Win+A");
+  assert.equal(formatHotkey("Meta+KeyA", "windows"), "Win+A");
+});
+
+test("formatHotkey: Linux + Windows pass through unknown tokens", () => {
+  assert.equal(formatHotkey("Ctrl+F12", "linux"), "Ctrl+F12");
+  assert.equal(formatHotkey("Ctrl+F12", "windows"), "Ctrl+F12");
+});
+
+test("formatHotkey: empty / null returns 'Not set' on every platform", () => {
+  assert.equal(formatHotkey("", "linux"), "Not set");
+  assert.equal(formatHotkey(null, "windows"), "Not set");
+});
+
+// ── detectPlatform ──────────────────────────────────────────────────────
+
+test("detectPlatform: Node (no navigator) returns 'macos'", () => {
+  // Default to macOS in Node because the existing test suite was written
+  // against the macOS glyphs. Real browsers populate navigator and route
+  // to the correct branch automatically.
+  assert.equal(detectPlatform(), "macos");
 });
 
 // ── hotkeyFromEvent ──────────────────────────────────────────────────────

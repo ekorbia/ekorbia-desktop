@@ -41,7 +41,21 @@ use crate::log::{log_info, log_warn};
 use rusqlite::Connection;
 use std::sync::Mutex;
 use tauri::Manager;
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+// `Code` and `Modifiers` are only referenced by the platform-gated default
+// hotkey registrations below — on Linux both default hotkeys are skipped so
+// neither symbol is touched, and clippy's `-D warnings` would fail the
+// build on an unused import. Gate the import to match.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use tauri_plugin_global_shortcut::{Code, Modifiers};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+// Vibrancy backends differ per platform: NSVisualEffectView on macOS, Mica
+// (preferred, Win11) or Acrylic (fallback, Win10) on Windows. The
+// `window-vibrancy` crate gates these per cfg internally too — we just
+// import the symbols we use on each platform so unused-import warnings
+// stay quiet. Linux has no per-window blur primitive that works across
+// compositors, so the overlay there falls back to its CSS-tinted bg.
+#[cfg(target_os = "windows")]
+use window_vibrancy::{apply_acrylic, apply_mica};
 #[cfg(target_os = "macos")]
 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
 
@@ -220,38 +234,56 @@ pub fn run() {
             }
 
             // ── Global hotkeys ──────────────────────────────────────────────
-            // Two slots:
-            //   • Overlay toggle: ⌘⇧Space (default; user-rebindable in
-            //     Settings → General → Hotkey)
-            //   • Screenshot capture: ⌘⇧1 (default; user-rebindable)
+            // Two slots, both platform-gated for the L1/W1 MVP scope:
             //
-            // We register the defaults here AND update the HOTKEY_REGISTRY
-            // so the global-shortcut handler can route by identity. The
-            // user can override either via the register_hotkey /
-            // register_screenshot_hotkey commands at runtime; those use
-            // the registry to surgically swap their slot without touching
-            // the other.
+            //   • Overlay toggle (⌘⇧Space on mac, Win+Shift+Space on
+            //     Windows): registered on macOS + Windows. Linux is
+            //     deferred to Phase L2 because the overlay relies on
+            //     transparent always-on-top + per-window blur, neither of
+            //     which is reliable across X11/Wayland compositors.
+            //   • Screenshot capture (⌘⇧1): registered on macOS only.
+            //     Linux (L3) and Windows (W3) need their own capture
+            //     pipelines (no equivalent to /usr/sbin/screencapture).
+            //     Until then we leave the slot empty so the key combo
+            //     stays available for the user's other apps.
+            //
+            // We populate HOTKEY_REGISTRY so the global-shortcut handler
+            // can route by identity. The user can override either default
+            // via the register_hotkey / register_screenshot_hotkey
+            // commands at runtime; the registry tracks slots
+            // independently so a re-register swaps only its slot.
             //
             // Modifiers::SUPER maps to Command on macOS, Windows key on
-            // Windows, Super on Linux — the right "primary modifier".
-            let overlay_toggle = Shortcut::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::Space,
-            );
-            let screenshot_capture = Shortcut::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::Digit1,
-            );
+            // Windows, Super on Linux — the right "primary modifier"
+            // per platform.
+            #[allow(unused_variables)]
             let gs = app.global_shortcut();
-            gs.register(overlay_toggle)?;
-            gs.register(screenshot_capture)?;
+
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let overlay_toggle_opt: Option<Shortcut> = {
+                let s = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
+                gs.register(s)?;
+                Some(s)
+            };
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            let overlay_toggle_opt: Option<Shortcut> = None;
+
+            #[cfg(target_os = "macos")]
+            let screenshot_capture_opt: Option<Shortcut> = {
+                let s = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Digit1);
+                gs.register(s)?;
+                Some(s)
+            };
+            #[cfg(not(target_os = "macos"))]
+            let screenshot_capture_opt: Option<Shortcut> = None;
+
             // Populate the registry so the handler can dispatch by
             // identity. Errors here would mean the OnceLock-init panicked,
             // which shouldn't happen — we log and proceed; the worst case
             // is no hotkey routing, which the user will notice immediately.
             if let Ok(mut reg) = overlay::registry().lock() {
-                reg.overlay = Some(overlay_toggle);
-                reg.screenshot = Some(screenshot_capture);
+                reg.overlay = overlay_toggle_opt;
+                reg.screenshot = screenshot_capture_opt;
             } else {
                 log_warn!("hotkey registry init failed");
             }
@@ -303,6 +335,21 @@ pub fn run() {
                         Some(18.0),
                     ) {
                         log_warn!("Failed to apply overlay vibrancy: {e:?}");
+                    }
+                }
+                // Windows: prefer Mica (Win 11), fall back to Acrylic
+                // (Win 10). Both are the OS-level blur backends that ship
+                // with the WinAppSDK; users get a native Fluent feel close
+                // to Spotlight without us hand-rolling a blur shader. If
+                // both fail (very old Windows or unusual graphics drivers)
+                // the overlay just renders with its CSS-tinted bg, which
+                // is functionally fine — just less pretty.
+                #[cfg(target_os = "windows")]
+                {
+                    if apply_mica(&overlay, /* dark */ Some(true)).is_err() {
+                        if let Err(e) = apply_acrylic(&overlay, /* tint */ None) {
+                            log_warn!("Failed to apply overlay vibrancy: {e:?}");
+                        }
                     }
                 }
             }

@@ -22,7 +22,7 @@ The first time a model in a given chat tries to save a file, a modal appears:
 
 You have three options:
 
-- **Allow** — pick an output folder (pre-filled to `~/Library/Application Support/dev.ekorbia.desktop/Outputs/<chat-slug>/`). All future saves in this chat go to this folder.
+- **Allow** — pick an output folder (pre-filled to the app's data directory's `Outputs/<chat-slug>/`: `~/Library/Application Support/com.ekorbia.desktop/Outputs/...` on macOS, `~/.local/share/com.ekorbia.desktop/Outputs/...` on Linux, `%APPDATA%\com.ekorbia.desktop\Outputs\...` on Windows). All future saves in this chat go to this folder.
 - **Block** — prevents any saves for this chat. The model is told it can't save; subsequent tool calls return an error and no modal re-appears.
 - **Not now** — skips this single write only. The modal will re-appear on the next attempt.
 

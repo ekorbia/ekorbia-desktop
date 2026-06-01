@@ -15,6 +15,51 @@
 // applies. Plain CommonJS-on-Node + globals-on-browser is the maximum
 // allowed footprint.
 
+// ── Platform detection (cross-platform port, Phases L1 / W1) ───────────────
+//
+// The UI renders some affordances differently per platform — most notably
+// hotkey glyphs (⌘⇧Space on macOS vs the textual "Super+Shift+Space" on
+// Linux / "Win+Shift+Space" on Windows) and the visibility of features
+// that are only wired up on one OS today (the overlay window is macOS +
+// Windows in this build; screenshot capture is macOS only).
+//
+// detectPlatform() reads `navigator.userAgent` because the no-bundler UI
+// can't `await` an async Tauri API at module-init time. The UA strings
+// from WKWebView (mac), WebView2 (Windows), and WebKitGTK (Linux) all
+// include their OS name distinctively. We default to 'macos' when no
+// navigator is available (Node test runner, very old fallback) so the
+// existing test fixtures that call formatHotkey() without an explicit
+// platform continue to assert the macOS glyph output.
+function detectPlatform() {
+  if (typeof navigator === "undefined") return "macos";
+  const ua = (navigator.userAgent || "").toLowerCase();
+  if (ua.includes("windows")) return "windows";
+  // 'android' UA also includes 'linux' — exclude it explicitly so a
+  // mobile build (if we ever ship one) doesn't render desktop chrome.
+  if (ua.includes("linux") && !ua.includes("android")) return "linux";
+  if (ua.includes("mac")) return "macos";
+  return "macos";
+}
+
+// Boolean shorthands. Cached at module init in the browser; recomputed
+// every call in Node (where there's no navigator to memoise around).
+const _DETECTED_PLATFORM = detectPlatform();
+const IS_MAC = _DETECTED_PLATFORM === "macos";
+const IS_LINUX = _DETECTED_PLATFORM === "linux";
+const IS_WIN = _DETECTED_PLATFORM === "windows";
+
+// Short labels for inline hints: "⌘↵ to send" on macOS becomes
+// "Ctrl+Enter to send" on Linux / Windows. The actual keypress
+// handlers throughout the UI accept either metaKey OR ctrlKey, so
+// macOS Cmd+Enter and Linux/Windows Ctrl+Enter both fire — we just
+// need the visible label to match what the user expects per platform.
+//
+// MOD_GLYPH is the *prefix*; concatenate the suffix directly:
+//   `${MOD_GLYPH}K`  → "⌘K" on mac, "Ctrl+K" elsewhere
+//   `${MOD_GLYPH}${ENTER_GLYPH}` → "⌘↵" on mac, "Ctrl+Enter" elsewhere
+const MOD_GLYPH = IS_MAC ? "⌘" : "Ctrl+";
+const ENTER_GLYPH = IS_MAC ? "↵" : "Enter";
+
 // ── Hotkey helpers (settings.jsx, onboarding.jsx) ──────────────────────────
 
 // Modifier-only keypresses (e.code values for left/right Cmd/Shift/Ctrl/Alt).
@@ -31,29 +76,94 @@ const HOTKEY_MOD_CODES = new Set([
   "AltRight",
 ]);
 
-// Convert a "Super+Shift+Space"-style spec into a human-readable label using
-// macOS keyboard symbols. Falls back to the raw token for anything we don't
-// have a glyph for.
-function formatHotkey(spec) {
+// Convert a "Super+Shift+Space"-style spec into a human-readable label
+// using platform-appropriate symbols:
+//   • macOS   → keyboard glyphs concatenated:  ⌘⇧Space
+//   • Linux   → textual modifier names joined: Super+Shift+Space
+//   • Windows → same as Linux but Super → Win: Win+Shift+Space
+//
+// The optional `platform` argument forces a specific platform's
+// formatting — useful for unit tests that need to assert all three
+// outputs without poking navigator. Defaults to the detected platform
+// at module init, which preserves the existing macOS behaviour in the
+// Node test runner (no navigator → defaults to 'macos').
+function formatHotkey(spec, platform) {
   if (!spec) return "Not set";
-  const modGlyphs = {
-    Super: "⌘",
-    Cmd: "⌘",
-    Command: "⌘",
-    Meta: "⌘",
-    Ctrl: "⌃",
-    Control: "⌃",
-    Alt: "⌥",
-    Option: "⌥",
-    Shift: "⇧",
+  const p = platform || _DETECTED_PLATFORM;
+
+  if (p === "macos") {
+    const modGlyphs = {
+      Super: "⌘",
+      Cmd: "⌘",
+      Command: "⌘",
+      Meta: "⌘",
+      Ctrl: "⌃",
+      Control: "⌃",
+      Alt: "⌥",
+      Option: "⌥",
+      Shift: "⇧",
+    };
+    const codeGlyphs = {
+      Space: "Space",
+      Enter: "↵",
+      Tab: "⇥",
+      Escape: "Esc",
+      Backspace: "⌫",
+      Delete: "⌦",
+      ArrowLeft: "←",
+      ArrowRight: "→",
+      ArrowUp: "↑",
+      ArrowDown: "↓",
+      Backquote: "`",
+      Minus: "−",
+      Equal: "=",
+      BracketLeft: "[",
+      BracketRight: "]",
+      Backslash: "\\",
+      Semicolon: ";",
+      Quote: "'",
+      Comma: ",",
+      Period: ".",
+      Slash: "/",
+    };
+    return spec
+      .split("+")
+      .map((part) => {
+        if (modGlyphs[part]) return modGlyphs[part];
+        if (codeGlyphs[part]) return codeGlyphs[part];
+        // KeyA / KeyB / ... — strip prefix
+        if (part.startsWith("Key")) return part.slice(3);
+        // Digit0 / Digit1 / ... — strip prefix
+        if (part.startsWith("Digit")) return part.slice(5);
+        // F1..F24 and anything else we don't handle — leave as-is
+        return part;
+      })
+      .join("");
+  }
+
+  // Linux + Windows: textual rendering with `+` separators. The only
+  // per-platform difference here is the primary-modifier label (Super
+  // on Linux, Win on Windows — both map from the same Tauri "Super"
+  // token in the underlying spec).
+  const primaryMod = p === "windows" ? "Win" : "Super";
+  const modText = {
+    Super: primaryMod,
+    Cmd: primaryMod,
+    Command: primaryMod,
+    Meta: primaryMod,
+    Ctrl: "Ctrl",
+    Control: "Ctrl",
+    Alt: "Alt",
+    Option: "Alt",
+    Shift: "Shift",
   };
-  const codeGlyphs = {
+  const codeText = {
     Space: "Space",
-    Enter: "↵",
-    Tab: "⇥",
+    Enter: "Enter",
+    Tab: "Tab",
     Escape: "Esc",
-    Backspace: "⌫",
-    Delete: "⌦",
+    Backspace: "Backspace",
+    Delete: "Delete",
     ArrowLeft: "←",
     ArrowRight: "→",
     ArrowUp: "↑",
@@ -72,17 +182,14 @@ function formatHotkey(spec) {
   };
   return spec
     .split("+")
-    .map((p) => {
-      if (modGlyphs[p]) return modGlyphs[p];
-      if (codeGlyphs[p]) return codeGlyphs[p];
-      // KeyA / KeyB / ... — strip prefix
-      if (p.startsWith("Key")) return p.slice(3);
-      // Digit0 / Digit1 / ... — strip prefix
-      if (p.startsWith("Digit")) return p.slice(5);
-      // F1..F24 and anything else we don't handle — leave as-is
-      return p;
+    .map((part) => {
+      if (modText[part]) return modText[part];
+      if (codeText[part]) return codeText[part];
+      if (part.startsWith("Key")) return part.slice(3);
+      if (part.startsWith("Digit")) return part.slice(5);
+      return part;
     })
-    .join("");
+    .join("+");
 }
 
 // Capture a KeyboardEvent into a hotkey spec string. Returns null on bare
@@ -466,6 +573,12 @@ function getWindowApi() {
 // the browser has no `module`.
 
 if (typeof window !== "undefined") {
+  window.detectPlatform = detectPlatform;
+  window.IS_MAC = IS_MAC;
+  window.IS_LINUX = IS_LINUX;
+  window.IS_WIN = IS_WIN;
+  window.MOD_GLYPH = MOD_GLYPH;
+  window.ENTER_GLYPH = ENTER_GLYPH;
   window.HOTKEY_MOD_CODES = HOTKEY_MOD_CODES;
   window.formatHotkey = formatHotkey;
   window.hotkeyFromEvent = hotkeyFromEvent;
@@ -493,6 +606,12 @@ if (typeof window !== "undefined") {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    detectPlatform,
+    IS_MAC,
+    IS_LINUX,
+    IS_WIN,
+    MOD_GLYPH,
+    ENTER_GLYPH,
     HOTKEY_MOD_CODES,
     formatHotkey,
     hotkeyFromEvent,

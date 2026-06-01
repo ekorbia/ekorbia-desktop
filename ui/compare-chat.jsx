@@ -683,7 +683,7 @@ function CompareComposer({
   else if (disabledReason === "missing-models")
     hint = "Composer locked — install the missing models above";
   else if (disabled) hint = "Pick a winner above to continue the chat";
-  else hint = `Send to all ${modelCount} models — ⌘↵`;
+  else hint = `Send to all ${modelCount} models — ${MOD_GLYPH}${ENTER_GLYPH}`;
 
   return (
     <div
