@@ -166,19 +166,23 @@ mod tests {
         assert!(root.join("src").exists(), "parent dir should be created");
     }
 
+    // Symlink-escape test runs unix-only: `std::os::unix::fs::symlink` is
+    // gated to unix, and Windows symlink semantics + permissions are
+    // different enough (developer mode or admin token required) that a
+    // direct port would add more flakiness than coverage. Windows path
+    // traversal is still covered by the `..` / absolute-path / NUL-byte
+    // rejection tests above, which run on every target.
+    #[cfg(unix)]
     #[test]
     fn rejects_symlink_escape() {
         let root = tmpdir();
         let outside = tmpdir();
         // Plant a symlink inside root that points outside.
-        #[cfg(unix)]
-        {
-            let link = root.join("evil");
-            std::os::unix::fs::symlink(&outside, &link).unwrap();
-            // Try to write under the symlink — canonicalised parent will
-            // resolve to `outside`, which doesn't start with `root`.
-            let err = resolve_within(&root, "evil/file.txt").unwrap_err();
-            assert!(err.contains("escapes"), "got: {err}");
-        }
+        let link = root.join("evil");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        // Try to write under the symlink — canonicalised parent will
+        // resolve to `outside`, which doesn't start with `root`.
+        let err = resolve_within(&root, "evil/file.txt").unwrap_err();
+        assert!(err.contains("escapes"), "got: {err}");
     }
 }

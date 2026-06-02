@@ -29,6 +29,12 @@
 //! just for this since the work isn't actually async.
 
 use crate::log::log_warn;
+// `Emitter` and `Manager` are only referenced inside the macOS-gated
+// `dispatch_capture` (it brings the main window forward and emits the
+// `screenshot:captured` event). On Linux / Windows the dispatch fn is
+// a one-line stub that never touches either trait — gate the import to
+// match so clippy's `-D warnings` doesn't fail the cross-platform build.
+#[cfg(target_os = "macos")]
 use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "macos")]

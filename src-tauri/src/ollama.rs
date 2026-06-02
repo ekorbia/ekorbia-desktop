@@ -333,7 +333,6 @@ fn spawn_ollama_detached(bin: &str) -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) async fn start_ollama(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
     // Already running? Nothing to do.
     if is_ollama_listening() {
         return Ok(());
@@ -341,8 +340,14 @@ pub(crate) async fn start_ollama(app: tauri::AppHandle) -> Result<(), String> {
 
     // Layer 1 (macOS): open the Ollama menu-bar app. This is the OS-blessed
     // path — it handles env, GPU access, login items, and the binary lookup.
+    //
+    // `use tauri::Manager` is scoped to this cfg block because Linux /
+    // Windows code paths below never call `get_webview_window` — leaving
+    // the import at function scope would fire an unused-import warning
+    // there, which clippy's `-D warnings` turns into a hard error.
     #[cfg(target_os = "macos")]
     {
+        use tauri::Manager;
         // `-g` asks open(1) not to foreground the app, but Ollama calls
         // activateIgnoringOtherApps on launch and overrides it — so we still
         // have to reclaim focus afterwards.
