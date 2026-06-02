@@ -27,12 +27,21 @@ primary platform; Linux and Windows are new for this release.
   WebView2 still launch. Acrylic / Mica vibrancy on the overlay window
   via `window-vibrancy`. Same full feature set as Linux plus the
   Quick Query overlay; screenshot capture is the only deferred feature.
-- **Platform-aware UI** — hotkey labels render as ⌘⇧Space on macOS,
-  `Win+Shift+Space` on Windows, and `Super+Shift+Space` on Linux.
-  Cmd / Ctrl glyphs in inline hints (`⌘↵`, `⌘K`, `⌘N`, `⌘\`) flip to
-  textual `Ctrl+...` on Linux and Windows. The onboarding tour adapts
-  its slide-2 hotkey content to whichever hotkeys are actually wired
-  up on the current platform.
+- **Platform-aware UI** — Quick-query overlay default hotkey is ⌘⇧Space
+  on macOS and Alt+Space on Windows (Win-key combos are heavily
+  reserved by the OS for input-method switching, so we follow the
+  PowerToys Run / Raycast Windows convention). Cmd / Ctrl glyphs in
+  inline hints (`⌘↵`, `⌘K`, `⌘N`, `⌘\`) flip to textual `Ctrl+...` on
+  Linux and Windows. The onboarding tour adapts its slide-2 hotkey
+  content to whichever hotkeys are actually wired up on the current
+  platform.
+- **Defensive hotkey registration** — global-shortcut registration
+  failures (OS conflict, locked combination, system policy) are now
+  logged and the slot left empty rather than killed inside `setup()`.
+  Pre-W1 a registration failure would bubble out of setup() via `?`
+  and crash the app on launch with a blank window flash — visible only
+  to Windows testers where the (previously default) Win+Shift+Space
+  combination is reserved.
 - **Cross-platform CI matrix** — `ci.yml` now runs `cargo fmt --check`,
   clippy, and `cargo test --lib` on macOS, Ubuntu 22.04, and Windows.
   The UI test suite (Node helpers + Playwright WebKit) runs on macOS

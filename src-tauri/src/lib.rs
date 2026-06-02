@@ -236,16 +236,22 @@ pub fn run() {
             // ── Global hotkeys ──────────────────────────────────────────────
             // Two slots, both platform-gated for the L1/W1 MVP scope:
             //
-            //   • Overlay toggle (⌘⇧Space on mac, Win+Shift+Space on
-            //     Windows): registered on macOS + Windows. Linux is
-            //     deferred to Phase L2 because the overlay relies on
-            //     transparent always-on-top + per-window blur, neither of
-            //     which is reliable across X11/Wayland compositors.
-            //   • Screenshot capture (⌘⇧1): registered on macOS only.
-            //     Linux (L3) and Windows (W3) need their own capture
-            //     pipelines (no equivalent to /usr/sbin/screencapture).
-            //     Until then we leave the slot empty so the key combo
-            //     stays available for the user's other apps.
+            //   • Overlay toggle: registered on macOS + Windows.
+            //     - macOS:   ⌘⇧Space (Modifiers::SUPER | Modifiers::SHIFT).
+            //     - Windows: Alt+Space (Modifiers::ALT). The Win-key
+            //       (SUPER) combos are heavily reserved by Windows for
+            //       input-method switching — Win+Space cycles keyboard
+            //       layouts and `RegisterHotKey()` either rejects or
+            //       silently swallows Win+Shift+Space depending on the
+            //       user's locale config. Alt+Space matches the
+            //       convention used by PowerToys Run / Raycast Windows /
+            //       ChatGPT Desktop, at the cost of shadowing the
+            //       rarely-used "Window menu" system shortcut. Worth it.
+            //     - Linux: skipped entirely — overlay deferred to Phase L2.
+            //   • Screenshot capture: macOS only (⌘⇧1). Linux (L3) and
+            //     Windows (W3) need their own capture pipelines (no
+            //     equivalent to /usr/sbin/screencapture). The slot stays
+            //     empty until then.
             //
             // We populate HOTKEY_REGISTRY so the global-shortcut handler
             // can route by identity. The user can override either default
@@ -253,27 +259,54 @@ pub fn run() {
             // commands at runtime; the registry tracks slots
             // independently so a re-register swaps only its slot.
             //
-            // Modifiers::SUPER maps to Command on macOS, Windows key on
-            // Windows, Super on Linux — the right "primary modifier"
-            // per platform.
+            // CRITICAL: registration failures must be NON-FATAL. They
+            // happen routinely — another app has the same combo, the
+            // OS reserves it, system policy blocks it, etc. — and the
+            // app should still launch with an empty slot. Pre-W1, the
+            // code propagated the error out of setup() via `?`, which
+            // killed the whole app on the very first Windows test run
+            // because Win+Shift+Space is reserved. Log the failure and
+            // leave the slot None; the user can rebind via Settings
+            // once the main window is up.
             #[allow(unused_variables)]
             let gs = app.global_shortcut();
 
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            let overlay_toggle_opt: Option<Shortcut> = {
-                let s = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
-                gs.register(s)?;
-                Some(s)
+            // Helper closure: register a shortcut, log on failure, return
+            // Some(shortcut) on success / None on failure. Pure
+            // best-effort — never propagates the error.
+            #[allow(unused_variables)]
+            let try_register = |s: Shortcut, slot: &str| -> Option<Shortcut> {
+                match gs.register(s) {
+                    Ok(_) => Some(s),
+                    Err(e) => {
+                        log_warn!(
+                            "Failed to register default {slot} hotkey: {e}. \
+                             User can rebind in Settings → General."
+                        );
+                        None
+                    }
+                }
             };
+
+            #[cfg(target_os = "macos")]
+            let overlay_toggle_opt: Option<Shortcut> = try_register(
+                Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space),
+                "overlay",
+            );
+            #[cfg(target_os = "windows")]
+            let overlay_toggle_opt: Option<Shortcut> = try_register(
+                // Alt+Space — see the platform notes above for why not Win+...
+                Shortcut::new(Some(Modifiers::ALT), Code::Space),
+                "overlay",
+            );
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let overlay_toggle_opt: Option<Shortcut> = None;
 
             #[cfg(target_os = "macos")]
-            let screenshot_capture_opt: Option<Shortcut> = {
-                let s = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Digit1);
-                gs.register(s)?;
-                Some(s)
-            };
+            let screenshot_capture_opt: Option<Shortcut> = try_register(
+                Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Digit1),
+                "screenshot",
+            );
             #[cfg(not(target_os = "macos"))]
             let screenshot_capture_opt: Option<Shortcut> = None;
 

@@ -4,7 +4,15 @@
 //   SettingsModal (tabbed: General / Prompts / Attachments).
 // Depends on: tokens, atoms, icons.
 
-const HOTKEY_DEFAULT = "Super+Shift+Space";
+// Per-platform default for the overlay hotkey — must match what Rust's
+// setup() registers in lib.rs, otherwise the Settings UI lies about what
+// will actually fire when the user presses the combo. On Windows the
+// SUPER (Win) key is heavily reserved by the OS for input-method
+// switching (Win+Space cycles keyboard layouts), so we fall back to
+// Alt+Space — the convention used by PowerToys Run / Raycast Windows /
+// ChatGPT Desktop. macOS and Linux keep Cmd/Super+Shift+Space; on Linux
+// the Settings row is hidden anyway (overlay deferred to Phase L2).
+const HOTKEY_DEFAULT = IS_WIN ? "Alt+Space" : "Super+Shift+Space";
 const HOTKEY_LS_KEY = "ekorbia.overlay.hotkey";
 // Second slot: screenshot capture hotkey (Phase 5). Default
 // Super+Shift+Digit1 — sits next to macOS's own Cmd+Shift+3/4/5 mental

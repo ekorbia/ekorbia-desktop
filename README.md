@@ -255,7 +255,7 @@ For development with hot-reload, use `cargo tauri dev` from the
   - Import prompts from `.md` / `.txt` files
   - 28 built-in prompts ship with the app: Album Deep Dive, Brainstorm, Cliff Notes, Cloudflare Uptime Watcher, Cover Letter Writer, Devil's Advocate, Email Draft, Explain Simply, Google Cloud Uptime Watcher, How Does It End, Job Posting Watcher, Lateral Thinking Puzzles, Log Triage, Murder Mystery Interrogation, New Listing Watcher, Notes Synthesizer, Personal & Professional Website Builders, Price / Availability Watcher, Rental Watcher, Research Paper Tracker, Resume Coach, Sensitive Doc Q&A, Should I Watch This, Summarize, Text Adventure, Tone Reframer, Translate → Spanish / French / German, Wikipedia Edit Watcher
   - "Restore built-in prompts" button in Settings re-copies them if you've deleted any
-- **Quick-query overlay** (⌘⇧Space on macOS, Win+Shift+Space on Windows; customisable in Settings — *not available on Linux yet*)
+- **Quick-query overlay** (⌘⇧Space on macOS, Alt+Space on Windows; customisable in Settings — *not available on Linux yet*)
   - Spotlight-style panel that pops up over any app — never steals focus from your work
   - Inline model and single-prompt pickers, with searchable prompt list
   - Streaming responses just like the main composer
