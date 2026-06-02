@@ -98,6 +98,10 @@ jobs:
             const fs = require('fs');
             const body = fs.readFileSync('RELEASE_NOTES.md', 'utf8');
             const tag = context.ref.replace('refs/tags/', '');
+            // Semver prerelease tags always contain a `-` (v0.3.0-rc1,
+            // v0.3.0-beta.2, etc.). Flag those as GitHub pre-releases
+            // so they don't show as "Latest" on the Releases page.
+            const isPrerelease = tag.includes('-');
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -105,7 +109,7 @@ jobs:
               name: `Ekorbia ${tag}`,
               body,
               draft: true,
-              prerelease: false,
+              prerelease: isPrerelease,
             });
             return data.id;
           result-encoding: string

@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc1] - 2026-06-01
+
+First release candidate for cross-platform support. macOS remains the
+primary platform; Linux and Windows are new for this release.
+
+### Added
+
+- **Linux support** — `.deb` (Debian / Ubuntu / Mint) and `.AppImage`
+  (any modern x86_64 distro) bundles published from the release
+  pipeline. Built on Ubuntu 22.04 for broad glibc compatibility. Full
+  chat, attachments, folder RAG, watches, prompts, memory file, chat-
+  tool file saves, OS notifications (libnotify), and full-text history
+  search all work. See the [feature matrix](README.md#platform-feature-matrix)
+  for what's deferred (overlay, screenshot capture).
+- **Windows support** — `.msi` and NSIS `.exe` installers, both with
+  the WebView2 bootstrapper embedded so Windows 10 systems without
+  WebView2 still launch. Acrylic / Mica vibrancy on the overlay window
+  via `window-vibrancy`. Same full feature set as Linux plus the
+  Quick Query overlay; screenshot capture is the only deferred feature.
+- **Platform-aware UI** — hotkey labels render as ⌘⇧Space on macOS,
+  `Win+Shift+Space` on Windows, and `Super+Shift+Space` on Linux.
+  Cmd / Ctrl glyphs in inline hints (`⌘↵`, `⌘K`, `⌘N`, `⌘\`) flip to
+  textual `Ctrl+...` on Linux and Windows. The onboarding tour adapts
+  its slide-2 hotkey content to whichever hotkeys are actually wired
+  up on the current platform.
+- **Cross-platform CI matrix** — `ci.yml` now runs `cargo fmt --check`,
+  clippy, and `cargo test --lib` on macOS, Ubuntu 22.04, and Windows.
+  The UI test suite (Node helpers + Playwright WebKit) runs on macOS
+  only since WebKit is the closest engine to WebKitGTK / WKWebView and
+  duplicating it elsewhere adds no signal.
+- **Three-stage release pipeline** — `release.yml` was restructured
+  into create-draft → build matrix (3 OSes in parallel) →
+  SHA256SUMS + publish. A single tag push produces a draft GitHub
+  Release with all five bundles attached, then flips it to published
+  once every build succeeds. Prerelease tags (any tag containing `-`)
+  are automatically marked as pre-releases.
+
+### Changed
+
+- **App identifier in user-facing docs** — corrected `dev.ekorbia.desktop`
+  → `com.ekorbia.desktop` in the README's local-storage section to
+  match the real `tauri.conf.json` identifier. Linux and Windows data
+  directory paths now also documented.
+- **`README.md` install section** — split into per-OS subsections
+  with platform-specific first-launch instructions (Gatekeeper on
+  macOS, AppImage chmod / `.deb` install on Linux, SmartScreen on
+  Windows). Build-from-source dependencies tabled per OS.
+
+### Deferred (planned for later 0.3.x releases)
+
+- Linux overlay (Phase L2) — transparent always-on-top window with
+  Wayland support story.
+- Linux screenshot capture (Phase L3) — `grim+slurp` / `gnome-screenshot`
+  / `maim` runtime detection.
+- Windows screenshot capture (Phase W3) — `ms-screenclip:` URI or
+  the `xcap` crate.
+- Windows code signing (Phase W4) — EV certificate or Azure Trusted
+  Signing.
+
 ## [0.2.0] - 2026-05-25
 
 ### Added
