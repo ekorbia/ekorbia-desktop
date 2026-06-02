@@ -87,12 +87,17 @@ jobs:
       # license (e.g. GPL-3.0) fails this step. We pipe the JSON output
       # to /dev/null because we only care about the exit code here —
       # THIRD_PARTY_LICENSES.md is regenerated manually when deps change.
-      # Using taiki-e/install-action to fetch a precompiled cargo-about
-      # binary in ~5s instead of compiling it from source (~3 min).
-      - name: Install cargo-about (prebuilt)
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-about
+      #
+      # We compile cargo-about from source rather than use taiki-e/install-
+      # action's prebuilt binary because the latter started silently
+      # failing on macos-latest runners in mid-2026 — the action reports
+      # success but the `cargo-about` binary doesn't end up on PATH, so
+      # the next step explodes with "no such command: about". `cargo
+      # install --locked` always works and the build artifacts are cached
+      # by Swatinem/rust-cache above, so it's a ~5s no-op on warm runs.
+      # On a cold cache it adds ~3 min, an acceptable cost for reliability.
+      - name: Install cargo-about (from source)
+        run: cargo install cargo-about --locked --version '~0.6'
 
       - name: License attribution drift check
         working-directory: src-tauri
