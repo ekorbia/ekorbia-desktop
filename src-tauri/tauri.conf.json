@@ -48,7 +48,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "deb", "appimage", "msi", "nsis"],
+    "targets": ["app", "dmg", "deb", "rpm", "appimage", "msi", "nsis"],
     "publisher": "Ekorbia",
     "copyright": "Copyright (c) 2026 Ekorbia",
     "icon": [
@@ -61,6 +61,9 @@
     "linux": {
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      },
+      "rpm": {
+        "depends": ["webkit2gtk4.1", "gtk3"]
       }
     },
     "windows": {

@@ -14,13 +14,14 @@ primary platform; Linux and Windows are new for this release.
 
 ### Added
 
-- **Linux support** — `.deb` (Debian / Ubuntu / Mint) and `.AppImage`
-  (any modern x86_64 distro) bundles published from the release
-  pipeline. Built on Ubuntu 22.04 for broad glibc compatibility. Full
-  chat, attachments, folder RAG, watches, prompts, memory file, chat-
-  tool file saves, OS notifications (libnotify), and full-text history
-  search all work. See the [feature matrix](README.md#platform-feature-matrix)
-  for what's deferred (overlay, screenshot capture).
+- **Linux support** — `.deb` (Debian / Ubuntu / Mint), `.rpm`
+  (Fedora / RHEL / openSUSE), and `.AppImage` (any modern x86_64
+  distro) bundles published from the release pipeline. Built on Ubuntu
+  22.04 for broad glibc compatibility. Full chat, attachments, folder
+  RAG, watches, prompts, memory file, chat-tool file saves, OS
+  notifications (libnotify), and full-text history search all work.
+  See the [feature matrix](README.md#platform-feature-matrix) for
+  what's deferred (overlay, screenshot capture).
 - **Windows support** — `.msi` and NSIS `.exe` installers, both with
   the WebView2 bootstrapper embedded so Windows 10 systems without
   WebView2 still launch. Acrylic / Mica vibrancy on the overlay window

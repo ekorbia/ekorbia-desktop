@@ -152,6 +152,12 @@ jobs:
 
       # Linux-only system deps. Mirrors ci.yml's test-linux job — keep
       # these in sync when bumping Tauri or its WebKitGTK dependency.
+      #
+      # `rpm` provides rpmbuild, which Tauri's RPM bundler shells out to.
+      # Without it, the rpm target silently no-ops (or the bundler errors,
+      # depending on the Tauri patch version). Listed only in the release
+      # workflow because ci.yml's Linux job doesn't produce bundles —
+      # adding rpm there would just slow down `cargo test --lib`.
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -166,7 +172,8 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            rpm
 
       - name: Cache Cargo build artifacts
         uses: Swatinem/rust-cache@v2

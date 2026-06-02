@@ -107,11 +107,13 @@ Gatekeeper trusts.
 
 ### Linux
 
-Two bundle formats are published per release:
+Three bundle formats are published per release:
 
 - **AppImage** — works on any modern x86_64 distro, no install needed.
 - **`.deb`** — Debian, Ubuntu, Mint, Pop!_OS, and other apt-based
   distros.
+- **`.rpm`** — Fedora (Workstation, KDE, Silverblue), RHEL 9+, Rocky,
+  Alma, and other dnf/rpm-based distros.
 
 **AppImage** (simplest, distro-agnostic):
 
@@ -134,6 +136,21 @@ ekorbia
 The package's runtime dependencies (`libwebkit2gtk-4.1-0`, `libgtk-3-0`)
 are pulled in automatically. After install, you'll find Ekorbia under
 your application launcher's "Utility" or "Development" category.
+
+**`.rpm` (Fedora / RHEL / openSUSE):**
+
+```bash
+sudo dnf install ./Ekorbia-*.x86_64.rpm
+ekorbia
+```
+
+The package depends on `webkit2gtk4.1` and `gtk3`, which Fedora 39+ and
+RHEL 9+ have in their default repos. On older Fedora releases the
+package name was `webkit2gtk3` — install it first
+(`sudo dnf install webkit2gtk3`) and then `dnf install --force` the
+Ekorbia rpm if the dependency check fails. Once installed, the app
+shows up in KDE's launcher (Plasma searches by name) or under the
+GNOME Activities overview.
 
 **Notes:**
 
@@ -339,6 +356,7 @@ bundle/dmg/Ekorbia_*.dmg
 
 # Linux
 bundle/deb/ekorbia_*_amd64.deb
+bundle/rpm/Ekorbia-*.x86_64.rpm
 bundle/appimage/Ekorbia_*_amd64.AppImage
 
 # Windows
