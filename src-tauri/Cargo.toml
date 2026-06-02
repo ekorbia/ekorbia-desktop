@@ -1,6 +1,14 @@
 [package]
 name = "ekorbia"
-version = "0.3.0-rc1"
+# Build version stays on the plain "0.3.0" semver triple even for the
+# release candidate. Tauri's Windows MSI bundler rejects any non-numeric
+# prerelease identifier (the rule is "numeric-only, ≤ 65535") so a value
+# like "0.3.0-rc1" fails the build. The "rc1" signal lives in the git tag
+# (v0.3.0-rc1), the CHANGELOG section heading, and the GitHub Release
+# name — all human-facing places where it actually helps. Bundle
+# filenames will read "Ekorbia_0.3.0_*"; the release page distinguishes
+# RCs via the prerelease flag.
+version = "0.3.0"
 edition = "2021"
 description = "Local AI desktop IPE (Integrated Productivity Environment) powered by Ollama"
 license = "MIT"
