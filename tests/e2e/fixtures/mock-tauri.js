@@ -51,6 +51,14 @@
     // ollama
     ollama_models: () => [],
     ollama_ping: () => true,
+    // Phase B.1 Rust-proxied endpoints. Each returns the same shape as
+    // the corresponding Ollama HTTP endpoint (so the JS code that
+    // consumed `data.models` etc. doesn't change). Defaults keep mounts
+    // silent on tests that don't care about Ollama state; tests that
+    // assert on tags/ps behaviour override via __INVOKE_RESPONSES.
+    ollama_tags: () => ({ models: [] }),
+    ollama_ps: () => ({ models: [] }),
+    ollama_generate: () => undefined,
 
     // chat store
     db_load_chats: () => [],
@@ -102,10 +110,32 @@
     return Promise.resolve(undefined);
   };
 
+  // Channel<T>: Tauri 2's typed pipe for streaming Rust→JS data without
+  // round-tripping every chunk through invoke(). The production class
+  // sets up an IPC port; tests just need an object that exposes the
+  // same `.onmessage = fn` setter and `.send(value)` method. Tests that
+  // exercise streaming flows can drive a Channel by calling its
+  // `__deliver(value)` helper (mock-only escape hatch) to simulate a
+  // chunk arriving from Rust.
+  function Channel() {
+    let onmessage = null;
+    return {
+      set onmessage(fn) { onmessage = fn; },
+      get onmessage() { return onmessage; },
+      // Production parity: Rust side calls send() to push a chunk.
+      // In tests this isn't usually needed because invoke is mocked
+      // synchronously, but we keep it for completeness.
+      send: (v) => { if (onmessage) onmessage(v); return true; },
+      // Mock-only helper for spec files that want to feed chunks
+      // directly without going through a fake invoke handler.
+      __deliver: (v) => { if (onmessage) onmessage(v); },
+    };
+  }
+
   window.__TAURI__ = {
-    core: { invoke: invoke },
+    core: { invoke: invoke, Channel: Channel },
     // Legacy shape — files.jsx checks both.
-    tauri: { invoke: invoke },
+    tauri: { invoke: invoke, Channel: Channel },
     event: { listen: listen, emit: emit },
   };
 

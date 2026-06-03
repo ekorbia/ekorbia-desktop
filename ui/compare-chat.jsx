@@ -56,10 +56,10 @@ function CompareChatPane({
   React.useEffect(() => {
     if (!models.length) return;
     let cancelled = false;
-    fetch(`${OLLAMA_BASE}/api/tags`, {
-      signal: AbortSignal.timeout(3000),
-    })
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
+    // Rust-side `ollama_tags` (Phase B.1 proxy) — see ollama.rs.
+    const invoke = getInvoke();
+    if (!invoke) return;
+    invoke('ollama_tags')
       .then((data) => {
         if (cancelled) return;
         const installed = new Set(

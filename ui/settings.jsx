@@ -156,12 +156,13 @@ function AttachmentsSettings() {
   // local HTTP call); silent on failure — the dropdown just stays empty
   // and the user can switch to custom-input mode.
   const refreshPulledModels = async () => {
+    if (!invoke) return;
     try {
-      const r = await fetch(`${OLLAMA_BASE}/api/tags`, {
-        signal: AbortSignal.timeout(2500),
-      });
-      if (!r.ok) return;
-      const data = await r.json();
+      // Routed through Rust `ollama_tags` (see ollama.rs for the
+      // WebView2 PNA story). 3s timeout enforced Rust-side; an IPC
+      // error here just leaves the dropdown empty — the user can fall
+      // back to custom-input mode if needed.
+      const data = await invoke("ollama_tags");
       const names = (data.models || [])
         .map((m) => m.name)
         .filter(isEmbeddingModelName)

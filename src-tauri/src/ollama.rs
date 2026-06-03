@@ -277,6 +277,261 @@ pub(crate) async fn embedding_model_check(
     Ok(EmbeddingModelCheck { installed, model })
 }
 
+// ── UI-facing proxies for Ollama HTTP endpoints (Phase B.1) ────────────────
+//
+// These commands exist because the UI's direct `fetch("http://127.0.0.1:11434")`
+// calls fail on Windows due to WebView2's Private Network Access (PNA)
+// preflight enforcement: a fetch from the app's `tauri://localhost` origin
+// to 127.0.0.1 triggers a CORS preflight asking for
+// `Access-Control-Allow-Private-Network: true`, which Ollama doesn't send
+// by default. macOS WebKit and Linux WebKitGTK don't enforce PNA yet, so
+// the bug only surfaced on Windows.
+//
+// Routing through Rust completely bypasses the browser network stack —
+// reqwest connects via OS sockets, no preflight, no CORS, no PNA. Same
+// fix works on every platform. Each command mirrors the response shape
+// the UI used to consume directly, so the JS-side data handling is
+// untouched aside from `fetch(...).then(r => r.json())` becoming
+// `await invoke(...)`.
+//
+// The streaming `/api/chat` endpoint uses a separate `ollama_chat_stream`
+// command via `Channel<T>` (Phase B.2) because Tauri commands can't
+// natively return a streamed body.
+
+/// Wrap GET /api/tags. Returns the raw `{ models: [...] }` payload as
+/// `serde_json::Value` so the UI can keep accessing `.models` the same
+/// way it did when this was a `fetch().json()` call. 3-second per-request
+/// timeout matches the previous `AbortSignal.timeout(3000)`.
+#[tauri::command]
+pub(crate) async fn ollama_tags() -> Result<serde_json::Value, String> {
+    let resp = ollama_client()
+        .get(ollama_url("/api/tags"))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .map_err(|e| format!("Ollama /api/tags request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Ollama /api/tags returned {}", resp.status()));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Bad JSON from /api/tags: {e}"))
+}
+
+/// Wrap GET /api/ps — currently-loaded models. 2-second timeout matches
+/// the previous UI behaviour; this endpoint is called from the status
+/// bar's polling loop, so a tighter ceiling keeps the UI responsive when
+/// Ollama is unreachable.
+#[tauri::command]
+pub(crate) async fn ollama_ps() -> Result<serde_json::Value, String> {
+    let resp = ollama_client()
+        .get(ollama_url("/api/ps"))
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+        .map_err(|e| format!("Ollama /api/ps request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Ollama /api/ps returned {}", resp.status()));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Bad JSON from /api/ps: {e}"))
+}
+
+/// Wrap POST /api/generate — fire-and-forget, used only by the model
+/// warm-up path in `main.jsx` (`{ prompt: "hi", num_predict: 1 }`).
+/// Accepts an arbitrary JSON body so the UI can evolve its warming
+/// payload without a Rust change. Response body is intentionally
+/// discarded; the caller only cares that the request reached Ollama
+/// (which forces the model into RAM as a side effect).
+#[tauri::command]
+pub(crate) async fn ollama_generate(body: serde_json::Value) -> Result<(), String> {
+    let resp = ollama_client()
+        .post(ollama_url("/api/generate"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Ollama /api/generate request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Ollama /api/generate returned {}", resp.status()));
+    }
+    Ok(())
+}
+
+// ── Streaming chat proxy (Phase B.2) ───────────────────────────────────────
+//
+// The UI used to POST /api/chat directly and consume the response body as a
+// stream of newline-delimited JSON objects. On Windows that fetch is gated
+// by WebView2's Private Network Access enforcement and silently fails (see
+// the B.1 block above for the full story).
+//
+// `ollama_chat_stream` mirrors the same protocol — POST the same body Ollama
+// expects, consume the response chunk by chunk, parse out complete NDJSON
+// lines, and forward each one as a `serde_json::Value` through a Tauri
+// `Channel<T>` to the JS caller. The UI's `consumeLine()` then sees the
+// same parsed-object shape it used to get from `JSON.parse(line)`. No
+// schema is hardcoded on the Rust side because Ollama's chunk shape varies
+// across endpoints and model versions — keeping the wire format opaque
+// here makes us forwards-compatible.
+//
+// Cancellation: the UI calls `ollama_chat_stream_cancel(request_id)` when
+// the user hits Stop. We poll a per-request `AtomicBool` at chunk
+// boundaries — latency is sub-second on any reasonable model (the gap
+// between two emitted tokens). For a more aggressive interrupt we'd need
+// `tokio::select!` against a Notify — overkill for B.2 v1.
+
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+static CHAT_CANCELS: OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>,
+> = OnceLock::new();
+
+fn chat_cancel_registry(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, Arc<AtomicBool>>> {
+    CHAT_CANCELS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// RAII guard for a registered chat-cancel slot. Holding this keeps the
+/// flag's Arc alive in the registry. Drop removes the entry — runs on
+/// normal return, early-break, AND panic-unwind, so the map can't leak.
+/// Mirrors the `CancelToken` in attachments/cancel.rs.
+struct ChatCancelToken {
+    id: String,
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for ChatCancelToken {
+    fn drop(&mut self) {
+        if let Ok(mut m) = chat_cancel_registry().lock() {
+            m.remove(&self.id);
+        }
+    }
+}
+
+fn register_chat_cancel(id: &str) -> ChatCancelToken {
+    let flag = Arc::new(AtomicBool::new(false));
+    if let Ok(mut m) = chat_cancel_registry().lock() {
+        m.insert(id.to_string(), flag.clone());
+    }
+    ChatCancelToken {
+        id: id.to_string(),
+        flag,
+    }
+}
+
+/// Flip the cancel flag for `request_id`. The running stream picks it up
+/// at the next chunk boundary and exits cleanly, the Tauri command
+/// returns Ok, and the JS-side `invoke` promise resolves. Safe to call
+/// when no stream is registered — the lookup just no-ops.
+#[tauri::command]
+pub(crate) fn ollama_chat_stream_cancel(request_id: String) {
+    if let Ok(m) = chat_cancel_registry().lock() {
+        if let Some(flag) = m.get(&request_id) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Stream `/api/chat`'s NDJSON response to the JS caller via a Tauri
+/// Channel.
+///
+/// `request_id` is the UI's logical identifier for this stream — typically
+/// the assistant message id. The UI uses the same id to cancel via
+/// `ollama_chat_stream_cancel`.
+///
+/// `body` is forwarded verbatim to Ollama. We don't validate it because
+/// the UI assembles different shapes (tools array present or absent, image
+/// attachments, etc.) and any breaking change to that shape would be a
+/// UI-side bug regardless of what Rust does.
+///
+/// `on_chunk` receives one parsed `serde_json::Value` per complete NDJSON
+/// line. The final chunk carries `done: true` plus token counts. If JS
+/// drops the channel (window closes, user navigates away), `on_chunk.send`
+/// returns Err on the next chunk and we treat it as a graceful cancel.
+#[tauri::command]
+pub(crate) async fn ollama_chat_stream(
+    request_id: String,
+    body: serde_json::Value,
+    on_chunk: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<(), String> {
+    let token = register_chat_cancel(&request_id);
+    let cancel = token.flag.clone();
+
+    let mut resp = ollama_client()
+        .post(ollama_url("/api/chat"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Ollama /api/chat request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Ollama /api/chat returned {}", resp.status()));
+    }
+
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let next = resp
+            .chunk()
+            .await
+            .map_err(|e| format!("Ollama stream read failed: {e}"))?;
+        let bytes = match next {
+            Some(b) => b,
+            None => break, // end of stream
+        };
+        buf.extend_from_slice(&bytes);
+        // Drain complete lines. Each NDJSON line is one JSON object plus
+        // a trailing '\n'. We strip the newline before parsing.
+        while let Some(nl_pos) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=nl_pos).collect();
+            // `line` includes the trailing newline — slice it off.
+            let body = if line.last() == Some(&b'\n') {
+                &line[..line.len() - 1]
+            } else {
+                &line[..]
+            };
+            let s = match std::str::from_utf8(body) {
+                Ok(s) => s.trim(),
+                Err(_) => continue, // skip non-UTF-8 fragments
+            };
+            if s.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<serde_json::Value>(s) {
+                Ok(obj) => {
+                    // Channel send failure = JS handle dropped (user
+                    // closed the window or component unmounted). Treat
+                    // as cancellation — return Ok so the caller sees a
+                    // clean resolution rather than an error.
+                    if on_chunk.send(obj).is_err() {
+                        return Ok(());
+                    }
+                }
+                Err(_) => continue, // malformed line, keep going
+            }
+        }
+    }
+
+    // Final partial line (no trailing newline). Ollama always terminates
+    // with '\n' in practice, but flushing here keeps us robust against
+    // servers that don't.
+    if !buf.is_empty() {
+        if let Ok(s) = std::str::from_utf8(&buf) {
+            let s = s.trim();
+            if !s.is_empty() {
+                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(s) {
+                    let _ = on_chunk.send(obj);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ── Process startup ────────────────────────────────────────────────────────
 
 /// Quick sync check: is *something* listening on Ollama's port?
@@ -414,4 +669,81 @@ pub(crate) async fn start_ollama(app: tauri::AppHandle) -> Result<(), String> {
          or install the CLI and ensure it is on your PATH."
             .to_string()
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard for the Windows WebView2 Private Network Access
+    /// bug fixed in 0.3.0-rc1/rc2. The constant MUST use IPv4 literal
+    /// `127.0.0.1` — never `localhost`. WebView2 resolves `localhost`
+    /// to IPv6 `::1` first; default Ollama on Windows binds only to
+    /// IPv4 so the IPv6 connection fails or hangs past our 3s status
+    /// check, and Ekorbia would mistakenly conclude "Ollama not
+    /// running." If anyone tries to "clean up" the constant by going
+    /// back to `localhost`, this test fails loud.
+    #[test]
+    fn ollama_base_uses_ipv4_literal() {
+        assert_eq!(OLLAMA_BASE, "http://127.0.0.1:11434");
+        assert!(
+            !OLLAMA_BASE.contains("localhost"),
+            "OLLAMA_BASE must NOT use 'localhost' — see WebView2 PNA note"
+        );
+        assert_eq!(OLLAMA_ADDR, "127.0.0.1:11434");
+    }
+
+    /// Same intent for the URL builder.
+    #[test]
+    fn ollama_url_concatenates_base_and_path() {
+        assert_eq!(ollama_url("/api/tags"), "http://127.0.0.1:11434/api/tags");
+        assert_eq!(ollama_url(""), "http://127.0.0.1:11434");
+    }
+
+    /// Cancel registry happy path: register inserts an entry whose
+    /// flag is initially false; explicit cancel flips the flag to
+    /// true and removes the entry.
+    #[test]
+    fn chat_cancel_registry_register_and_cancel() {
+        let id = "test-cancel-happy";
+        let token = register_chat_cancel(id);
+        assert!(!token.flag.load(Ordering::Relaxed));
+        // Registry entry exists while the token is alive.
+        {
+            let m = chat_cancel_registry().lock().unwrap();
+            assert!(m.contains_key(id));
+        }
+        // Explicit cancel flips the shared flag.
+        ollama_chat_stream_cancel(id.to_string());
+        assert!(token.flag.load(Ordering::Relaxed));
+        // Drop cleanup happens at end of scope below.
+        drop(token);
+    }
+
+    /// Cancel registry drop semantics: the registry slot is removed
+    /// when the token is dropped (normal scope exit). The Arc<AtomicBool>
+    /// the spawned task may still hold via clone() is independent — it
+    /// just stops being reachable through the registry.
+    #[test]
+    fn chat_cancel_registry_drop_removes_entry() {
+        let id = "test-cancel-drop";
+        {
+            let _token = register_chat_cancel(id);
+            let m = chat_cancel_registry().lock().unwrap();
+            assert!(m.contains_key(id));
+        }
+        // _token dropped — registry entry should be gone.
+        let m = chat_cancel_registry().lock().unwrap();
+        assert!(!m.contains_key(id));
+    }
+
+    /// `ollama_chat_stream_cancel` is safe to call for an unknown id —
+    /// no panic, no error. Matches the attachments cancel registry's
+    /// "lookup misses are silent" contract.
+    #[test]
+    fn chat_cancel_unknown_id_is_no_op() {
+        // No panic, no side effect we can observe (since there's no
+        // registered entry). Just call it.
+        ollama_chat_stream_cancel("never-registered".to_string());
+    }
 }

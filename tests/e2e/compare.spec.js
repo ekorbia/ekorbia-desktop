@@ -21,15 +21,19 @@ const { test, expect } = require("@playwright/test");
 test.beforeEach(async ({ page }) => {
   await page.goto("/tests/e2e/fixtures/playwright.html");
   await page.waitForFunction(() => window.__JSX_READY === true);
-  // Phase 5 added a /api/tags fetch inside CompareChatPane's mount
+  // Phase 5 added a tags-list probe inside CompareChatPane's mount
   // effect to detect uninstalled models. In the test harness no Ollama
-  // is running on localhost:11434, AND the synthetic model names tests
-  // use ("a", "b", "alpha") aren't real models anyway. We mock the
-  // fetch globally here to return EVERY model name any test uses, so
-  // by default the missing-banner doesn't fire. Tests that DO want to
-  // exercise the missing-banner path override window.fetch per-test
-  // before calling __TEST_MOUNT — that wins because their override is
-  // set after this beforeEach finishes.
+  // is running, AND the synthetic model names tests use ("a", "b",
+  // "alpha") aren't real models anyway. We override the invoke mock
+  // here to return EVERY model name any test uses, so by default the
+  // missing-banner doesn't fire. Tests that DO want to exercise the
+  // missing-banner path override __INVOKE_RESPONSES.ollama_tags
+  // per-test before calling __TEST_MOUNT — that wins because their
+  // override is set after this beforeEach finishes.
+  //
+  // (Phase B.1 moved this call from direct fetch() to invoke('ollama_tags').
+  // The fixture's mock-tauri intercepts invoke; we just need to swap
+  // its canned response for ollama_tags.)
   await page.evaluate(() => {
     const allKnown = [
       "a", "b", "c",
@@ -38,17 +42,9 @@ test.beforeEach(async ({ page }) => {
       "gemma4:latest", "gemma4:e2b", "granite4.1:8b",
       "qwen3.5:4b", "qwen3.5:latest", "qwen3.6:27b",
     ];
-    window.fetch = (url) => {
-      if (typeof url === "string" && url.includes("/api/tags")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            models: allKnown.map((name) => ({ name })),
-          }),
-        });
-      }
-      return Promise.reject(new Error("unexpected fetch in test: " + url));
-    };
+    window.__INVOKE_RESPONSES.ollama_tags = () => ({
+      models: allKnown.map((name) => ({ name })),
+    });
   });
 });
 
@@ -377,19 +373,12 @@ test.describe("Phase 5: missing-model banner", () => {
     page,
   }) => {
     await page.evaluate(() => {
-      // Override fetch to return a fixed tags list that's MISSING one of
-      // the chat's models. Restore happens at unmount; tests are isolated
-      // per page, so leaking is harmless.
-      window.fetch = (url) => {
-        if (typeof url === "string" && url.includes("/api/tags")) {
-          return Promise.resolve({
-            ok: true,
-            json: () =>
-              Promise.resolve({ models: [{ name: "alpha" }, { name: "beta" }] }),
-          });
-        }
-        return Promise.reject(new Error("unexpected fetch"));
-      };
+      // Override the ollama_tags invoke response to a fixed list that's
+      // MISSING one of the chat's models. Test isolation is per-page so
+      // mutating __INVOKE_RESPONSES here doesn't bleed into other tests.
+      window.__INVOKE_RESPONSES.ollama_tags = () => ({
+        models: [{ name: "alpha" }, { name: "beta" }],
+      });
       window.__TEST_MOUNT("CompareChatPane", {
         chat: {
           id: "c1",
@@ -420,18 +409,9 @@ test.describe("Phase 5: missing-model banner", () => {
     page,
   }) => {
     await page.evaluate(() => {
-      window.fetch = (url) => {
-        if (typeof url === "string" && url.includes("/api/tags")) {
-          return Promise.resolve({
-            ok: true,
-            json: () =>
-              Promise.resolve({
-                models: [{ name: "alpha" }, { name: "beta" }, { name: "gamma" }],
-              }),
-          });
-        }
-        return Promise.reject(new Error("unexpected fetch"));
-      };
+      window.__INVOKE_RESPONSES.ollama_tags = () => ({
+        models: [{ name: "alpha" }, { name: "beta" }, { name: "gamma" }],
+      });
       window.__TEST_MOUNT("CompareChatPane", {
         chat: {
           id: "c1",

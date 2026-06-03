@@ -60,24 +60,13 @@ const IS_WIN = _DETECTED_PLATFORM === "windows";
 const MOD_GLYPH = IS_MAC ? "⌘" : "Ctrl+";
 const ENTER_GLYPH = IS_MAC ? "↵" : "Enter";
 
-// ── Ollama HTTP base URL ──────────────────────────────────────────────────
-//
-// One source of truth for every `fetch(...)` call to Ollama from the UI.
-// Mirrors `OLLAMA_BASE` in src-tauri/src/ollama.rs — keep them in sync.
-//
-// IMPORTANT: uses `127.0.0.1` rather than `localhost`. On Windows,
-// WebView2 (the Chromium-based engine that backs Tauri's UI) resolves
-// `localhost` to BOTH `::1` (IPv6) and `127.0.0.1` (IPv4) and tries
-// IPv6 first. Default Ollama on Windows binds only to IPv4, so the
-// IPv6 connection fails or hangs past the UI's 3-second status-check
-// timeout — Ekorbia would conclude "Ollama not running" even when it
-// was. Forcing `127.0.0.1` skips DNS entirely and eliminates the race.
-//
-// Use as a string interpolation:
-//   fetch(`${OLLAMA_BASE}/api/tags`, { ... })
-// not as a separate concat — it's one constant, no function-call cost,
-// and template literals make the path readable inline.
-const OLLAMA_BASE = "http://127.0.0.1:11434";
+// Note: there used to be an `OLLAMA_BASE = "http://127.0.0.1:11434"`
+// constant here for direct fetch() calls to Ollama from the UI. Phase
+// B (Jun 2026) routed every Ollama call through Rust Tauri commands
+// — see src/ollama.rs's `OLLAMA_BASE` for the canonical address and
+// the WebView2-Private-Network-Access story that motivated the move.
+// The constant is now Rust-side only; the UI has no business knowing
+// the address.
 
 // ── Hotkey helpers (settings.jsx, onboarding.jsx) ──────────────────────────
 
@@ -550,6 +539,18 @@ function getInvoke() {
   return (t?.core ?? t?.tauri)?.invoke;
 }
 
+// Tauri 2's `Channel<T>` constructor — used for streaming Rust→JS data
+// (chat tokens, large attachment indexing progress, etc). Same v2/v1
+// dual-namespace lookup as getInvoke. Callers do
+// `const ch = new (getChannel())(); ch.onmessage = (chunk) => ...;`
+// and pass `ch` as a Tauri command argument; Rust's
+// `Channel<T>::send(value)` fires `ch.onmessage(value)` on the JS side.
+// Returns undefined when no Tauri runtime is present (Node tests).
+function getChannel() {
+  const t = getTauriRoot();
+  return (t?.core ?? t?.tauri)?.Channel;
+}
+
 // tauri-plugin-dialog wrapper (open/save file pickers).
 function getDialogApi() {
   return getTauriRoot()?.dialog;
@@ -598,7 +599,6 @@ if (typeof window !== "undefined") {
   window.IS_WIN = IS_WIN;
   window.MOD_GLYPH = MOD_GLYPH;
   window.ENTER_GLYPH = ENTER_GLYPH;
-  window.OLLAMA_BASE = OLLAMA_BASE;
   window.HOTKEY_MOD_CODES = HOTKEY_MOD_CODES;
   window.formatHotkey = formatHotkey;
   window.hotkeyFromEvent = hotkeyFromEvent;
@@ -617,6 +617,7 @@ if (typeof window !== "undefined") {
   window.groupChatsForSidebar = groupChatsForSidebar;
   window.getTauriRoot = getTauriRoot;
   window.getInvoke = getInvoke;
+  window.getChannel = getChannel;
   window.getDialogApi = getDialogApi;
   window.getShellApi = getShellApi;
   window.getEventApi = getEventApi;
@@ -632,7 +633,6 @@ if (typeof module !== "undefined" && module.exports) {
     IS_WIN,
     MOD_GLYPH,
     ENTER_GLYPH,
-    OLLAMA_BASE,
     HOTKEY_MOD_CODES,
     formatHotkey,
     hotkeyFromEvent,
@@ -651,6 +651,7 @@ if (typeof module !== "undefined" && module.exports) {
     groupChatsForSidebar,
     getTauriRoot,
     getInvoke,
+    getChannel,
     getDialogApi,
     getShellApi,
     getEventApi,

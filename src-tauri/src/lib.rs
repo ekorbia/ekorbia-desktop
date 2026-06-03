@@ -98,6 +98,11 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             ollama::start_ollama,
+            ollama::ollama_tags,
+            ollama::ollama_ps,
+            ollama::ollama_generate,
+            ollama::ollama_chat_stream,
+            ollama::ollama_chat_stream_cancel,
             overlay::overlay_hide,
             overlay::overlay_resize,
             overlay::focus_main,

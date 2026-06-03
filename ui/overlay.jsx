@@ -123,10 +123,8 @@ function QuickQuery() {
     if (picker !== "model") return;
     setAvailableModels(null);
     setModelsError(null);
-    fetch(`${OLLAMA_BASE}/api/tags`, {
-      signal: AbortSignal.timeout(3000),
-    })
-      .then((r) => r.json())
+    // Rust-side `ollama_tags` (Phase B.1 proxy) — see ollama.rs for why.
+    invoke('ollama_tags')
       .then((data) => setAvailableModels(data.models || []))
       .catch(() => {
         setAvailableModels([]);
@@ -136,7 +134,14 @@ function QuickQuery() {
 
   // ── Dismiss ────────────────────────────────────────────────────────────────
   const hide = async () => {
-    abortRef.current?.abort();
+    // Phase B.2: cancellation is an IPC ping; the in-flight Rust
+    // streaming command picks it up at the next chunk boundary and
+    // exits cleanly. We fire-and-forget; whether the cancel reaches
+    // an active stream or no-ops on a finished one is fine.
+    if (abortRef.current) {
+      invoke('ollama_chat_stream_cancel', { requestId: abortRef.current })
+        .catch(() => {});
+    }
     abortRef.current = null;
     setStreaming(false);
     setPicker(null);
@@ -350,8 +355,12 @@ function QuickQuery() {
     // The `text` value is captured in this closure for the messages array
     // below — clearing the state doesn't affect what gets sent.
     setText("");
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
+    // Phase B.2: cancellation now goes through ollama_chat_stream_cancel.
+    // abortRef holds the requestId (the overlay reuses a single id since
+    // it only ever has one in-flight stream — a submit while another
+    // streams is gated by the `streaming` state above).
+    const requestId = `overlay-${Date.now().toString(36)}`;
+    abortRef.current = requestId;
 
     const messages = attached
       ? [
@@ -363,34 +372,27 @@ function QuickQuery() {
     let acc = "";
     let ok = false;
     try {
-      const r = await fetch(`${OLLAMA_BASE}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: modelId, messages, stream: true }),
-        signal: ctrl.signal,
-      });
-      if (r.ok) {
-        ok = true;
-        const reader = r.body.getReader();
-        const dec = new TextDecoder();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          for (const line of dec.decode(value, { stream: true }).split("\n")) {
-            if (!line.trim()) continue;
-            try {
-              const obj = JSON.parse(line);
-              if (obj.message?.content) {
-                acc += obj.message.content;
-                setResponse(acc);
-              }
-            } catch {}
-          }
+      const Channel = getChannel();
+      const channel = new Channel();
+      channel.onmessage = (obj) => {
+        if (obj?.message?.content) {
+          acc += obj.message.content;
+          setResponse(acc);
         }
-      }
+      };
+      await invoke('ollama_chat_stream', {
+        requestId,
+        body: { model: modelId, messages, stream: true },
+        onChunk: channel,
+      });
+      ok = true;
     } catch (e) {
-      if (e.name !== "AbortError") {
-        setResponse("Could not reach Ollama on localhost:11434.");
+      // Rust returns Err for connection-refused / non-2xx / parse
+      // errors. We don't distinguish a user-cancelled stream here
+      // (that returns Ok by design) from a real failure — both leave
+      // `ok` false and `acc` whatever streamed before the stop.
+      if (!acc) {
+        setResponse("Could not reach Ollama on 127.0.0.1:11434.");
       }
     }
     if (!ok && !acc) {

@@ -29,12 +29,12 @@ function fmt_size(bytes) {
 function ModelPicker({ active, onPick, onClose }) {
   const [models, setModels] = useState(null); // null = loading
   const [error, setError] = useState("");
+  const invoke = getInvoke();
 
   useEffect(() => {
-    fetch(`${OLLAMA_BASE}/api/tags`, {
-      signal: AbortSignal.timeout(3000),
-    })
-      .then((r) => r.json())
+    // Rust-side `ollama_tags` (Phase B.1 proxy) — see ollama.rs for why.
+    if (!invoke) { setModels([]); setError("Ollama not running"); return; }
+    invoke('ollama_tags')
       .then((data) => {
         // Sort alphabetically by name. /api/tags returns modified_at DESC
         // which is unstable across launches and surprising in a picker
@@ -247,6 +247,7 @@ function CompareModelPickerModal({ open, onClose, onConfirm }) {
   const [models, setModels] = useState(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(() => new Set());
+  const invoke = getInvoke();
 
   useEffect(() => {
     if (!open) return;
@@ -254,10 +255,9 @@ function CompareModelPickerModal({ open, onClose, onConfirm }) {
     setSelected(new Set());
     setError("");
     setModels(null);
-    fetch(`${OLLAMA_BASE}/api/tags`, {
-      signal: AbortSignal.timeout(3000),
-    })
-      .then((r) => r.json())
+    // Rust-side `ollama_tags` (Phase B.1 proxy) — see ollama.rs for why.
+    if (!invoke) { setModels([]); setError("Ollama not running"); return; }
+    invoke('ollama_tags')
       .then((data) => {
         // Same alphabetical sort as the single-model ModelPicker so
         // both pickers feel consistent. Embed models (nomic-embed-text
@@ -817,6 +817,8 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
   const [errorMsg, setErrorMsg] = useState("");
   const pollRef = useRef(null);
   const pollCount = useRef(0);
+  // Shared by checkOllama() and startOllama() below.
+  const invoke = getInvoke();
 
   const stopPolling = () => {
     clearInterval(pollRef.current);
@@ -824,12 +826,11 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
   };
 
   const checkOllama = async () => {
+    if (!invoke) return "not-running";
     try {
-      const resp = await fetch(`${OLLAMA_BASE}/api/tags`, {
-        signal: AbortSignal.timeout(2000),
-      });
-      if (!resp.ok) return "not-running";
-      const data = await resp.json();
+      // Rust-side `ollama_tags` (Phase B.1 proxy). The IPC throw on
+      // failure replaces the previous `!resp.ok` + catch combo.
+      const data = await invoke('ollama_tags');
       const names = (data.models || []).map((m) => m.name);
       const found = names.some(
         (n) => n === modelId || n.startsWith(modelId.split(":")[0]),
@@ -856,7 +857,6 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
   const startOllama = async () => {
     setPhase("starting");
     setErrorMsg("");
-    const invoke = getInvoke();
     if (!invoke) {
       setPhase("error");
       setErrorMsg(

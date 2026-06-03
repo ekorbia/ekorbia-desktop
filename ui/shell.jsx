@@ -1948,43 +1948,54 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
   const [pulled, setPulled] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
+  // Tauri IPC handle. The poll loop below routes its Ollama status
+  // probes through Rust commands (Phase B.1) so they don't hit the
+  // WebView2 PNA gate on Windows.
+  const invoke = getInvoke();
+
   useEffect(() => {
     let cancelled = false;
     const matchesModel = (n) =>
       n === model.id || n.startsWith(model.id.split(":")[0]);
     const check = async () => {
-      try {
-        const tagsResp = await fetch(`${OLLAMA_BASE}/api/tags`, {
-          signal: AbortSignal.timeout(2000),
-        });
-        if (cancelled) return;
-        if (!tagsResp.ok) {
+      // No Tauri runtime (Playwright-mocked tests / dev preview):
+      // surface "not running" rather than crash. Matches the old
+      // fetch-fails-with-throw branch.
+      if (!invoke) {
+        if (!cancelled) {
           setOllamaUp(false);
           setPulled(false);
           setLoaded(false);
-          return;
         }
-        setOllamaUp(true);
-        const tagsData = await tagsResp.json();
-        setPulled((tagsData.models || []).some((m) => matchesModel(m.name)));
-
-        // /api/ps is the only honest source for "loaded into memory".
-        const psResp = await fetch(`${OLLAMA_BASE}/api/ps`, {
-          signal: AbortSignal.timeout(2000),
-        });
+        return;
+      }
+      // Two Rust-side proxies (Phase B.1) — see ollama.rs. An IPC throw
+      // from `ollama_tags` is the canonical "Ollama unreachable" signal
+      // now; we don't need a separate `.ok` check the way the old
+      // fetch path did.
+      try {
+        const tagsData = await invoke('ollama_tags');
         if (cancelled) return;
-        if (psResp.ok) {
-          const psData = await psResp.json();
-          setLoaded((psData.models || []).some((m) => matchesModel(m.name)));
-        } else {
-          setLoaded(false);
-        }
+        setOllamaUp(true);
+        setPulled((tagsData.models || []).some((m) => matchesModel(m.name)));
       } catch {
         if (!cancelled) {
           setOllamaUp(false);
           setPulled(false);
           setLoaded(false);
         }
+        return;
+      }
+      try {
+        // /api/ps is the only honest source for "loaded into memory".
+        const psData = await invoke('ollama_ps');
+        if (cancelled) return;
+        setLoaded((psData.models || []).some((m) => matchesModel(m.name)));
+      } catch {
+        // /api/ps failing doesn't invalidate /api/tags success — Ollama
+        // is up but we can't read the running set. Treat as "not
+        // loaded" rather than "not running".
+        if (!cancelled) setLoaded(false);
       }
     };
     check();

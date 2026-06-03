@@ -1131,8 +1131,11 @@ function App() {
   // Failures are silent: if Ollama is down, the StatusBar surfaces it and
   // the user can fix the model later via the picker.
   useE(() => {
-    fetch(`${OLLAMA_BASE}/api/tags`, { signal: AbortSignal.timeout(3000) })
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
+    // Routed through the Rust `ollama_tags` command rather than direct
+    // fetch — see ollama.rs comment block for the WebView2 PNA story.
+    // 3s timeout is now applied Rust-side; failures throw an IPC error
+    // which we swallow (the StatusBar shows the real "not running" state).
+    invoke('ollama_tags')
       .then((data) => {
         const pulled = (data.models || []).map((m) => m.name);
         if (pulled.length === 0) return;
@@ -1435,8 +1438,12 @@ function App() {
       seq,
     }).catch(console.error);
 
-    const controller = new AbortController();
-    abortRef.current = controller;
+    // Phase B.2: streaming runs through Rust's ollama_chat_stream rather
+    // than a direct fetch (WebView2 PNA gate on Windows blocks the
+    // browser-side request). `abortRef` now holds the in-flight request
+    // id rather than an AbortController; handleStop translates a click
+    // into an invoke('ollama_chat_stream_cancel') call.
+    abortRef.current = asstId;
 
     let accumulated = '';
     let tokensIn = 0, tokensOut = 0, startMs = Date.now();
@@ -1518,74 +1525,54 @@ function App() {
           body.tools = toolSchemasRef.current;
         }
 
-        const resp = await fetch(`${OLLAMA_BASE}/api/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-        if (!resp.ok) { ollamaOk = false; break; }
-        ollamaOk = true;
-
         let turnContent = '';
         let turnToolCalls = [];
-        const reader = resp.body.getReader();
-        const dec = new TextDecoder();
-        // Line-buffered NDJSON parsing. The previous implementation
-        // split each decoded chunk on '\n' and parsed each segment —
-        // which silently dropped content whenever a JSON line straddled
-        // a network packet boundary (the partial first/last line would
-        // fail JSON.parse and be swallowed by the catch below). Buffering
-        // raw text and only consuming completed lines (delimiter found)
-        // eliminates that loss.
-        let lineBuf = '';
-        const consumeLine = (line) => {
-          if (!line) return;
-          try {
-            const obj = JSON.parse(line);
-            if (obj.message?.content) {
-              turnContent += obj.message.content;
-              accumulated += obj.message.content;
-              streamAccumulatedRef.current = accumulated;
-              const snap = accumulated;
-              setChat(c => {
-                const msgs = [...c.messages];
-                msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: snap };
-                return { ...c, messages: msgs };
-              });
-            }
-            if (obj.message?.tool_calls?.length) {
-              turnToolCalls = turnToolCalls.concat(obj.message.tool_calls);
-            }
-            if (obj.done) {
-              // tokensIn is the prompt-eval count of the LATEST request —
-              // it grows each iteration as we append tool responses, so
-              // overwriting (not summing) gives a meaningful total.
-              tokensIn = obj.prompt_eval_count ?? tokensIn;
-              tokensOut += obj.eval_count ?? 0;
-            }
-          } catch (_) {
-            // Malformed JSON line. Should not happen with Ollama in
-            // practice; swallow and continue (a single bad chunk
-            // shouldn't kill the whole turn).
+        // Channel<serde_json::Value>: Rust's ollama_chat_stream parses
+        // each NDJSON line from Ollama into an object and forwards it
+        // here. The UI's per-chunk handling is unchanged from when this
+        // was inline JSON.parse() — just receives pre-parsed objects.
+        const Channel = getChannel();
+        const channel = new Channel();
+        const consumeChunk = (obj) => {
+          if (!obj) return;
+          if (obj.message?.content) {
+            turnContent += obj.message.content;
+            accumulated += obj.message.content;
+            streamAccumulatedRef.current = accumulated;
+            const snap = accumulated;
+            setChat(c => {
+              const msgs = [...c.messages];
+              msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: snap };
+              return { ...c, messages: msgs };
+            });
+          }
+          if (obj.message?.tool_calls?.length) {
+            turnToolCalls = turnToolCalls.concat(obj.message.tool_calls);
+          }
+          if (obj.done) {
+            // tokensIn is the prompt-eval count of the LATEST request —
+            // it grows each iteration as we append tool responses, so
+            // overwriting (not summing) gives a meaningful total.
+            tokensIn = obj.prompt_eval_count ?? tokensIn;
+            tokensOut += obj.eval_count ?? 0;
           }
         };
-        while (streamingRef.current) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          lineBuf += dec.decode(value, { stream: true });
-          let nl;
-          while ((nl = lineBuf.indexOf('\n')) !== -1) {
-            const line = lineBuf.slice(0, nl).trim();
-            lineBuf = lineBuf.slice(nl + 1);
-            consumeLine(line);
-          }
+        channel.onmessage = consumeChunk;
+
+        try {
+          await invoke('ollama_chat_stream', {
+            requestId: asstId,
+            body,
+            onChunk: channel,
+          });
+          ollamaOk = true;
+        } catch (e) {
+          // Rust returns Err when Ollama is unreachable / non-2xx. We
+          // surface the same "ollama not running" UX the old fetch
+          // failure produced — set the flag and break the tool loop.
+          ollamaOk = false;
+          break;
         }
-        // Drain any final non-newline-terminated content. Ollama always
-        // ends each NDJSON entry with '\n' in practice, but flushing
-        // here keeps us robust against servers that don't.
-        const tail = lineBuf.trim();
-        if (tail) consumeLine(tail);
 
         // No tool_calls? Final turn — stop.
         if (turnToolCalls.length === 0) break;
@@ -1848,8 +1835,11 @@ function App() {
   // column failed" without aborting the other columns.
   const streamModelToMessage = async ({ asstId, model, messages, onChunk }) => {
     const startMs = Date.now();
-    const controller = new AbortController();
-    multiStreamControllersRef.current.set(asstId, controller);
+    // Phase B.2: per-column controllers map now stores the requestId
+    // (asstId, which is already unique per column) rather than an
+    // AbortController. handleStopMultiModel translates a stop into a
+    // Rust-side cancel via invoke('ollama_chat_stream_cancel').
+    multiStreamControllersRef.current.set(asstId, asstId);
     multiStreamAccumRef.current.set(asstId, '');
 
     let accumulated = '';
@@ -1858,69 +1848,42 @@ function App() {
     let ok = false;
 
     try {
-      const resp = await fetch(`${OLLAMA_BASE}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, stream: true }),
-        signal: controller.signal,
-      });
-      if (!resp.ok) {
-        return { ok: false, content: '', tokensIn: 0, tokensOut: 0, elapsedMs: Date.now() - startMs };
-      }
-      ok = true;
-
-      const reader = resp.body.getReader();
-      const dec = new TextDecoder();
-      let lineBuf = '';
-
-      const consumeLine = (line) => {
-        if (!line) return;
-        try {
-          const obj = JSON.parse(line);
-          if (obj.message?.content) {
-            accumulated += obj.message.content;
-            multiStreamAccumRef.current.set(asstId, accumulated);
-            onChunk?.(asstId, accumulated);
-          }
-          if (obj.done) {
-            // tokensIn is the prompt-eval count of the latest /api/chat
-            // response. Compare-mode currently issues one fetch per
-            // column (no tool loop), so this is final by definition.
-            tokensIn = obj.prompt_eval_count ?? tokensIn;
-            tokensOut += obj.eval_count ?? 0;
-          }
-        } catch (_) {
-          // Malformed JSON line. Mirrors the single-model handleSend
-          // policy: swallow + continue rather than crashing the stream
-          // on one bad chunk.
+      const Channel = getChannel();
+      const channel = new Channel();
+      channel.onmessage = (obj) => {
+        if (!obj) return;
+        if (obj.message?.content) {
+          accumulated += obj.message.content;
+          multiStreamAccumRef.current.set(asstId, accumulated);
+          onChunk?.(asstId, accumulated);
+        }
+        if (obj.done) {
+          // tokensIn is the prompt-eval count of the latest /api/chat
+          // response. Compare-mode currently issues one fetch per
+          // column (no tool loop), so this is final by definition.
+          tokensIn = obj.prompt_eval_count ?? tokensIn;
+          tokensOut += obj.eval_count ?? 0;
         }
       };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        lineBuf += dec.decode(value, { stream: true });
-        let nl;
-        while ((nl = lineBuf.indexOf('\n')) !== -1) {
-          const line = lineBuf.slice(0, nl).trim();
-          lineBuf = lineBuf.slice(nl + 1);
-          consumeLine(line);
-        }
-      }
-      const tail = lineBuf.trim();
-      if (tail) consumeLine(tail);
+      await invoke('ollama_chat_stream', {
+        requestId: asstId,
+        body: { model, messages, stream: true },
+        onChunk: channel,
+      });
+      ok = true;
     } catch (e) {
-      // AbortError fires when the user hits Stop or closes the tab —
-      // expected, no log. Other errors are worth surfacing in devtools
-      // so we don't silently lose a column to a bug.
-      if (e.name !== 'AbortError') {
-        console.error(`streamModelToMessage error for ${model}:`, e);
-      }
+      // Rust returns Err on Ollama unreachable / non-2xx / network
+      // failure. We treat any error here as "this column failed" so
+      // sibling columns finish independently. Matches the pre-B.2
+      // semantics where !resp.ok also returned ok:false without
+      // aborting the rest.
+      console.error(`streamModelToMessage error for ${model}:`, e);
     } finally {
       // Always clear the controller slot so the Map doesn't leak across
       // sends. The accum slot stays — handleSendMultiModel's finalize
       // step reads it as the last-known content for the persist step
-      // (matters when an AbortError truncated content mid-stream).
+      // (matters when a mid-stream cancel truncated content).
       multiStreamControllersRef.current.delete(asstId);
     }
 
@@ -2181,17 +2144,23 @@ function App() {
   //     and flip streaming=false immediately, since the user has
   //     explicitly given up on the whole turn.
   const handleStopMultiModel = (asstId) => {
+    // Phase B.2: per-column "controllers" are now request IDs that
+    // the Rust streaming command registered against. Cancellation is
+    // an IPC ping to ollama_chat_stream_cancel; the running task
+    // notices the flag at its next chunk boundary and exits cleanly.
     const map = multiStreamControllersRef.current;
     if (asstId) {
-      const ctrl = map.get(asstId);
-      if (ctrl) {
-        try { ctrl.abort(); } catch (_) {}
+      const reqId = map.get(asstId);
+      if (reqId) {
+        invoke('ollama_chat_stream_cancel', { requestId: reqId })
+          .catch(() => {});
         map.delete(asstId);
       }
       return;
     }
-    for (const [, ctrl] of map) {
-      try { ctrl.abort(); } catch (_) {}
+    for (const [, reqId] of map) {
+      invoke('ollama_chat_stream_cancel', { requestId: reqId })
+        .catch(() => {});
     }
     map.clear();
     setStreaming(false);
@@ -2293,7 +2262,14 @@ function App() {
   };
 
   const handleStop = () => {
-    abortRef.current?.abort();
+    // Phase B.2: cancellation is now an IPC ping to the Rust
+    // streaming command — the running task checks its cancel flag at
+    // each chunk boundary and exits cleanly. The await in handleSend
+    // resolves, the Stopped marker gets applied below as before.
+    if (abortRef.current) {
+      invoke('ollama_chat_stream_cancel', { requestId: abortRef.current })
+        .catch(() => {});
+    }
     abortRef.current = null;
     streamingRef.current = false;
     setStreaming(false);
@@ -2392,7 +2368,10 @@ function App() {
   // Errors are re-thrown so SettingsModal can surface them via toast.
   const clearAllChats = async () => {
     if (abortRef.current) {
-      abortRef.current.abort();
+      // Cancel any in-flight Rust streaming chat — same channel-based
+      // path as handleStop (Phase B.2).
+      invoke('ollama_chat_stream_cancel', { requestId: abortRef.current })
+        .catch(() => {});
       abortRef.current = null;
     }
     streamingRef.current = false;
@@ -3129,20 +3108,22 @@ function App() {
   const warmModel = async (id) => {
     setModelWarming(true);
     try {
-      await fetch(`${OLLAMA_BASE}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      // Routed through the Rust `ollama_generate` command — same
+      // payload as the previous direct fetch, just wrapped in
+      // invoke(). Response body is discarded on both sides; we
+      // only need the side effect of forcing the model into RAM.
+      await invoke('ollama_generate', {
+        body: {
           model: id,
           prompt: 'hi',
           stream: false,
           options: { num_predict: 1 },
           keep_alive: '30m',
-        }),
+        },
       });
     } catch (e) {
-      // Network failures are surfaced by the StatusBar's own polling — no
-      // need to bubble up here.
+      // IPC / Ollama failures are surfaced by the StatusBar's own
+      // polling — no need to bubble up here.
     } finally {
       setModelWarming(false);
     }

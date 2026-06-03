@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0-rc1] - 2026-06-01
+## [0.3.0-rc2] - 2026-06-03
 
 First release candidate for cross-platform support. macOS remains the
 primary platform; Linux and Windows are new for this release.
@@ -42,15 +42,22 @@ primary platform; Linux and Windows are new for this release.
   and crash the app on launch with a blank window flash — visible only
   to Windows testers where the (previously default) Win+Shift+Space
   combination is reserved.
-- **Ollama detection on Windows** — fetch URLs now hit
-  `http://127.0.0.1:11434` directly instead of `http://localhost:11434`.
-  Default Ollama on Windows binds to IPv4 only, but WebView2 (the
-  browser engine that backs the Tauri UI on Windows) resolves
-  `localhost` to IPv6 `::1` first. IPv6 connections fail or hang past
-  our 3-second status-check timeout, and Ekorbia would conclude
-  "Ollama not running" even when it was. Using `127.0.0.1` explicitly
-  skips DNS entirely and the race goes away. Applied consistently
-  across UI fetches and the Rust-side reqwest base URL.
+- **Ollama transport routed through Rust backend** (Phase B). Every
+  Ollama HTTP call — `/api/tags`, `/api/ps`, `/api/generate`,
+  `/api/chat` (streaming) — now goes through a Tauri command instead
+  of a direct `fetch()` from the WebView. The motivation is Windows:
+  WebView2 enforces Chromium's Private Network Access preflight on
+  any fetch from the app's `tauri://localhost` origin to 127.0.0.1,
+  and Ollama doesn't reply with the required
+  `Access-Control-Allow-Private-Network: true` header — so every
+  fetch silently fails and Ekorbia would conclude "Ollama not
+  running" even when it was. Routing through Rust bypasses the
+  browser network stack entirely. As a side benefit, all network
+  I/O is now in one place (Rust, via `reqwest`), the streaming chat
+  loop becomes a Tauri `Channel<T>` rather than a `ReadableStream`,
+  and mid-stream cancellation runs through a small per-request flag
+  registry. Same behaviour on every platform; the Windows fix comes
+  along for free.
 - **Cross-platform CI matrix** — `ci.yml` now runs `cargo fmt --check`,
   clippy, and `cargo test --lib` on macOS, Ubuntu 22.04, and Windows.
   The UI test suite (Node helpers + Playwright WebKit) runs on macOS
