@@ -1954,7 +1954,7 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
       n === model.id || n.startsWith(model.id.split(":")[0]);
     const check = async () => {
       try {
-        const tagsResp = await fetch("http://localhost:11434/api/tags", {
+        const tagsResp = await fetch(`${OLLAMA_BASE}/api/tags`, {
           signal: AbortSignal.timeout(2000),
         });
         if (cancelled) return;
@@ -1969,7 +1969,7 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
         setPulled((tagsData.models || []).some((m) => matchesModel(m.name)));
 
         // /api/ps is the only honest source for "loaded into memory".
-        const psResp = await fetch("http://localhost:11434/api/ps", {
+        const psResp = await fetch(`${OLLAMA_BASE}/api/ps`, {
           signal: AbortSignal.timeout(2000),
         });
         if (cancelled) return;

@@ -157,7 +157,7 @@ function AttachmentsSettings() {
   // and the user can switch to custom-input mode.
   const refreshPulledModels = async () => {
     try {
-      const r = await fetch("http://localhost:11434/api/tags", {
+      const r = await fetch(`${OLLAMA_BASE}/api/tags`, {
         signal: AbortSignal.timeout(2500),
       });
       if (!r.ok) return;

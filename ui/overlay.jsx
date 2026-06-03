@@ -123,7 +123,7 @@ function QuickQuery() {
     if (picker !== "model") return;
     setAvailableModels(null);
     setModelsError(null);
-    fetch("http://localhost:11434/api/tags", {
+    fetch(`${OLLAMA_BASE}/api/tags`, {
       signal: AbortSignal.timeout(3000),
     })
       .then((r) => r.json())
@@ -363,7 +363,7 @@ function QuickQuery() {
     let acc = "";
     let ok = false;
     try {
-      const r = await fetch("http://localhost:11434/api/chat", {
+      const r = await fetch(`${OLLAMA_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: modelId, messages, stream: true }),

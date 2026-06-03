@@ -42,6 +42,15 @@ primary platform; Linux and Windows are new for this release.
   and crash the app on launch with a blank window flash — visible only
   to Windows testers where the (previously default) Win+Shift+Space
   combination is reserved.
+- **Ollama detection on Windows** — fetch URLs now hit
+  `http://127.0.0.1:11434` directly instead of `http://localhost:11434`.
+  Default Ollama on Windows binds to IPv4 only, but WebView2 (the
+  browser engine that backs the Tauri UI on Windows) resolves
+  `localhost` to IPv6 `::1` first. IPv6 connections fail or hang past
+  our 3-second status-check timeout, and Ekorbia would conclude
+  "Ollama not running" even when it was. Using `127.0.0.1` explicitly
+  skips DNS entirely and the race goes away. Applied consistently
+  across UI fetches and the Rust-side reqwest base URL.
 - **Cross-platform CI matrix** — `ci.yml` now runs `cargo fmt --check`,
   clippy, and `cargo test --lib` on macOS, Ubuntu 22.04, and Windows.
   The UI test suite (Node helpers + Playwright WebKit) runs on macOS

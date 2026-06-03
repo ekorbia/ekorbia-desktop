@@ -56,7 +56,7 @@ function CompareChatPane({
   React.useEffect(() => {
     if (!models.length) return;
     let cancelled = false;
-    fetch("http://localhost:11434/api/tags", {
+    fetch(`${OLLAMA_BASE}/api/tags`, {
       signal: AbortSignal.timeout(3000),
     })
       .then((r) => (r.ok ? r.json() : Promise.reject()))

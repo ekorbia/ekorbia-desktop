@@ -31,7 +31,7 @@ function ModelPicker({ active, onPick, onClose }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch("http://localhost:11434/api/tags", {
+    fetch(`${OLLAMA_BASE}/api/tags`, {
       signal: AbortSignal.timeout(3000),
     })
       .then((r) => r.json())
@@ -254,7 +254,7 @@ function CompareModelPickerModal({ open, onClose, onConfirm }) {
     setSelected(new Set());
     setError("");
     setModels(null);
-    fetch("http://localhost:11434/api/tags", {
+    fetch(`${OLLAMA_BASE}/api/tags`, {
       signal: AbortSignal.timeout(3000),
     })
       .then((r) => r.json())
@@ -825,7 +825,7 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
 
   const checkOllama = async () => {
     try {
-      const resp = await fetch("http://localhost:11434/api/tags", {
+      const resp = await fetch(`${OLLAMA_BASE}/api/tags`, {
         signal: AbortSignal.timeout(2000),
       });
       if (!resp.ok) return "not-running";

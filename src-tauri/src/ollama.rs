@@ -19,10 +19,18 @@ use std::time::{Duration, Instant};
 const OLLAMA_ADDR: &str = "127.0.0.1:11434";
 
 /// HTTP base URL for Ollama's local API. Distinct from `OLLAMA_ADDR` (no
-/// scheme, used for direct TCP probes in `is_ollama_listening`) because the
-/// probe path wants to skip DNS resolution while HTTP calls benefit from the
-/// shorter `localhost` form. Use `ollama_url(path)` to build endpoint URLs.
-const OLLAMA_BASE: &str = "http://localhost:11434";
+/// scheme, used for direct TCP probes in `is_ollama_listening`).
+///
+/// Uses `127.0.0.1` rather than `localhost` to force IPv4. On Windows,
+/// reqwest's tokio resolver and the WebView2 used by the UI both resolve
+/// `localhost` to BOTH `::1` (IPv6) and `127.0.0.1` (IPv4). Default
+/// Ollama on Windows binds only to IPv4 — `::1` connections fail or
+/// hang past our 3 s status-check timeout, and the app concludes
+/// "Ollama not running" even when it is. Using `127.0.0.1` skips DNS
+/// resolution entirely, eliminating the IPv4-vs-IPv6 race. Same fix on
+/// every platform (linux/mac never had a problem, but consistency wins).
+/// Use `ollama_url(path)` to build endpoint URLs.
+const OLLAMA_BASE: &str = "http://127.0.0.1:11434";
 
 fn ollama_url(path: &str) -> String {
     format!("{OLLAMA_BASE}{path}")

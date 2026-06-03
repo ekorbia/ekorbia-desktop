@@ -1131,7 +1131,7 @@ function App() {
   // Failures are silent: if Ollama is down, the StatusBar surfaces it and
   // the user can fix the model later via the picker.
   useE(() => {
-    fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(3000) })
+    fetch(`${OLLAMA_BASE}/api/tags`, { signal: AbortSignal.timeout(3000) })
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data) => {
         const pulled = (data.models || []).map((m) => m.name);
@@ -1518,7 +1518,7 @@ function App() {
           body.tools = toolSchemasRef.current;
         }
 
-        const resp = await fetch('http://localhost:11434/api/chat', {
+        const resp = await fetch(`${OLLAMA_BASE}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -1858,7 +1858,7 @@ function App() {
     let ok = false;
 
     try {
-      const resp = await fetch('http://localhost:11434/api/chat', {
+      const resp = await fetch(`${OLLAMA_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, messages, stream: true }),
@@ -3129,7 +3129,7 @@ function App() {
   const warmModel = async (id) => {
     setModelWarming(true);
     try {
-      await fetch('http://localhost:11434/api/generate', {
+      await fetch(`${OLLAMA_BASE}/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

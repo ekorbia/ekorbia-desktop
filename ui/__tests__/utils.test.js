@@ -19,6 +19,7 @@ const {
   defaultIntervalForKind,
   ekFilesGroupByPath,
   groupChatsForSidebar,
+  OLLAMA_BASE,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -94,6 +95,19 @@ test("detectPlatform: Node (no navigator) returns 'macos'", () => {
   // against the macOS glyphs. Real browsers populate navigator and route
   // to the correct branch automatically.
   assert.equal(detectPlatform(), "macos");
+});
+
+// ── OLLAMA_BASE ──────────────────────────────────────────────────────────
+
+test("OLLAMA_BASE: uses IPv4 explicitly (not 'localhost')", () => {
+  // Regression guard: the Windows WebView2 startup crash that shipped in
+  // 0.3.0-rc1 was caused by `http://localhost:11434` — Chromium tried
+  // IPv6 ::1 first, Ollama wasn't listening there, and the 3s fetch
+  // timeout fired before IPv4 fallback. The fix is forcing 127.0.0.1.
+  // If anyone reverts the constant to localhost, this fails and the
+  // PR description explains why.
+  assert.equal(OLLAMA_BASE, "http://127.0.0.1:11434");
+  assert.ok(!OLLAMA_BASE.includes("localhost"), "must NOT use 'localhost'");
 });
 
 // ── hotkeyFromEvent ──────────────────────────────────────────────────────
