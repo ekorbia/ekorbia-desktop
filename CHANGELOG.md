@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0-rc2] - 2026-06-03
+## [0.3.0] - 2026-06-03
 
 First release candidate for cross-platform support. macOS remains the
 primary platform; Linux and Windows are new for this release.
