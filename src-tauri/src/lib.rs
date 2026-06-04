@@ -96,6 +96,31 @@ pub fn run() {
                 })
                 .build(),
         )
+        // ── Window close behaviour ──────────────────────────────────────
+        //
+        // The overlay window in tauri.conf.json is always created but
+        // kept hidden (visible: false) — it's the Spotlight-style
+        // quick-query panel summoned via the global hotkey. Tauri's
+        // default "exit when all windows close" rule on Windows + Linux
+        // counts the hidden overlay as a live window, so closing the
+        // main window leaves the process running in the background
+        // (Task Manager shows a "ghost" ekorbia.exe with no visible UI).
+        //
+        // On macOS the platform convention is exactly the opposite —
+        // closing the main window should leave the app running so the
+        // Dock icon stays; the user quits via Cmd+Q.
+        //
+        // Resolution: when the main window is asked to close, we explicitly
+        // call exit(0) on Windows + Linux to match user expectations, and
+        // do nothing on macOS to preserve the dock-stays-alive convention.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if window.label() == "main" {
+                    #[cfg(not(target_os = "macos"))]
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             ollama::start_ollama,
             ollama::ollama_tags,

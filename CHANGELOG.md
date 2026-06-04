@@ -58,6 +58,14 @@ primary platform; Linux and Windows are new for this release.
   and mid-stream cancellation runs through a small per-request flag
   registry. Same behaviour on every platform; the Windows fix comes
   along for free.
+- **Closing the main window now fully exits on Windows + Linux.** The
+  hidden overlay window in `tauri.conf.json` was keeping Tauri's
+  "exit when all windows close" rule from firing — clicking X on
+  Windows would dismiss the visible UI but leave a "ghost"
+  `ekorbia.exe` running in Task Manager (and a stray process on
+  Linux). We now intercept the main window's close event and call
+  `app.exit(0)` explicitly on non-macOS platforms. macOS keeps the
+  Dock-stays-alive convention: close ≠ quit, Cmd+Q to fully exit.
 - **Cross-platform CI matrix** — `ci.yml` now runs `cargo fmt --check`,
   clippy, and `cargo test --lib` on macOS, Ubuntu 22.04, and Windows.
   The UI test suite (Node helpers + Playwright WebKit) runs on macOS
