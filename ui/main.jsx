@@ -47,9 +47,11 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 // ── Helper functions ──────────────────────────────────────────────────────────
 //
-// groupChatsForSidebar lives in ui/utils.js (unit-tested under node:test).
-// It returns `{ groups, dateSections }` where `groups` is per-folder and
-// `dateSections` is the Today/Yesterday/… bucketing of *ungrouped* chats.
+// bucketChatsByDate lives in ui/utils.js (unit-tested under node:test).
+// It returns `{ dateSections }` — the Today/Yesterday/Last 7 days/Last 30
+// days/Older bucketing of chats. Per-Space filtering happens BEFORE the
+// helper is called (in the mount effect and reload helpers below), so
+// this function only ever sees the chats that belong in the active view.
 //
 // relativeTime, tryParseJson, genId also live in `ui/utils.js`. All of
 // these are on `window` before main.jsx loads (script-tag order in
@@ -59,23 +61,26 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // state, the "wipe all chats" reset value, and the safe fallback when a
 // load fails. Keeping it as a const (rather than constructing inline at
 // each callsite) makes the shape easy to grep for during refactors.
-const EMPTY_HISTORY = { groups: [], dateSections: [] };
+const EMPTY_HISTORY = { dateSections: [] };
 
-// Has any group OR date section in `hs` got a chat with this id? Used to
+// Stable empty fallback for the Composer's lockedPromptSlugs prop. Hoisted
+// so the prop reference is reference-equal across renders when the chat
+// has no Space (or its Space has no locked pins) — keeps React.memo
+// children from re-rendering on every parent update.
+const EMPTY_LOCKED_SET = new Set();
+
+// Does any date section in `hs` contain a chat with this id? Used to
 // short-circuit prepend-to-sidebar mutations so we don't double-add a chat
 // that's already represented (race between handleSend's setHistory and the
 // overlay:open_chat listener firing during the same tick).
 function sidebarContainsChatId(hs, chatId) {
-  if ((hs.groups || []).some((g) => g.items.some((c) => c.id === chatId))) return true;
-  if ((hs.dateSections || []).some((s) => s.items.some((c) => c.id === chatId))) return true;
-  return false;
+  return (hs.dateSections || []).some((s) => s.items.some((c) => c.id === chatId));
 }
 
 // Prepend a sidebar-item to the Today date section, creating the section
-// if it doesn't exist yet. Group placement is NOT considered here —
-// brand-new chats from the composer / overlay always start ungrouped
-// (group_id NULL) and are surfaced under date buckets; the user can
-// move them into a group via drag or right-click afterwards.
+// if it doesn't exist yet. Brand-new chats from the composer or overlay
+// always start at the top of Today; the user can move them into a Space
+// via drag-and-drop or the right-click "Move to Space" submenu.
 function prependChatToToday(hs, item) {
   const dateSections = hs.dateSections || [];
   const todayIdx = dateSections.findIndex((s) => s.section === 'Today');
@@ -93,15 +98,10 @@ function prependChatToToday(hs, item) {
   };
 }
 
-// Apply `mapItem` to every chat-item across BOTH groups and dateSections,
-// keeping container structure intact. Used by renameChat to update a chat's
-// title wherever it lives.
+// Apply `mapItem` to every chat-item across all date sections. Used by
+// renameChat to update a chat's title wherever it lives.
 function mapItemsAcrossHistory(hs, mapItem) {
   return {
-    groups: (hs.groups || []).map((g) => ({
-      ...g,
-      items: g.items.map(mapItem),
-    })),
     dateSections: (hs.dateSections || []).map((s) => ({
       ...s,
       items: s.items.map(mapItem),
@@ -109,16 +109,10 @@ function mapItemsAcrossHistory(hs, mapItem) {
   };
 }
 
-// Remove a single chat from history wherever it lives. Empty date sections
-// are pruned (matches pre-groups behaviour); empty GROUPS are kept (the
-// user wants to see their folder even if it's currently empty — same
-// reasoning as in groupChatsForSidebar).
+// Remove a single chat from history. Empty date sections are pruned so
+// the sidebar doesn't show a "Today" header with no items underneath.
 function removeChatFromHistory(hs, chatId) {
   return {
-    groups: (hs.groups || []).map((g) => ({
-      ...g,
-      items: g.items.filter((c) => c.id !== chatId),
-    })),
     dateSections: (hs.dateSections || [])
       .map((s) => ({ ...s, items: s.items.filter((c) => c.id !== chatId) }))
       .filter((s) => s.items.length),
@@ -866,12 +860,27 @@ function App() {
   // multiModels: null} for single-mode chats, which preserves the
   // existing row's NULLs.
   const multiFieldsForChat = (chatId) => {
+    // Despite the name, this returns every "pipeline-owned" column on
+    // the chats row that the UI tracks per-tab and needs to round-trip
+    // through persistChat — currently tabType + multiModels (compare-
+    // mode) and spaceId (Spaces). Renaming would touch 5+ call sites
+    // without changing behaviour; the inline comment compensates.
     const tab = tabs.find(t => t.id === chatId);
     return {
       tabType: tab?.tabType || null,
       multiModels: Array.isArray(tab?.models)
         ? JSON.stringify(tab.models)
         : null,
+      // Space membership at the tab/chat level. Persists with the chat
+      // row on every send so a fresh launch lands the chat back inside
+      // its Space without a separate write path. `db_upsert_chat`'s SET
+      // clause deliberately omits `space_id` (pinned by the P0 test
+      // `upsert_chat_does_not_clobber_space_id_on_update`), so this
+      // value is only written on the INSERT branch — i.e. when a chat
+      // first materialises in the DB on its first send. Re-saves of an
+      // existing chat preserve whatever the DB already had, even if
+      // this value is null because the tab pre-dates the column.
+      spaceId: tab?.spaceId || null,
     };
   };
   const persistMessage = (msgPayload) => {
@@ -894,15 +903,53 @@ function App() {
   const [streaming, setStreaming] = useS(false);
   const [ramUsed, setRamUsed] = useS(28);
 
-  // Sidebar shape: `{ groups: [...], dateSections: [...] }`. groups come
-  // first (user-defined folders, displayed above); dateSections holds the
-  // Today/Yesterday/… bucketing of ungrouped chats. See EMPTY_HISTORY and
+  // Sidebar shape: `{ dateSections: [...] }`. dateSections holds the
+  // Today/Yesterday/… bucketing of chats in the current view (already
+  // filtered by activeSpaceId when one is set). See EMPTY_HISTORY and
   // the helpers above for shape details.
   const [history, setHistory] = useS(EMPTY_HISTORY);
-  // Raw chat_groups rows from `db_load_groups` — needed by the context
-  // menu so it can list "Move to {group name}" for every existing group,
-  // independent of which groups currently have items in `history`.
-  const [groups, setGroups] = useS([]);
+
+  // ── Spaces (workspace bundles) ─────────────────────────────────────────
+  //
+  // `spaces` holds every Space row from `space_list` (canonical ordering:
+  // sort_index ASC, created_at ASC). It's the source-of-truth for the
+  // sidebar Spaces section AND for the "Move to Space" submenu.
+  //
+  // `activeSpaceId` is the currently-selected Space's id. `null` means
+  // the "All chats" pseudo-row is active and no filter is applied. The
+  // value persists across launches via localStorage so the user lands
+  // back in their last Space on relaunch. If a persisted id no longer
+  // resolves to a live Space (e.g. the user deleted it on another
+  // machine + the DB is shared), the mount effect downgrades to `null`
+  // before any Sidebar render so the sidebar never shows a stale filter.
+  const [spaces, setSpaces] = useS([]);
+  // Locked-pin slug index — `{ [spaceId]: Set<slug> }`. Each entry is the
+  // set of prompt slugs whose `space_prompts.locked` row is 1 for that
+  // Space. Used by the Composer to suppress the × on locked prompt chips
+  // so the user can't detach a Space-mandated prompt from a single chat.
+  // Refreshed:
+  //   • on mount, immediately after `space_list`,
+  //   • by `reloadHistory`, which fires after every Space mutation
+  //     (create / rename / recolor / delete + `saveSpaceSettings`).
+  // Spaces that aren't in the map (yet) resolve to an empty Set at the
+  // Composer prop boundary, so the picker behaves as if nothing is locked
+  // — safer than throwing during the brief moment between mount and load.
+  const [lockedSlugsBySpace, setLockedSlugsBySpace] = useS({});
+  const ACTIVE_SPACE_LS_KEY = 'ekorbia.activeSpaceId';
+  const [activeSpaceId, setActiveSpaceId] = useS(() => {
+    try {
+      const raw = localStorage.getItem(ACTIVE_SPACE_LS_KEY);
+      return raw && raw !== 'null' ? raw : null;
+    } catch {
+      return null;
+    }
+  });
+  useE(() => {
+    try {
+      if (activeSpaceId) localStorage.setItem(ACTIVE_SPACE_LS_KEY, activeSpaceId);
+      else localStorage.removeItem(ACTIVE_SPACE_LS_KEY);
+    } catch {}
+  }, [activeSpaceId]);
 
   // ── Backend load on mount ───────────────────────────────────────────────────
   // Prompts now live as Markdown files in the configured prompts directory.
@@ -933,15 +980,28 @@ function App() {
   useE(() => {
     (async () => {
       try {
-        // Load chats + groups together so the sidebar reshape sees both
+        // Load chats + spaces together so the sidebar reshape sees both
         // in one pass. Promise.all keeps startup latency at max(t1, t2)
-        // rather than t1 + t2.
-        const [chatRows, groupRows] = await Promise.all([
+        // rather than the sum.
+        const [chatRows, spaceRows] = await Promise.all([
           invoke('db_load_chats'),
-          invoke('db_load_groups'),
+          invoke('space_list'),
         ]);
-        setGroups(groupRows || []);
-        setHistory(groupChatsForSidebar(chatRows, groupRows));
+        setSpaces(spaceRows || []);
+        // Kick off the locked-pin index alongside Space load. Fire-and-
+        // forget — `lockedSlugsBySpace` starts as {} so the Composer
+        // simply treats every chip as unlocked until this lands.
+        refreshLockedSlugsForAllSpaces(spaceRows || []);
+        // Downgrade activeSpaceId to null if the persisted id no longer
+        // resolves — protects against stale localStorage after a Space
+        // was deleted on another machine (or before this build shipped).
+        const liveIds = new Set((spaceRows || []).map((s) => s.id));
+        const safeActiveSpace = activeSpaceId && liveIds.has(activeSpaceId) ? activeSpaceId : null;
+        if (safeActiveSpace !== activeSpaceId) setActiveSpaceId(safeActiveSpace);
+        const filteredChats = safeActiveSpace
+          ? (chatRows || []).filter((c) => c.spaceId === safeActiveSpace)
+          : (chatRows || []);
+        setHistory(bucketChatsByDate(filteredChats));
         // Auto-open the most-recently-updated chat on launch so the app
         // resumes where the user left off instead of dumping them into a
         // blank "New chat". chatRows is ordered `updated_at DESC` by the
@@ -1318,6 +1378,22 @@ function App() {
       }
     }
     const promptSystem = attachedPrompts.map(p => p.body).join('\n\n');
+    // Resolve the Space's system prompt (if this chat is inside a Space)
+    // and prepend it as a first-send-only system message. Same lifecycle
+    // as `promptSystem`: re-sending the same Space prompt prefix every
+    // turn would waste tokens. We resolve from the LIVE spaces array, so
+    // editing a Space's prompt mid-conversation only affects future
+    // chats (existing chats keep what the model already saw).
+    //
+    // chat.spaceId is populated by openChatInTab (DB rehydration) AND by
+    // newTab/confirmCompareModels (live creation). Both paths land in
+    // chats[id].spaceId so this lookup is the single source of truth.
+    // The Space row itself is read for its memoryPath (Space memory
+    // injection below). Space framing used to be a free-form
+    // `systemPrompt` field here; it's now expressed as locked pinned
+    // prompts that arrive via `attachedPrompts` like any other prompt.
+    const chatSpaceId = chat.spaceId || null;
+    const chatSpace = chatSpaceId ? (spaces || []).find(s => s.id === chatSpaceId) || null : null;
     // `isNewChat` drives two things that are wrong for truncate-and-resend:
     //   1. Appending the chat to the sidebar `history` array — which would
     //      create a duplicate row when an edit/retry truncates everything
@@ -1362,9 +1438,37 @@ function App() {
     } catch (e) {
       console.error('memory_read failed:', e);
     }
-    const memorySystemMessages = memoryContent
-      ? [{ role: 'system', content: `<user_memory>\n${memoryContent.trim()}\n</user_memory>` }]
-      : [];
+    // Space-scoped memory (Phase 5). If the chat lives in a Space AND
+    // that Space has a memory_path configured, read it and append to
+    // the memory block AFTER the global memory. The Space memory
+    // overlays on top — the global file sets stable facts ("I'm based
+    // in Portland"), the Space file sets project-specific context
+    // ("the novel's protagonist is named Maya"). Sent every send like
+    // global memory, for the same "edit-and-see-it" reason.
+    let spaceMemoryContent = null;
+    if (chatSpace?.memoryPath) {
+      try {
+        spaceMemoryContent = await invoke('space_memory_read', { path: chatSpace.memoryPath });
+      } catch (e) {
+        console.error('space_memory_read failed:', e);
+      }
+    }
+    const memorySystemMessages = [];
+    if (memoryContent) {
+      memorySystemMessages.push({
+        role: 'system',
+        content: `<user_memory>\n${memoryContent.trim()}\n</user_memory>`,
+      });
+    }
+    if (spaceMemoryContent) {
+      // Distinct wrapper tag so models that key off the existing tag
+      // don't confuse Space memory with the global file. Same idea
+      // works without strict tag handling on either side.
+      memorySystemMessages.push({
+        role: 'system',
+        content: `<space_memory>\n${spaceMemoryContent.trim()}\n</space_memory>`,
+      });
+    }
     const userContent = (promptSystem && !isNewChat) ? `${promptSystem}\n\n${text}` : text;
     const nowTs = Math.floor(Date.now() / 1000);
 
@@ -1417,10 +1521,12 @@ function App() {
     if (isNewChat) {
       setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, title } : t));
       if (!ephemeral) {
-        // Brand-new chats from the composer start ungrouped (NULL group_id);
-        // they land in Today. The user can drag or right-click to file.
+        // Brand-new chats from the composer always land at the top of
+        // Today. The user can drag them onto a Space row (or use the
+        // right-click "Move to Space" submenu) to file afterwards.
         const newItem = {
-          id: activeTab, title, model: modelId, when: 'now', groupId: null,
+          id: activeTab, title, model: modelId, when: 'now',
+          spaceId: null,
         };
         setHistory(hs => prependChatToToday(hs, newItem));
       }
@@ -1488,12 +1594,17 @@ function App() {
     // assistant's tool_calls turn + the tool-result responses, then re-sent.
     // System message ordering:
     //   memory   — durable facts about the user (every send)
-    //   prompts  — first-send-only system prompt(s) the user attached
+    //   prompts  — first-send-only system prompt(s) the user attached.
+    //              This includes the Space's "locked" pinned prompts
+    //              (auto-attached at chat creation, can't be detached
+    //              per-chat in the composer — replaces the earlier
+    //              standalone Space "system_prompt" field).
     //   attach   — attachment context for this send (top-k chunks etc.)
     //   prior    — the rolling conversation history
     //   user     — this turn's user message
     // Memory goes first because it's the most stable / general context;
-    // prompts and attachments are situational and should overlay it.
+    // attachments + prompts ride at the end. Ordering matters because
+    // many models weight earlier system messages more heavily.
     const convoMessages = [
       ...memorySystemMessages,
       ...attachmentSystemMessages,
@@ -1934,6 +2045,12 @@ function App() {
     // same prompt context. Attachments (file context, memory) are still
     // deferred to a future iteration — they involve the Rust retrieval
     // pipeline and don't map cleanly to a one-shot N-way comparison.
+    //
+    // Phase 3 (Spaces): the Space's framing reaches the model via its
+    // locked pinned prompts, which auto-attach to new chats and ride
+    // through `attachedPrompts` like any other prompt. Every comparison
+    // column sees the same prompts (including locked pins), so the
+    // comparison stays "models" not "models × prompts".
     const priorMessages = baseMessages.map(m => ({ role: m.role, content: m.content }));
     const promptSystem = attachedPrompts.map(p => p.body).join('\n\n');
     const promptSystemMessages = promptSystem
@@ -1997,7 +2114,7 @@ function App() {
       if (!ephemeral) {
         const newItem = {
           id: activeTab, title, model: models[0], when: 'now',
-          tabType: tab.tabType, models, groupId: null,
+          tabType: tab.tabType, models, spaceId: null,
         };
         setHistory(hs => {
           // Guard against double-add: confirmCompareModels' persist may
@@ -2394,95 +2511,425 @@ function App() {
     setAttachedPromptsByChat({});
   };
 
-  // ── Chat groups (sidebar folders) ──────────────────────────────────────
+  // ── Sidebar reload helper ─────────────────────────────────────────────
   //
-  // All four handlers below mutate via the Rust commands first, then
-  // refresh from the backend rather than splicing in-memory state. The
-  // refresh is cheap (one SELECT each for chats + groups, both indexed)
-  // and keeps the sidebar exactly in lockstep with the DB on the next
-  // tick — no chance of a stale group_id pointing to a deleted group.
+  // Re-fetch chats + Spaces and rebuild the sidebar's date-section view.
+  // Called by every Space-mutating handler (create / rename / recolor /
+  // delete / move) after the Rust write returns. Cheap (one SELECT for
+  // chats, one for spaces; both indexed) and keeps the sidebar exactly
+  // in lockstep with the DB on the next tick.
   //
-  // Concurrency note: every handler awaits the invoke before touching
-  // setState. If two handlers fire in quick succession (e.g. user
-  // creates a group then drops a chat onto it before the first refresh
-  // returns), they serialize cleanly — each is a fire-and-await
-  // sequence, and React batches the setState pairs naturally.
-  const reloadHistoryAndGroups = async () => {
+  // Concurrency note: every caller awaits the invoke before touching
+  // setState. If two handlers fire in quick succession (e.g. create then
+  // recolor before the first refresh returns), they serialise cleanly —
+  // each is a fire-and-await sequence, and React batches the setState
+  // pairs naturally.
+  const reloadHistory = async () => {
     try {
-      const [chatRows, groupRows] = await Promise.all([
+      const [chatRows, spaceRows] = await Promise.all([
         invoke('db_load_chats'),
-        invoke('db_load_groups'),
+        invoke('space_list'),
       ]);
-      setGroups(groupRows || []);
-      setHistory(groupChatsForSidebar(chatRows, groupRows));
+      setSpaces(spaceRows || []);
+      const liveIds = new Set((spaceRows || []).map((s) => s.id));
+      // Stale-filter guard: if the active Space was deleted in this
+      // same reload (delete-Space dispatch), drop the filter so the
+      // user lands back in "All chats" rather than viewing an empty
+      // list.
+      const safeActiveSpace = activeSpaceId && liveIds.has(activeSpaceId) ? activeSpaceId : null;
+      if (safeActiveSpace !== activeSpaceId) setActiveSpaceId(safeActiveSpace);
+      const filteredChats = safeActiveSpace
+        ? (chatRows || []).filter((c) => c.spaceId === safeActiveSpace)
+        : (chatRows || []);
+      setHistory(bucketChatsByDate(filteredChats));
+      // Re-index the locked-pin slugs alongside the sidebar refresh so
+      // the Composer's "suppress ×" gate stays current after every Space
+      // mutation. Don't await — the sidebar shouldn't block on per-Space
+      // prompt fetches, and a brief stale window (locked chip detachable
+      // for ~100ms after Settings save) is preferable to a flicker.
+      refreshLockedSlugsForAllSpaces(spaceRows || []);
     } catch (e) {
-      console.error('reloadHistoryAndGroups failed:', e);
+      console.error('reloadHistory failed:', e);
     }
   };
 
-  // Create a new group. Caller supplies the display name; id is generated
-  // here so the group exists immediately in the sidebar after the refresh
-  // (no UI-side waiting on a server-assigned id).
-  const createGroup = async (name) => {
+  // Fan out to `space_prompts_list` for every Space and rebuild the
+  // `lockedSlugsBySpace` map. Each lookup is independent; Promise.all
+  // keeps wall-clock at max(t_i) instead of sum. Individual failures
+  // collapse to an empty Set for that Space (the lock UI silently
+  // degrades to "no chip is locked" rather than crashing the modal).
+  const refreshLockedSlugsForAllSpaces = async (spaceRows) => {
+    const list = spaceRows || [];
+    if (list.length === 0) {
+      setLockedSlugsBySpace({});
+      return;
+    }
+    try {
+      const entries = await Promise.all(
+        list.map(async (s) => {
+          try {
+            const rows = await invoke('space_prompts_list', { spaceId: s.id });
+            const locked = new Set(
+              (rows || [])
+                .filter((r) => r && r.locked)
+                .map((r) => r.promptSlug)
+                .filter(Boolean),
+            );
+            return [s.id, locked];
+          } catch (e) {
+            console.error(`space_prompts_list (${s.id}) failed:`, e);
+            return [s.id, new Set()];
+          }
+        }),
+      );
+      const next = {};
+      for (const [id, set] of entries) next[id] = set;
+      setLockedSlugsBySpace(next);
+    } catch (e) {
+      console.error('refreshLockedSlugsForAllSpaces failed:', e);
+    }
+  };
+
+  // ── Spaces handlers ────────────────────────────────────────────────────
+  //
+  // Same pattern as the groups handlers: dispatch the Rust write, then
+  // refresh from the backend rather than splicing in-memory state. The
+  // refresh is cheap (chats + groups + spaces, all indexed) and keeps
+  // the sidebar in lockstep with the DB on the next tick.
+  //
+  // Activating a Space (`selectSpace`) is purely client-side — it sets
+  // the filter id and lets the history reshape pick it up via the
+  // useEffect below. No DB write.
+
+  const createSpace = async (name, color) => {
     const trimmed = (name || '').trim();
     if (!trimmed) return null;
     const id = genId();
     try {
-      await invoke('db_create_group', { id, name: trimmed });
-      await reloadHistoryAndGroups();
-      return id;
+      // `space_create` returns the full SpaceRow (per Phase 1) — return
+      // it to the caller so flows that want to immediately open the
+      // settings dialog (the "Create & configure…" button in
+      // SpaceCreateModal) have the row in hand without a follow-up
+      // space_get round-trip. The id is still accessible via .id for
+      // callers that only need the id.
+      const newSpace = await invoke('space_create', { id, name: trimmed, color: color || null });
+      await reloadHistory();
+      return newSpace;
     } catch (e) {
-      console.error('db_create_group failed:', e);
+      console.error('space_create failed:', e);
       return null;
     }
   };
 
-  const renameGroup = async (id, name) => {
+  const renameSpace = async (id, name) => {
     const trimmed = (name || '').trim();
     if (!id || !trimmed) return;
+    // Read the current row so the update payload preserves color +
+    // system_prompt + default_model + memory_path. `space_update`'s SET
+    // clause covers every editable field; supplying only `name` would
+    // wipe the others on conflict.
+    const current = (spaces || []).find((s) => s.id === id);
+    if (!current) return;
     try {
-      await invoke('db_rename_group', { id, name: trimmed });
-      await reloadHistoryAndGroups();
+      await invoke('space_update', {
+        space: { ...current, name: trimmed, updatedAt: Math.floor(Date.now() / 1000) },
+      });
+      await reloadHistory();
     } catch (e) {
-      console.error('db_rename_group failed:', e);
+      console.error('space_update (rename) failed:', e);
     }
   };
 
-  // Delete a group. Chats are NOT deleted — `db_delete_group` unfiles them
-  // (sets group_id NULL) inside a transaction so the UI never sees a chat
-  // pointing at a missing group.
-  const deleteGroup = async (id) => {
+  const recolorSpace = async (id, color) => {
+    if (!id) return;
+    const current = (spaces || []).find((s) => s.id === id);
+    if (!current) return;
+    try {
+      await invoke('space_update', {
+        space: { ...current, color: color || null, updatedAt: Math.floor(Date.now() / 1000) },
+      });
+      await reloadHistory();
+    } catch (e) {
+      console.error('space_update (recolor) failed:', e);
+    }
+  };
+
+  // Delete a Space. Chats are NOT deleted — the Rust `space_delete`
+  // command unfiles them (sets space_id NULL) inside a transaction. The
+  // sidebar refresh that follows will drop the Space row and surface the
+  // unfiled chats back under "All chats".
+  const deleteSpace = async (id) => {
     if (!id) return;
     try {
-      await invoke('db_delete_group', { id });
-      await reloadHistoryAndGroups();
+      await invoke('space_delete', { id });
+      // If the deleted Space was active, fall back to All chats BEFORE
+      // the reload — otherwise the in-flight reload would see the stale
+      // activeSpaceId and filter to an empty set for one tick.
+      if (id === activeSpaceId) setActiveSpaceId(null);
+      await reloadHistory();
     } catch (e) {
-      console.error('db_delete_group failed:', e);
+      console.error('space_delete failed:', e);
     }
   };
 
-  // Move a chat into a group, or unfile it (pass null for `groupId`).
-  // The single write path for chats.group_id from the UI side.
-  const moveChatToGroup = async (chatId, groupId) => {
+  // Apply a full settings draft from SpaceSettingsModal. The draft
+  // shape is documented in shell.jsx → SpaceSettingsModal; here we:
+  //   1. Persist the row-level fields via `space_update`.
+  //   2. Diff the desired pinned-prompt slugs against the current row
+  //      set → fire `space_prompt_remove` for vanished slugs +
+  //      `space_prompt_add` for new ones.
+  //   3. Diff the desired pinned-attachment (kind, path) pairs against
+  //      the current rows → same shape: remove vanished, add new.
+  //   4. Reload everything so the sidebar / send pipeline see the new
+  //      state without an extra refresh tick.
+  //
+  // Failures of any individual step are logged but don't abort the
+  // sequence — same fail-soft pattern used elsewhere in this file
+  // (`instantiateSpacePinnedAttachments`, the Space-pinned attachment
+  // dispatcher). Stopping mid-flight would leave the user with a
+  // half-applied draft and no easy recovery.
+  const saveSpaceSettings = async (spaceId, draft) => {
+    if (!spaceId || !draft) return;
+    try {
+      // 1. Row-level update — name, color, system_prompt, default_model,
+      // memory_path. Refresh updatedAt so the row reflects the edit.
+      const rowPayload = {
+        ...draft.row,
+        updatedAt: Math.floor(Date.now() / 1000),
+      };
+      await invoke('space_update', { space: rowPayload });
+
+      // 2. Prompt-pin diff. Current set is what's in the DB right now
+      // — re-fetch to avoid drift if a parallel save happened. The
+      // diff is by slug since slugs are unique per (space, prompt).
+      const currentPromptRows = await invoke('space_prompts_list', { spaceId });
+      // Build two parallel maps: slug → row id (for add/remove diff) and
+      // slug → current locked flag (for the locked-state diff). Two
+      // separate maps keep the diff loops simple.
+      const currentPromptSlugs = new Map(
+        (currentPromptRows || []).map((r) => [r.promptSlug, r.id]),
+      );
+      const currentLockedBySlug = new Map(
+        (currentPromptRows || []).map((r) => [r.promptSlug, !!r.locked]),
+      );
+      const desiredPromptSlugs = new Set(draft.promptSlugs || []);
+      const desiredLockedSlugs = new Set(draft.lockedSlugs || []);
+      // Remove rows whose slug is no longer desired.
+      for (const [slug, rowId] of currentPromptSlugs) {
+        if (!desiredPromptSlugs.has(slug)) {
+          try {
+            await invoke('space_prompt_remove', { id: rowId });
+          } catch (e) {
+            console.error(`space_prompt_remove ${slug} failed:`, e);
+          }
+        }
+      }
+      // Add rows for slugs that are now desired but weren't pinned.
+      // Inherit the desired locked state at INSERT time so we don't fire
+      // a separate space_prompt_set_locked round-trip for fresh pins.
+      for (const slug of desiredPromptSlugs) {
+        if (!currentPromptSlugs.has(slug)) {
+          try {
+            await invoke('space_prompt_add', {
+              id: genId(),
+              spaceId,
+              promptSlug: slug,
+              locked: desiredLockedSlugs.has(slug),
+            });
+          } catch (e) {
+            console.error(`space_prompt_add ${slug} failed:`, e);
+          }
+        }
+      }
+      // Toggle the locked flag on EXISTING pins whose lock state drifted.
+      // Fresh pins (just inserted above) already carry the right value;
+      // this loop only catches pins that were unchanged in the
+      // pinned-set diff but whose lock state changed.
+      for (const [slug, rowId] of currentPromptSlugs) {
+        if (!desiredPromptSlugs.has(slug)) continue; // already removed
+        const wasLocked = currentLockedBySlug.get(slug) === true;
+        const isLocked = desiredLockedSlugs.has(slug);
+        if (wasLocked !== isLocked) {
+          try {
+            await invoke('space_prompt_set_locked', { id: rowId, locked: isLocked });
+          } catch (e) {
+            console.error(`space_prompt_set_locked ${slug} failed:`, e);
+          }
+        }
+      }
+
+      // 3. Attachment-pin diff. Match key is (kind, path) — same shape
+      // as the modal's de-dupe. Current id is preserved through the
+      // diff so we know which rows to remove.
+      const currentAttachRows = await invoke('space_attachments_list', { spaceId });
+      const keyOf = (a) => `${a.kind}::${a.path}`;
+      const currentByKey = new Map(
+        (currentAttachRows || []).map((r) => [keyOf(r), r.id]),
+      );
+      const desiredKeys = new Set((draft.attachments || []).map(keyOf));
+      for (const [key, rowId] of currentByKey) {
+        if (!desiredKeys.has(key)) {
+          try {
+            await invoke('space_attachment_remove', { id: rowId });
+          } catch (e) {
+            console.error(`space_attachment_remove ${key} failed:`, e);
+          }
+        }
+      }
+      for (const a of draft.attachments || []) {
+        if (!currentByKey.has(keyOf(a))) {
+          try {
+            await invoke('space_attachment_add', {
+              id: genId(),
+              spaceId,
+              kind: a.kind,
+              path: a.path,
+            });
+          } catch (e) {
+            console.error(`space_attachment_add ${keyOf(a)} failed:`, e);
+          }
+        }
+      }
+
+      // 4. Reload sidebar + spaces so any change (rename, recolor,
+      // default-model, etc.) is reflected immediately.
+      await reloadHistory();
+    } catch (e) {
+      console.error('saveSpaceSettings failed:', e);
+      window.ekToast?.({
+        kind: 'error',
+        title: 'Save Space failed',
+        body: String(e),
+      });
+    }
+  };
+
+  // Move a chat into a Space, or unfile it (pass null for `spaceId`).
+  // The single write path for chats.space_id from the UI side. Mirrors
+  // moveChatToGroup exactly.
+  const moveChatToSpace = async (chatId, spaceId) => {
     if (!chatId) return;
     try {
-      await invoke('db_move_chat_to_group', {
+      await invoke('db_move_chat_to_space', {
         chatId,
-        groupId: groupId || null,
+        spaceId: spaceId || null,
       });
-      await reloadHistoryAndGroups();
+      await reloadHistory();
     } catch (e) {
-      console.error('db_move_chat_to_group failed:', e);
+      console.error('db_move_chat_to_space failed:', e);
+    }
+  };
+
+  // Resolve the active Space row (or null) for the current activeSpaceId.
+  // Memoised so each render boundary that needs the row (newTab, the
+  // ChatPane badge, the system-prompt prepend) doesn't repeat the find.
+  const activeSpace = useMemo(
+    () => (activeSpaceId ? (spaces || []).find((s) => s.id === activeSpaceId) || null : null),
+    [activeSpaceId, spaces],
+  );
+
+  // Build the "starting context" for a new chat created inside a Space:
+  //   • preferredModel    — Space.defaultModel if set, else the global
+  //                         composer-model preference.
+  //   • spaceId           — the active Space's id (or null if no Space).
+  //   • promptSlugs       — pinned prompt slugs from `space_prompts_list`.
+  //   • pinnedAttachments — pinned files/folders from
+  //                         `space_attachments_list`. Each entry is
+  //                         { id, kind: 'file'|'folder', path }. The
+  //                         actual instantiation (calling
+  //                         attachment_add_files / _add_folder against
+  //                         the new chat) is done asynchronously by
+  //                         `instantiateSpacePinnedAttachments` AFTER
+  //                         the chat is on-screen, so the user sees the
+  //                         empty composer immediately while the chips
+  //                         materialise behind the scenes.
+  // Failures of either backend call are logged + ignored — the chat
+  // still creates successfully, just without that piece of Space
+  // inheritance.
+  const resolveSpaceContextForNewChat = async () => {
+    if (!activeSpace) {
+      return {
+        preferredModel: readPersistedComposerModel(),
+        spaceId: null,
+        promptSlugs: [],
+        pinnedAttachments: [],
+      };
+    }
+    const preferred = activeSpace.defaultModel || readPersistedComposerModel();
+    let promptSlugs = [];
+    let pinnedAttachments = [];
+    // Run both list queries concurrently — they hit different SQLite
+    // tables, no dependency, and the chat-creation path waits on max(t1,
+    // t2) instead of t1 + t2.
+    try {
+      const [promptRows, attachRows] = await Promise.all([
+        invoke('space_prompts_list', { spaceId: activeSpace.id }),
+        invoke('space_attachments_list', { spaceId: activeSpace.id }),
+      ]);
+      promptSlugs = (promptRows || []).map((r) => r.promptSlug).filter(Boolean);
+      pinnedAttachments = (attachRows || []).filter((a) => a && a.path);
+    } catch (e) {
+      console.error('space context fetch failed:', e);
+    }
+    return {
+      preferredModel: preferred,
+      spaceId: activeSpace.id,
+      promptSlugs,
+      pinnedAttachments,
+    };
+  };
+
+  // Thin App-scope wrapper around the module-level
+  // `instantiateSpacePinnedAttachments` helper (declared at the bottom
+  // of this file so it's auto-hoisted to window for the test fixture).
+  // The wrapper threads the toast surface + the post-completion
+  // refreshAttachments call that the App owns.
+  const instantiateSpaceAttachmentsForChat = (chatId, pinned) =>
+    instantiateSpacePinnedAttachments(invoke, chatId, pinned, {
+      onError: (e, kind, path) => {
+        console.error(`Space-pinned attachment ${kind} failed${path ? ' (' + path + ')' : ''}:`, e);
+        window.ekToast?.({
+          kind: 'warn',
+          title: kind === 'folder'
+            ? 'Space folder failed to load'
+            : 'Some Space attachments failed to load',
+          body: path ? `${path}: ${String(e)}` : String(e),
+        });
+      },
+      onComplete: () => refreshAttachments(chatId),
+    });
+
+  // Activate a Space (or fall back to All chats with null). The reload
+  // can't happen via a useEffect on activeSpaceId because the active id
+  // has already mounted on first render — `reloadHistory` itself
+  // reads `activeSpaceId` from the closure, so we must set state and
+  // then re-reload using the NEW id. We pass the target id explicitly
+  // (rather than relying on closure) so the reload sees the fresh value.
+  const selectSpace = async (id) => {
+    const next = id || null;
+    if (next === activeSpaceId) return;
+    setActiveSpaceId(next);
+    try {
+      const [chatRows, spaceRows] = await Promise.all([
+        invoke('db_load_chats'),
+        invoke('space_list'),
+      ]);
+      setSpaces(spaceRows || []);
+      const filteredChats = next
+        ? (chatRows || []).filter((c) => c.spaceId === next)
+        : (chatRows || []);
+      setHistory(bucketChatsByDate(filteredChats));
+    } catch (e) {
+      console.error('selectSpace reload failed:', e);
     }
   };
 
   // Total persisted-chat count, used for the Danger-zone confirm copy
-  // ("Delete N chats?"). history is the grouped-by-date sidebar shape;
+  // ("Delete N chats?"). history is the date-bucketed sidebar shape;
   // sum item counts across sections. Ephemeral chats aren't in history
   // so they're not counted — matches the user's mental model that
   // "history" is the persisted list they see in the sidebar.
   const totalChatCount =
-    (history.groups || []).reduce((n, g) => n + (g.items?.length || 0), 0) +
     (history.dateSections || []).reduce((n, s) => n + (s.items?.length || 0), 0);
 
   const activeTabModelId = tabs.find(t => t.id === activeTab)?.model || modelId;
@@ -2541,22 +2988,31 @@ function App() {
 
   const openChatInTab = async (c) => {
     // Multi-model tabs carry their tabType + models list through to the
-    // tab/chat state. groupChatsForSidebar parses multiModels from JSON
+    // tab/chat state. bucketChatsByDate parses multiModels from JSON
     // into an array on the sidebar item, so by the time we get here
     // `c.models` is already a string[] (or null/undefined for single-
     // mode chats).
     const tabType = c.tabType || null;
     const models = Array.isArray(c.models) ? c.models : null;
+    // Carry the chat's Space membership through to the in-memory tab +
+    // chat state. The sidebar item already has spaceId from
+    // bucketChatsByDate (utils.js); ChatPane reads chat.spaceId off
+    // chats[id] to render the Space badge, and `multiFieldsForChat`
+    // reads tab.spaceId on the next persistChat so the column stays
+    // round-trip-stable across renames + edits.
+    const spaceId = c.spaceId || null;
     if (!tabs.find(t => t.id === c.id)) {
       const baseTab = { id: c.id, title: c.title, model: c.model || modelId };
       if (tabType) baseTab.tabType = tabType;
       if (models) baseTab.models = models;
+      if (spaceId) baseTab.spaceId = spaceId;
       setTabs(ts => [...ts, baseTab]);
     }
     if (!chats[c.id]?.loaded) {
       const baseChat = { id: c.id, title: c.title, messages: [], loaded: false };
       if (tabType) baseChat.tabType = tabType;
       if (models) baseChat.models = models;
+      if (spaceId) baseChat.spaceId = spaceId;
       setChats(cs => ({ ...cs, [c.id]: baseChat }));
       try {
         const rows = await invoke('db_load_messages', { chatId: c.id });
@@ -2622,13 +3078,16 @@ function App() {
           }
         } catch (_) { /* chips silently absent on failure */ }
 
-        // Preserve multi-model fields on the chat after messages load.
-        // Without this, the loaded: true entry would wipe tabType/models
-        // that the placeholder set above, breaking compare-mode restore.
+        // Preserve multi-model + Space fields on the chat after messages
+        // load. Without this, the loaded: true entry would wipe tabType /
+        // models / spaceId that the placeholder set above, breaking
+        // compare-mode restore AND erasing the Space badge until the
+        // next reload.
         setChats(cs => {
           const next = { id: c.id, title: c.title, messages, loaded: true };
           if (tabType) next.tabType = tabType;
           if (models) next.models = models;
+          if (spaceId) next.spaceId = spaceId;
           return { ...cs, [c.id]: next };
         });
         // Hydrate the composer's attached-prompts slot for this chat
@@ -2690,7 +3149,7 @@ function App() {
       setHistory(hs => {
         if (sidebarContainsChatId(hs, id)) return hs;
         return prependChatToToday(hs, {
-          id, title, model, when: 'now', groupId: null,
+          id, title, model, when: 'now', spaceId: null,
         });
       });
       openChatInTabRef.current?.({ id, title, model });
@@ -2711,18 +3170,46 @@ function App() {
     return () => { cancelled = true; if (unlisten) unlisten(); };
   }, []);
 
-  const newTab = () => {
+  const newTab = async () => {
     const id = genId();
-    // Read the user's STABLE preferred model from localStorage rather
-    // than the current modelId. modelId follows whatever tab is active
-    // (including historical chats whose model isn't the user's
-    // preferred default), so falling back to it here would drift the
-    // default away from the user's actual preference.
-    const preferred = readPersistedComposerModel();
-    setTabs(ts => [...ts, { id, title: 'New chat', model: preferred }]);
-    setChats(cs => ({ ...cs, [id]: { id, title: 'New chat', messages: [], loaded: true } }));
+    // Resolve Space context (model preference, spaceId, pinned-prompt
+    // slugs) BEFORE state writes so the chat materialises with the right
+    // model already preselected — no flash of the global default before
+    // the Space's choice takes over. resolveSpaceContextForNewChat
+    // returns the global defaults when no Space is active, so this is
+    // safe to call unconditionally.
+    const ctx = await resolveSpaceContextForNewChat();
+    const tabRow = { id, title: 'New chat', model: ctx.preferredModel };
+    if (ctx.spaceId) tabRow.spaceId = ctx.spaceId;
+    setTabs(ts => [...ts, tabRow]);
+    setChats(cs => ({
+      ...cs,
+      [id]: {
+        id,
+        title: 'New chat',
+        messages: [],
+        loaded: true,
+        ...(ctx.spaceId ? { spaceId: ctx.spaceId } : {}),
+      },
+    }));
     setActiveTab(id);
-    setModelId(preferred);
+    setModelId(ctx.preferredModel);
+    // Auto-attach the Space's pinned prompts. The prompts library is
+    // already loaded into `prompts` state on mount; `attachedPromptsByChat`
+    // is keyed by chat id and holds slugs (which equal prompt.id). If a
+    // pinned slug no longer resolves to a live prompt (.md file deleted
+    // from disk), the existing .filter(Boolean) downstream silently drops
+    // it — same orphan tolerance as the spaces.rs / prompt_meta layer.
+    if (ctx.promptSlugs.length) {
+      setAttachedPromptsByChat(m => ({ ...m, [id]: ctx.promptSlugs }));
+    }
+    // Instantiate the Space's pinned attachments AFTER the chat is on
+    // screen — no need to block the visible "+ New chat" flow on file
+    // I/O. The fire-and-forget here is intentional; the helper handles
+    // its own error toasts AND refreshes chatAttachments when done.
+    if (ctx.pinnedAttachments.length) {
+      instantiateSpaceAttachmentsForChat(id, ctx.pinnedAttachments).catch(console.error);
+    }
   };
 
   // Private chat (Phase 4b): same as newTab, but registers the chat id
@@ -2758,22 +3245,28 @@ function App() {
   // multi' — see Phase 4 plan.
   const newCompareTab = () => setCompareModalOpen(true);
 
-  const confirmCompareModels = (selected) => {
+  const confirmCompareModels = async (selected) => {
     setCompareModalOpen(false);
     if (!Array.isArray(selected) || selected.length < 2) return;
     const id = genId();
     const firstModel = selected[0];
     const nowTs = Math.floor(Date.now() / 1000);
-    setTabs(ts => [
-      ...ts,
-      {
-        id,
-        title: 'New comparison chat',
-        model: firstModel,
-        tabType: 'multi-pending',
-        models: selected,
-      },
-    ]);
+    // Compare-mode chats inherit Space context the same way single-mode
+    // ones do — spaceId on the chat row, pinned prompts auto-attached
+    // for the first send, system_prompt prepended at send time. The
+    // explicit list of models is the user's pick from the picker; the
+    // Space's defaultModel is NOT auto-injected into `selected` because
+    // the whole point of compare mode is the user choosing.
+    const ctx = await resolveSpaceContextForNewChat();
+    const tabRow = {
+      id,
+      title: 'New comparison chat',
+      model: firstModel,
+      tabType: 'multi-pending',
+      models: selected,
+    };
+    if (ctx.spaceId) tabRow.spaceId = ctx.spaceId;
+    setTabs(ts => [...ts, tabRow]);
     setChats(cs => ({
       ...cs,
       [id]: {
@@ -2783,12 +3276,15 @@ function App() {
         loaded: true,
         tabType: 'multi-pending',
         models: selected,
+        ...(ctx.spaceId ? { spaceId: ctx.spaceId } : {}),
       },
     }));
     setActiveTab(id);
     // Persist immediately so the chat survives an app relaunch even if
     // the user never sends a first message. multiModels is stored as a
-    // JSON string (matches the Rust Option<String> column).
+    // JSON string (matches the Rust Option<String> column). spaceId
+    // rides along so the chat materialises inside the right Space on
+    // first load.
     persistChat({
       id,
       title: 'New comparison chat',
@@ -2797,7 +3293,25 @@ function App() {
       updatedAt: nowTs,
       tabType: 'multi-pending',
       multiModels: JSON.stringify(selected),
+      spaceId: ctx.spaceId || null,
     }).catch(console.error);
+    // Auto-attach the Space's pinned prompts. handleSendMultiModel
+    // reads from attachedPromptsByChat too, so the first compare-mode
+    // send gets the same pinned-prompts treatment as a single-mode chat.
+    if (ctx.promptSlugs.length) {
+      setAttachedPromptsByChat(m => ({ ...m, [id]: ctx.promptSlugs }));
+    }
+    // Pinned attachments — same fire-and-forget shape as newTab.
+    // handleSendMultiModel currently doesn't consume attachments at
+    // send time (compare mode defers RAG; see the comment block in
+    // handleSendMultiModel about "attachments ... deferred to a future
+    // iteration"), but instantiating them onto the chat row makes them
+    // visible in the composer chip strip AND they'll be picked up by a
+    // future iteration. No reason to suppress them just because the
+    // current compare-send path doesn't consult them.
+    if (ctx.pinnedAttachments.length) {
+      instantiateSpaceAttachmentsForChat(id, ctx.pinnedAttachments).catch(console.error);
+    }
   };
 
   // Screenshot pipeline (Phase 5). Called from the `screenshot:captured`
@@ -3250,15 +3764,22 @@ function App() {
                 onNewPrivate={newPrivateTab}
                 onNewCompare={newCompareTab}
                 width={sidebarWidth}
-                // ── Group/folder management ────────────────────────────
-                // `groups` is the raw chat_groups list (id + name), used
-                // by the right-click "Move to group" submenu so it can
-                // list every group, not just ones with items in view.
-                groups={groups}
-                onCreateGroup={(name) => createGroup(name)}
-                onRenameGroup={renameGroup}
-                onDeleteGroup={deleteGroup}
-                onMoveChatToGroup={moveChatToGroup}
+                // ── Spaces (workspace bundles) ─────────────────────────
+                // A Space bundles a system prompt, default model, optional
+                // pinned attachments + prompts, and an optional Space-
+                // scoped memory file. The sidebar surfaces them as the
+                // top section with an "All chats" pseudo-row, and the
+                // active Space filters the chat list below.
+                spaces={spaces}
+                activeSpaceId={activeSpaceId}
+                onSelectSpace={selectSpace}
+                onCreateSpace={createSpace}
+                onRenameSpace={renameSpace}
+                onRecolorSpace={recolorSpace}
+                onDeleteSpace={deleteSpace}
+                onMoveChatToSpace={moveChatToSpace}
+                promptsLibrary={prompts}
+                onEditSpaceSave={saveSpaceSettings}
                 onRename={renameChat}
                 // Full-text hits + click handler. The hit carries chatModel
                 // so we don't have to look it up from history (which is
@@ -3365,6 +3886,11 @@ function App() {
                   // doesn't need to know.
                   onEditMessage={handleEditAndResubmit}
                   onRetryMessage={handleRetryAssistant}
+                  // Resolved Space row for this chat (or null). Used by
+                  // ChatPane to render the Space badge in the header.
+                  // Resolved at the parent so ChatPane stays presentation-
+                  // only and doesn't need the spaces array.
+                  space={chat.spaceId ? (spaces || []).find(s => s.id === chat.spaceId) || null : null}
                 />
                 <Composer
                   model={tabModel}
@@ -3383,6 +3909,18 @@ function App() {
                   onStop={handleStop}
                   attachedPrompts={attachedPrompts}
                   onDetachPrompt={detachPrompt}
+                  // Locked-pin enforcement: for chats inside a Space,
+                  // resolve the set of slugs flagged `locked=true` in
+                  // `space_prompts`. The Composer hides the × on those
+                  // chips so the user can't detach a Space-mandated
+                  // prompt from one chat. Resolved at render time (not
+                  // snapshotted into the chat) — unlocking later flows
+                  // through to every open chat on the next render.
+                  lockedPromptSlugs={
+                    chat.spaceId
+                      ? (lockedSlugsBySpace[chat.spaceId] || EMPTY_LOCKED_SET)
+                      : EMPTY_LOCKED_SET
+                  }
                   // Full library for the in-composer slash-command picker.
                   // Filter out _virtual prompts (watch-notes carriers) per
                   // the rule in CLAUDE.md — they're context blobs that
@@ -3518,6 +4056,11 @@ function now() {
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
+// Note: `instantiateSpacePinnedAttachments` (the pure dispatcher used by
+// the App-scope wrapper `instantiateSpaceAttachmentsForChat` above) lives
+// in ui/utils.js so it can be unit-tested with Node's built-in test
+// runner. See ui/__tests__/utils.test.js for the contract tests.
+//
 // Only the main window renders <App />. The overlay window has its own
 // mount inside overlay.jsx. In a non-Tauri context (pure-browser dev),
 // __TAURI__ is absent and we default to the main app.

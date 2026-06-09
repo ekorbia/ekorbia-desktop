@@ -10,7 +10,7 @@
 //! CASCADE), and REPLACE would cascade-delete all messages before re-
 //! inserting the chat row — wiping history on every send. See CLAUDE.md.
 
-use crate::db::{now_unix, DbState};
+use crate::db::DbState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,22 +31,14 @@ pub(crate) struct ChatRow {
     /// chat (e.g. `["gemma4:26b","llama3:70b"]`). None for single-mode.
     #[serde(default)]
     multi_models: Option<String>,
-    /// Optional user-defined group (sidebar folder) this chat belongs to.
-    /// `None` = ungrouped (chat falls through to the date buckets).
-    /// Group membership is owned by `db_move_chat_to_group`; `db_upsert_chat`
-    /// deliberately excludes this column from its UPDATE clause so a save
-    /// from the chat UI never clobbers the user's filing choice.
+    /// Optional Space (workspace bundle) this chat belongs to. `None` =
+    /// not in any Space ("All chats" view shows it regardless). Space
+    /// membership is owned by `db_move_chat_to_space`; `db_upsert_chat`
+    /// deliberately excludes this column from its UPDATE clause — same
+    /// pipeline-owned-column rule the watch pipeline uses for
+    /// `last_content` / `last_polled_at`.
     #[serde(default)]
-    group_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ChatGroupRow {
-    id: String,
-    name: String,
-    sort_order: i64,
-    created_at: i64,
+    space_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -97,7 +89,7 @@ pub(crate) fn db_load_chats(state: tauri::State<'_, DbState>) -> Result<Vec<Chat
     let db = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = db
         .prepare(
-            "SELECT id, title, model, created_at, updated_at, tab_type, multi_models, group_id \
+            "SELECT id, title, model, created_at, updated_at, tab_type, multi_models, space_id \
              FROM chats ORDER BY updated_at DESC",
         )
         .map_err(|e| e.to_string())?;
@@ -111,7 +103,7 @@ pub(crate) fn db_load_chats(state: tauri::State<'_, DbState>) -> Result<Vec<Chat
                 updated_at: row.get(4)?,
                 tab_type: row.get(5)?,
                 multi_models: row.get(6)?,
-                group_id: row.get(7)?,
+                space_id: row.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -188,14 +180,15 @@ pub(crate) fn db_upsert_chat(
     // foreign-key constraint is not violated and no cascade fires.
     // created_at is intentionally not in the SET list so the original
     // creation timestamp survives subsequent updates.
-    // `group_id` is INSERTed (so a freshly-created chat can be filed at
-    // birth) but deliberately omitted from the UPDATE clause. Group
-    // membership is owned by `db_move_chat_to_group` — the chat-save path
-    // from the UI must never overwrite the user's filing choice. Same
-    // pipeline-owned-column rule as `last_content` / `last_polled_at` on
-    // the watches table; see CLAUDE.md.
+    // `space_id` is INSERTed (so a freshly-created chat can be filed at
+    // birth) but deliberately omitted from the UPDATE clause. Space
+    // membership is owned by `db_move_chat_to_space` — the chat-save
+    // path from the UI must never overwrite the user's filing choice.
+    // Same pipeline-owned-column rule as `last_content` /
+    // `last_polled_at` on the watches table; see CLAUDE.md. Pinned by
+    // `upsert_chat_does_not_clobber_space_id_on_update` in db.rs tests.
     db.execute(
-        "INSERT INTO chats (id, title, model, created_at, updated_at, tab_type, multi_models, group_id) \
+        "INSERT INTO chats (id, title, model, created_at, updated_at, tab_type, multi_models, space_id) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
          ON CONFLICT(id) DO UPDATE SET \
             title = excluded.title, \
@@ -211,7 +204,7 @@ pub(crate) fn db_upsert_chat(
             chat.updated_at,
             &chat.tab_type,
             &chat.multi_models,
-            &chat.group_id,
+            &chat.space_id,
         ),
     )
     .map_err(|e| e.to_string())?;
@@ -292,147 +285,6 @@ pub(crate) fn db_clear_all_chats(state: tauri::State<'_, DbState>) -> Result<usi
     Ok(n)
 }
 
-// ── Chat groups (sidebar folders) ───────────────────────────────────────────
-//
-// Each chat row has an optional `group_id` pointing to a row here. Groups
-// are user-defined and displayed above the date buckets in the sidebar; an
-// ungrouped chat (group_id IS NULL) falls through to the date sections.
-//
-// Membership writes go through `db_move_chat_to_group` only. `db_upsert_chat`
-// deliberately does NOT update `group_id` (pipeline-owned column rule), so a
-// chat-save from the UI never clobbers the user's filing choice.
-
-#[tauri::command]
-pub(crate) fn db_load_groups(
-    state: tauri::State<'_, DbState>,
-) -> Result<Vec<ChatGroupRow>, String> {
-    let db = state.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = db
-        .prepare(
-            "SELECT id, name, sort_order, created_at \
-             FROM chat_groups ORDER BY sort_order ASC, created_at ASC",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(ChatGroupRow {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                sort_order: row.get(2)?,
-                created_at: row.get(3)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
-}
-
-/// Create a new group with a UI-supplied id and name. The group is appended
-/// at the bottom (sort_order = max + 1) so its initial position is
-/// deterministic and predictable to the user.
-#[tauri::command]
-pub(crate) fn db_create_group(
-    state: tauri::State<'_, DbState>,
-    id: String,
-    name: String,
-) -> Result<(), String> {
-    let db = state.0.lock().map_err(|e| e.to_string())?;
-    let next_order: i64 = db
-        .query_row(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chat_groups",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    db.execute(
-        "INSERT INTO chat_groups (id, name, sort_order, created_at) \
-         VALUES (?1, ?2, ?3, ?4)",
-        (&id, &name, next_order, now_unix()),
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub(crate) fn db_rename_group(
-    state: tauri::State<'_, DbState>,
-    id: String,
-    name: String,
-) -> Result<(), String> {
-    let db = state.0.lock().map_err(|e| e.to_string())?;
-    db.execute(
-        "UPDATE chat_groups SET name = ?2 WHERE id = ?1",
-        (&id, &name),
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Delete a group and unfile any chats that belonged to it (NULL out their
-/// `group_id` rather than cascade-deleting the chats themselves). Wrapped in
-/// a transaction so the unfile + delete pair is atomic: if either fails the
-/// other rolls back, leaving the user with a consistent view.
-///
-/// Fresh installs have the FK `ON DELETE SET NULL` action that would do this
-/// automatically, but upgrade installs lack the FK (ALTER TABLE can't add
-/// one). Doing it explicitly in app code makes both paths behave identically.
-#[tauri::command]
-pub(crate) fn db_delete_group(state: tauri::State<'_, DbState>, id: String) -> Result<(), String> {
-    let mut db = state.0.lock().map_err(|e| e.to_string())?;
-    let tx = db.transaction().map_err(|e| e.to_string())?;
-    tx.execute(
-        "UPDATE chats SET group_id = NULL WHERE group_id = ?1",
-        [&id],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute("DELETE FROM chat_groups WHERE id = ?1", [&id])
-        .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Move a chat into a group, or unfile it (pass `None` for `group_id`).
-/// This is the ONLY write path for `chats.group_id` — `db_upsert_chat`
-/// deliberately leaves the column alone on update so a normal chat-save
-/// can't clobber the user's filing.
-#[tauri::command]
-pub(crate) fn db_move_chat_to_group(
-    state: tauri::State<'_, DbState>,
-    chat_id: String,
-    group_id: Option<String>,
-) -> Result<(), String> {
-    let db = state.0.lock().map_err(|e| e.to_string())?;
-    db.execute(
-        "UPDATE chats SET group_id = ?2 WHERE id = ?1",
-        (&chat_id, &group_id),
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Re-write `sort_order` from a user-supplied ordered list of group ids.
-/// Wrapped in a transaction so the new ordering lands atomically. Unknown
-/// ids in the list are silently ignored (the UPDATE just affects 0 rows).
-/// Any group not in the list keeps its existing sort_order — callers should
-/// pass every group id in the order they want.
-#[tauri::command]
-pub(crate) fn db_reorder_groups(
-    state: tauri::State<'_, DbState>,
-    ids: Vec<String>,
-) -> Result<(), String> {
-    let mut db = state.0.lock().map_err(|e| e.to_string())?;
-    let tx = db.transaction().map_err(|e| e.to_string())?;
-    for (idx, id) in ids.iter().enumerate() {
-        tx.execute(
-            "UPDATE chat_groups SET sort_order = ?2 WHERE id = ?1",
-            (id, idx as i64),
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 /// Truncate a chat: delete the message identified by `from_message_id` and
 /// every message after it (by `seq` order). Used by:
 ///   • Edit-and-resubmit: pencil-edit a past user message, save → truncate
@@ -510,7 +362,7 @@ pub(crate) fn chat_export_to_path(
     // user-visible error, not a panic.
     let chat = db
         .query_row(
-            "SELECT id, title, model, created_at, updated_at, tab_type, multi_models, group_id \
+            "SELECT id, title, model, created_at, updated_at, tab_type, multi_models, space_id \
              FROM chats WHERE id = ?1",
             [&chat_id],
             |row| {
@@ -522,7 +374,7 @@ pub(crate) fn chat_export_to_path(
                     updated_at: row.get(4)?,
                     tab_type: row.get(5)?,
                     multi_models: row.get(6)?,
-                    group_id: row.get(7)?,
+                    space_id: row.get(7)?,
                 })
             },
         )

@@ -18,7 +18,8 @@ const {
   genId,
   defaultIntervalForKind,
   ekFilesGroupByPath,
-  groupChatsForSidebar,
+  bucketChatsByDate,
+  instantiateSpacePinnedAttachments,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -394,7 +395,13 @@ test("ekFilesGroupByPath: sorted by head.savedAt desc", () => {
   );
 });
 
-// ── groupChatsForSidebar ─────────────────────────────────────────────────
+// ── bucketChatsByDate ────────────────────────────────────────────────────
+//
+// Earlier this helper was `groupChatsForSidebar`, which produced both a
+// per-group array AND a per-date-section array. Groups were replaced
+// entirely by Spaces (workspace bundles) — the Sidebar now filters
+// chatRows by activeSpaceId BEFORE passing them in, so the helper only
+// has to do pure date bucketing.
 
 // Convenience: build a chat row with date-aware createdAt + updatedAt.
 // All tests fix `now` to a known timestamp so bucket boundaries are stable.
@@ -409,115 +416,54 @@ function mkChat(overrides) {
       updatedAt: nowSec,
       tabType: null,
       multiModels: null,
-      groupId: null,
+      spaceId: null,
     },
     overrides
   );
 }
 
-test("groupChatsForSidebar: no groups + no chats returns empty shape", () => {
-  const out = groupChatsForSidebar([], []);
-  assert.deepEqual(out, { groups: [], dateSections: [] });
+test("bucketChatsByDate: no chats returns empty shape", () => {
+  assert.deepEqual(bucketChatsByDate([]), { dateSections: [] });
 });
 
-test("groupChatsForSidebar: handles null/undefined args without crashing", () => {
-  // Defensive: callers may invoke this before the first db_load_groups
+test("bucketChatsByDate: handles null/undefined args without crashing", () => {
+  // Defensive: callers may invoke this before the first db_load_chats
   // returns. Should not throw — empty shape is the right answer.
-  assert.deepEqual(groupChatsForSidebar(null, null), {
-    groups: [],
-    dateSections: [],
-  });
-  assert.deepEqual(groupChatsForSidebar(undefined, undefined), {
-    groups: [],
-    dateSections: [],
-  });
+  assert.deepEqual(bucketChatsByDate(null), { dateSections: [] });
+  assert.deepEqual(bucketChatsByDate(undefined), { dateSections: [] });
 });
 
-test("groupChatsForSidebar: chats with no groups fall into date sections", () => {
-  const chats = [mkChat({ id: "c1", title: "today" })];
-  const out = groupChatsForSidebar(chats, []);
-  assert.equal(out.groups.length, 0);
+test("bucketChatsByDate: chats fall into the Today section", () => {
+  const out = bucketChatsByDate([mkChat({ id: "c1", title: "today" })]);
   assert.equal(out.dateSections.length, 1);
   assert.equal(out.dateSections[0].section, "Today");
   assert.equal(out.dateSections[0].items[0].id, "c1");
 });
 
-test("groupChatsForSidebar: empty groups are KEPT in output (just-created folder visibility)", () => {
-  // A user who just created "Work" must see it in the sidebar even
-  // before they've filed anything into it.
-  const out = groupChatsForSidebar([], [{ id: "g1", name: "Work" }]);
-  assert.equal(out.groups.length, 1);
-  assert.equal(out.groups[0].id, "g1");
-  assert.equal(out.groups[0].name, "Work");
-  assert.deepEqual(out.groups[0].items, []);
-});
-
-test("groupChatsForSidebar: empty DATE buckets are filtered (no 'Older' if nothing's old)", () => {
-  // Symmetric assertion to the previous test: empty groups stay, empty
-  // date buckets go. Matches the legacy groupChatsByDate behaviour.
-  const chats = [mkChat({ id: "c1", title: "today" })];
-  const out = groupChatsForSidebar(chats, []);
+test("bucketChatsByDate: empty DATE buckets are filtered (no 'Older' if nothing's old)", () => {
+  const out = bucketChatsByDate([mkChat({ id: "c1", title: "today" })]);
   // Only the Today section, no Yesterday/Last 7 days/etc.
   assert.equal(out.dateSections.length, 1);
   assert.equal(out.dateSections[0].section, "Today");
 });
 
-test("groupChatsForSidebar: chats route to their group, not to date sections", () => {
+test("bucketChatsByDate: spaceId rides through onto each item", () => {
+  // The context menu's "Move to Space" submenu needs this to grey out
+  // the chat's current Space; the sidebar item shape must carry it.
   const chats = [
-    mkChat({ id: "c1", title: "filed", groupId: "g1" }),
-    mkChat({ id: "c2", title: "loose" }),
+    mkChat({ id: "c1", spaceId: "s1" }),
+    mkChat({ id: "c2" }), // spaceId default is null
   ];
-  const out = groupChatsForSidebar(chats, [{ id: "g1", name: "Work" }]);
-  // c1 in the group; c2 in Today.
-  assert.equal(out.groups[0].items.length, 1);
-  assert.equal(out.groups[0].items[0].id, "c1");
-  assert.equal(out.dateSections.length, 1);
-  assert.equal(out.dateSections[0].items[0].id, "c2");
+  const out = bucketChatsByDate(chats);
+  const items = out.dateSections[0].items;
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+  assert.equal(byId.c1.spaceId, "s1");
+  assert.equal(byId.c2.spaceId, null);
 });
 
-test("groupChatsForSidebar: chat referencing a deleted group falls through to date sections", () => {
-  // Defensive: race between db_delete_group and the sidebar render. The
-  // stale groupId on the chat row points to a group that's no longer in
-  // the list — shouldn't crash, shouldn't lose the chat. It surfaces in
-  // its date bucket until the next reload picks up the NULLed column.
-  const chats = [mkChat({ id: "c1", groupId: "ghost-group" })];
-  const out = groupChatsForSidebar(chats, []);
-  assert.equal(out.groups.length, 0);
-  assert.equal(out.dateSections.length, 1);
-  assert.equal(out.dateSections[0].items[0].id, "c1");
-});
-
-test("groupChatsForSidebar: group display order matches input order (sort_order)", () => {
-  // The Rust side returns groups already sorted by sort_order ASC. We
-  // preserve that order verbatim — no re-sort here.
-  const out = groupChatsForSidebar(
-    [],
-    [
-      { id: "g2", name: "Personal" },
-      { id: "g1", name: "Work" },
-      { id: "g3", name: "Research" },
-    ]
-  );
-  assert.deepEqual(
-    out.groups.map((g) => g.id),
-    ["g2", "g1", "g3"]
-  );
-});
-
-test("groupChatsForSidebar: groupId is exposed on each item", () => {
-  // The context menu needs this to grey out "Move to {currentGroup}".
-  const chats = [
-    mkChat({ id: "c1", groupId: "g1" }),
-    mkChat({ id: "c2" }),
-  ];
-  const out = groupChatsForSidebar(chats, [{ id: "g1", name: "Work" }]);
-  assert.equal(out.groups[0].items[0].groupId, "g1");
-  assert.equal(out.dateSections[0].items[0].groupId, null);
-});
-
-test("groupChatsForSidebar: multiModels JSON is parsed once per chat", () => {
-  // Same per-row reshape as the legacy date grouper — sidebar items get
-  // a parsed `models` array (or null on malformed/absent).
+test("bucketChatsByDate: multiModels JSON is parsed once per chat", () => {
+  // Per-row reshape: sidebar items get a parsed `models` array (or null
+  // on malformed/absent).
   const chats = [
     mkChat({
       id: "c1",
@@ -526,7 +472,7 @@ test("groupChatsForSidebar: multiModels JSON is parsed once per chat", () => {
     }),
     mkChat({ id: "c2", multiModels: "not valid json" }),
   ];
-  const out = groupChatsForSidebar(chats, []);
+  const out = bucketChatsByDate(chats);
   const items = out.dateSections[0].items;
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
   assert.deepEqual(byId.c1.models, ["llama3", "gemma4"]);
@@ -535,13 +481,194 @@ test("groupChatsForSidebar: multiModels JSON is parsed once per chat", () => {
   assert.equal(byId.c2.models, null);
 });
 
-test("groupChatsForSidebar: filed chat does NOT also appear in a date section", () => {
-  // Bug guard: each chat must be in EXACTLY one place across the two
-  // output lists, never both.
-  const chats = [mkChat({ id: "c1", groupId: "g1" })];
-  const out = groupChatsForSidebar(chats, [{ id: "g1", name: "Work" }]);
-  const idsInDateSections = out.dateSections.flatMap((s) =>
-    s.items.map((i) => i.id)
+test("bucketChatsByDate: every chat appears in exactly one section", () => {
+  // Bug guard: bucket boundaries must partition. The test uses 5 chats
+  // straddling every bucket window so a misordered boundary would lose
+  // or duplicate one.
+  const day = 86400;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const chats = [
+    mkChat({ id: "today",     createdAt: nowSec }),
+    mkChat({ id: "yesterday", createdAt: nowSec - day - 60 }),
+    mkChat({ id: "this-week", createdAt: nowSec - 3 * day }),
+    mkChat({ id: "this-month",createdAt: nowSec - 15 * day }),
+    mkChat({ id: "older",     createdAt: nowSec - 100 * day }),
+  ];
+  const out = bucketChatsByDate(chats);
+  const seen = new Set();
+  for (const s of out.dateSections) {
+    for (const it of s.items) {
+      assert.ok(!seen.has(it.id), `id ${it.id} appeared twice across sections`);
+      seen.add(it.id);
+    }
+  }
+  assert.equal(seen.size, 5, "every chat must be bucketed exactly once");
+});
+
+// ── instantiateSpacePinnedAttachments (Phase 4) ───────────────────────────
+//
+// Pure dispatcher contract. The helper takes an `invokeFn` parameter
+// (no global dependency) so tests can hand it a recording mock that
+// pushes every call into an array. The contract pinned here is what
+// the App-scope wrapper in main.jsx relies on — the comments at the
+// helper's definition in utils.js spell it out.
+
+// Build a fake invoke that records calls AND optionally throws on
+// matches against synthetic-failure needles (substring match on the
+// JSON-encoded call signature). Returns { invokeFn, calls } so each
+// test can assert on the recorded sequence.
+function recordingInvoke(throwIfMatch) {
+  const calls = [];
+  const invokeFn = async (cmd, args) => {
+    calls.push({ cmd, args });
+    const sig = JSON.stringify({ cmd, args });
+    for (const needle of throwIfMatch || []) {
+      if (sig.includes(needle)) {
+        throw new Error("synthetic failure: " + needle);
+      }
+    }
+    return { ok: true };
+  };
+  return { invokeFn, calls };
+}
+
+test("instantiateSpacePinnedAttachments: empty list → no invokes, onComplete fires", async () => {
+  const { invokeFn, calls } = recordingInvoke();
+  let completes = 0;
+  await instantiateSpacePinnedAttachments(invokeFn, "c1", [], {
+    onComplete: () => { completes++; },
+  });
+  assert.deepEqual(calls, []);
+  // onComplete must fire even on the fast-return path so callers don't
+  // have to special-case empty.
+  assert.equal(completes, 1);
+});
+
+test("instantiateSpacePinnedAttachments: missing chatId → no invokes, onComplete fires", async () => {
+  const { invokeFn, calls } = recordingInvoke();
+  let completes = 0;
+  await instantiateSpacePinnedAttachments(invokeFn, "", [{ kind: "file", path: "/a.md" }], {
+    onComplete: () => { completes++; },
+  });
+  assert.deepEqual(calls, []);
+  assert.equal(completes, 1);
+});
+
+test("instantiateSpacePinnedAttachments: missing onComplete is harmless", async () => {
+  // Saves callers from threading a no-op when they don't care.
+  const { invokeFn } = recordingInvoke();
+  await assert.doesNotReject(
+    instantiateSpacePinnedAttachments(invokeFn, "c1", [], {}),
   );
-  assert.ok(!idsInDateSections.includes("c1"));
+  // And the function should also tolerate a completely-omitted opts
+  // bag — App-side wrappers occasionally pass nothing.
+  await assert.doesNotReject(
+    instantiateSpacePinnedAttachments(invokeFn, "c1", []),
+  );
+});
+
+test("instantiateSpacePinnedAttachments: every file path goes into ONE attachment_add_files", async () => {
+  // The KEY perf property: 12 pinned files = 1 round-trip, not 12.
+  const { invokeFn, calls } = recordingInvoke();
+  await instantiateSpacePinnedAttachments(invokeFn, "c1", [
+    { kind: "file", path: "/style-guide.md" },
+    { kind: "file", path: "/glossary.md" },
+    { kind: "file", path: "/character-sheet.md" },
+  ]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], {
+    cmd: "attachment_add_files",
+    args: { chatId: "c1", paths: ["/style-guide.md", "/glossary.md", "/character-sheet.md"] },
+  });
+});
+
+test("instantiateSpacePinnedAttachments: each folder gets its own attachment_add_folder", async () => {
+  // Folders are dispatched serially — the Rust walker takes the
+  // SQLite write lock; running 3 walkers concurrently would just
+  // serialize inside rusqlite anyway.
+  const { invokeFn, calls } = recordingInvoke();
+  await instantiateSpacePinnedAttachments(invokeFn, "c1", [
+    { kind: "folder", path: "/research" },
+    { kind: "folder", path: "/drafts" },
+  ]);
+  assert.deepEqual(calls, [
+    { cmd: "attachment_add_folder", args: { chatId: "c1", path: "/research" } },
+    { cmd: "attachment_add_folder", args: { chatId: "c1", path: "/drafts" } },
+  ]);
+});
+
+test("instantiateSpacePinnedAttachments: files dispatch BEFORE folders", async () => {
+  // UX property: small files surface fast; the user gets feedback
+  // before the folder walker churns.
+  const { invokeFn, calls } = recordingInvoke();
+  await instantiateSpacePinnedAttachments(invokeFn, "c1", [
+    { kind: "folder", path: "/research" },
+    { kind: "file", path: "/style-guide.md" },
+  ]);
+  assert.equal(calls[0].cmd, "attachment_add_files");
+  assert.equal(calls[1].cmd, "attachment_add_folder");
+});
+
+test("instantiateSpacePinnedAttachments: a folder failure does NOT block subsequent folders", async () => {
+  // Partial-broken-state resilience. One pinned folder moved off disk,
+  // the rest should still try.
+  const { invokeFn, calls } = recordingInvoke(["/broken"]);
+  const errors = [];
+  let completes = 0;
+  await instantiateSpacePinnedAttachments(invokeFn, "c1", [
+    { kind: "folder", path: "/broken" },
+    { kind: "folder", path: "/good" },
+  ], {
+    onError: (e, kind, path) => errors.push({ kind, path: path || null, message: String(e) }),
+    onComplete: () => { completes++; },
+  });
+  assert.deepEqual(calls, [
+    { cmd: "attachment_add_folder", args: { chatId: "c1", path: "/broken" } },
+    { cmd: "attachment_add_folder", args: { chatId: "c1", path: "/good" } },
+  ]);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].kind, "folder");
+  assert.equal(errors[0].path, "/broken");
+  assert.match(errors[0].message, /synthetic failure/);
+  // onComplete still fires after all dispatches resolve.
+  assert.equal(completes, 1);
+});
+
+test("instantiateSpacePinnedAttachments: a files-batch failure does NOT block folders", async () => {
+  const { invokeFn, calls } = recordingInvoke(["attachment_add_files"]);
+  const errors = [];
+  await instantiateSpacePinnedAttachments(invokeFn, "c1", [
+    { kind: "file", path: "/a.md" },
+    { kind: "file", path: "/b.md" },
+    { kind: "folder", path: "/research" },
+  ], {
+    onError: (e, kind, path) => errors.push({ kind, path: path || null }),
+  });
+  assert.deepEqual(calls, [
+    { cmd: "attachment_add_files", args: { chatId: "c1", paths: ["/a.md", "/b.md"] } },
+    { cmd: "attachment_add_folder", args: { chatId: "c1", path: "/research" } },
+  ]);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].kind, "files");
+  // Files-batch errors don't carry a per-path — the batch failed as a
+  // unit. The App's toast just says "some Space attachments failed".
+  assert.equal(errors[0].path, null);
+});
+
+test("instantiateSpacePinnedAttachments: silently drops entries with no kind or no path", async () => {
+  // Defensive: a corrupt space_attachments row shouldn't poison the
+  // dispatch for the well-formed ones.
+  const { invokeFn, calls } = recordingInvoke();
+  await instantiateSpacePinnedAttachments(invokeFn, "c1", [
+    null,
+    undefined,
+    { kind: "file" }, // no path
+    { kind: "file", path: "/good.md" },
+    { kind: "folder", path: "" }, // empty path
+    { kind: "folder", path: "/research" },
+  ]);
+  assert.deepEqual(calls, [
+    { cmd: "attachment_add_files", args: { chatId: "c1", paths: ["/good.md"] } },
+    { cmd: "attachment_add_folder", args: { chatId: "c1", path: "/research" } },
+  ]);
 });

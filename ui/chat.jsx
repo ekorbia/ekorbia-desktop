@@ -47,7 +47,7 @@ function ExportMenuItem({ label, onClick }) {
 }
 
 // ─── Chat Pane ──────────────────────────────────────────────
-function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage }) {
+function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, space }) {
   const scrollerRef = useRef(null);
   const lastContent = chat.messages[chat.messages.length - 1]?.content;
   useEffect(() => {
@@ -218,6 +218,48 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
             marginBottom: 4,
           }}
         >
+          {/* Space badge — small color dot + name, renders only when the
+              chat lives inside a Space. Reads as "this chat is part of
+              {space} workspace" alongside the title. Resolved at the
+              parent (main.jsx) so ChatPane stays presentation-only and
+              the spaces array doesn't need to plumb through here. */}
+          {space && (
+            <div
+              data-chat-space-badge
+              data-space-id={space.id}
+              title={`Space: ${space.name}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "2px 8px 2px 6px",
+                background: T.bg2,
+                border: `1px solid ${T.border}`,
+                borderRadius: 999,
+                fontFamily: T.mono,
+                fontSize: 10.5,
+                color: T.fg1,
+                flexShrink: 0,
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  display: "inline-block",
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: window.spaceColorHex
+                    ? window.spaceColorHex(space.color)
+                    : space.color
+                      ? T[space.color] || T.fg2
+                      : T.fg2,
+                  flexShrink: 0,
+                }}
+              />
+              {space.name}
+            </div>
+          )}
           {editingTitle ? (
             <input
               ref={titleInputRef}
@@ -1684,10 +1726,18 @@ function Composer({
   //                      a no-op (toggle would detach, which is not
   //                      what "pick from the picker" implies)
   //   onDetachPrompt   — × button on each chip
+  //   lockedPromptSlugs — Set<slug> of prompts the parent has flagged as
+  //                      Space-locked. For chips whose `p.id` (== slug)
+  //                      is in this set, the × button is suppressed and
+  //                      a small lock glyph replaces it so the user
+  //                      knows the chip is enforced by the Space, not
+  //                      by them. Detaching it is disabled at this
+  //                      layer; unlock via the Space settings modal.
   prompts = [],
   onPickPrompt,
   attachedPrompts = [],
   onDetachPrompt,
+  lockedPromptSlugs = new Set(),
   // File + folder attachments (separate from prompts):
   //   attachments       — array of { id, kind ('text'|'image'|'folder'), label, path, bytes, status, ... }
   //   onAttachFile      — opens the OS file picker via the dialog plugin
@@ -2218,9 +2268,19 @@ function Composer({
                   ? FAVORITE_COLOR_MAP[p.favorite]
                   : null;
                 const favColor = fav?.color || null;
+                // Locked chips originate from a Space's `space_prompts`
+                // row with locked=1. The chip still renders normally
+                // (colored dot, name) but the × is replaced by a small
+                // lock glyph and detach is wired to nothing — the user
+                // must unlock via the Space settings modal. `p.id` is
+                // the prompt slug (filename without `.md`), which is
+                // exactly what `lockedPromptSlugs` is keyed by.
+                const isLocked = lockedPromptSlugs && lockedPromptSlugs.has(p.id);
                 return (
                   <span
                     key={p.id}
+                    data-attached-prompt-chip={p.id}
+                    data-locked={isLocked ? "1" : "0"}
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
@@ -2233,6 +2293,7 @@ function Composer({
                       fontSize: 10,
                       color: T.fg1,
                     }}
+                    title={isLocked ? "Locked by Space — unlock in Space settings" : undefined}
                   >
                     {favColor && (
                       <span
@@ -2246,20 +2307,35 @@ function Composer({
                       />
                     )}
                     <span style={{ color: favColor || T.fg }}>{p.name}</span>
-                    <button
-                      onClick={() => onDetachPrompt && onDetachPrompt(p.id)}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: T.fg3,
-                        cursor: "pointer",
-                        padding: 0,
-                        marginLeft: 2,
-                        display: "inline-flex",
-                      }}
-                    >
-                      <I.X size={9} />
-                    </button>
+                    {isLocked ? (
+                      <span
+                        data-attached-prompt-lock={p.id}
+                        style={{
+                          color: T.fg3,
+                          marginLeft: 2,
+                          display: "inline-flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        <I.Lock size={9} />
+                      </span>
+                    ) : (
+                      <button
+                        data-attached-prompt-detach={p.id}
+                        onClick={() => onDetachPrompt && onDetachPrompt(p.id)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: T.fg3,
+                          cursor: "pointer",
+                          padding: 0,
+                          marginLeft: 2,
+                          display: "inline-flex",
+                        }}
+                      >
+                        <I.X size={9} />
+                      </button>
+                    )}
                   </span>
                 );
               })}

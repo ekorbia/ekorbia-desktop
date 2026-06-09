@@ -380,19 +380,13 @@ function defaultIntervalForKind(kind) {
   return 30;                          // folder
 }
 
-// ── Sidebar chat grouping (main.jsx + shell.jsx) ───────────────────────────
+// ── Sidebar chat date-bucketing (main.jsx + shell.jsx) ─────────────────────
 //
-// Lay out the sidebar in two stacked sections: user-defined groups (above)
-// and date buckets (below, for chats not filed into any group). One pass
-// over `chatRows`, no global mutation; safe to call on every render.
+// Group chats into Today / Yesterday / Last 7 days / Last 30 days / Older.
+// One pass over `chatRows`, no global mutation; safe to call on every render.
 //
 // Shape of the return value:
 //   {
-//     groups: [
-//       { id, name, items: [item, ...] },  // in group sort order
-//       // empty groups are KEPT (user just created one → must show)
-//       ...
-//     ],
 //     dateSections: [
 //       { section: 'Today',         items: [...] },
 //       { section: 'Yesterday',     items: [...] },
@@ -403,31 +397,22 @@ function defaultIntervalForKind(kind) {
 //     ],
 //   }
 //
-// Each `item` mirrors what the sidebar consumed before groups existed —
-// callers (ChatRow) don't need to know whether they came from a group or
-// a date bucket. `groupId` rides along so the context-menu can tell which
-// group a chat is already in (to grey out the matching menu entry).
+// Earlier this helper also produced per-group sections (sidebar folders).
+// That concept was replaced by Spaces (workspace bundles) which carry
+// system prompt + default model + pinned context on top of the same
+// organizational role. The filter-by-Space step happens BEFORE this
+// helper is called (in main.jsx: `chatRows.filter(c => c.spaceId === ...)`),
+// so this function only ever sees the chats that should appear in the
+// active view — pure date bucketing is all that's left.
 //
 // `chatRows` shape: the raw rows from `db_load_chats` (camelCased by serde).
-// `groups`   shape: rows from `db_load_groups`, already in display order.
-function groupChatsForSidebar(chatRows, groups) {
-  // Bucket boundaries — same semantics as the legacy date-only grouper.
+function bucketChatsByDate(chatRows) {
   const now = new Date();
   const startOf = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
   const todayStart     = startOf(now);
   const yesterdayStart = startOf(new Date(now - 86400000));
   const weekStart      = startOf(new Date(now - 7  * 86400000));
   const monthStart     = startOf(new Date(now - 30 * 86400000));
-
-  // Pre-build the group containers + an id→items map for O(1) routing.
-  // Empty groups stay in the output list so a freshly-created folder
-  // shows up immediately even before the user files anything into it.
-  const groupList = (groups || []).map((g) => ({
-    id: g.id,
-    name: g.name,
-    items: [],
-  }));
-  const groupItemsById = new Map(groupList.map((g) => [g.id, g.items]));
 
   const dateBuckets = [
     { section: 'Today',        items: [] },
@@ -438,9 +423,9 @@ function groupChatsForSidebar(chatRows, groups) {
   ];
 
   for (const r of (chatRows || [])) {
-    // Same per-row reshape as the legacy date-only path: parse multiModels
-    // JSON once (the DB stores it as text), normalize tabType, format the
-    // relative-time label so the ChatRow can render it without further work.
+    // Per-row reshape: parse multiModels JSON once (the DB stores it as
+    // text), normalise tabType, format the relative-time label so the
+    // ChatRow can render it without further work.
     const parsedModels = r.multiModels ? tryParseJson(r.multiModels, null) : null;
     const item = {
       id: r.id,
@@ -449,21 +434,11 @@ function groupChatsForSidebar(chatRows, groups) {
       when: relativeTime(r.updatedAt),
       tabType: r.tabType || null,
       models: Array.isArray(parsedModels) ? parsedModels : null,
-      // groupId is needed by the context menu to grey-out the
-      // "Move to {currentGroup}" option. Null on ungrouped chats.
-      groupId: r.groupId || null,
+      // spaceId is needed by the context menu's "Move to Space" submenu
+      // (greys out the chat's current Space). Null means the chat is
+      // not in any Space ("All chats" view).
+      spaceId: r.spaceId || null,
     };
-
-    // Route into a group if one exists for this chat's groupId; otherwise
-    // fall through to the date buckets. A chat whose groupId points to a
-    // group that's been deleted (race) treats as ungrouped — no crash,
-    // chat just shows under date sections until the next reload picks up
-    // the NULLed column from the cascade / unfile.
-    const groupBucket = item.groupId ? groupItemsById.get(item.groupId) : null;
-    if (groupBucket) {
-      groupBucket.push(item);
-      continue;
-    }
 
     const d = new Date(r.createdAt * 1000);
     if      (d >= todayStart)     dateBuckets[0].items.push(item);
@@ -474,7 +449,6 @@ function groupChatsForSidebar(chatRows, groups) {
   }
 
   return {
-    groups: groupList,
     dateSections: dateBuckets.filter((b) => b.items.length > 0),
   };
 }
@@ -614,7 +588,7 @@ if (typeof window !== "undefined") {
   window.genId = genId;
   window.defaultIntervalForKind = defaultIntervalForKind;
   window.ekFilesGroupByPath = ekFilesGroupByPath;
-  window.groupChatsForSidebar = groupChatsForSidebar;
+  window.bucketChatsByDate = bucketChatsByDate;
   window.getTauriRoot = getTauriRoot;
   window.getInvoke = getInvoke;
   window.getChannel = getChannel;
@@ -623,6 +597,69 @@ if (typeof window !== "undefined") {
   window.getEventApi = getEventApi;
   window.getNotificationApi = getNotificationApi;
   window.getWindowApi = getWindowApi;
+  window.instantiateSpacePinnedAttachments = instantiateSpacePinnedAttachments;
+}
+
+// ── instantiateSpacePinnedAttachments ────────────────────────────────────
+//
+// Instantiate a Space's pinned files/folders as real chat attachments on a
+// freshly-minted chat. Reuses the existing Rust commands —
+// `attachment_add_files` (batches every file path in one call) and
+// `attachment_add_folder` (one walker task per folder).
+//
+// Pure dispatcher: takes `invokeFn` as a parameter rather than reading a
+// global so the node:test runner can stand it up against an in-memory
+// recording mock without booting the WebView. Errors are surfaced via the
+// optional `onError(e, kind, path?)` callback; the App layer turns those
+// into toasts. `onComplete()` fires after every dispatch resolves — the
+// App uses it to refresh `chatAttachments`.
+//
+// Contract pinned by ui/__tests__/utils.test.js:
+//   • Files are batched into ONE attachment_add_files call regardless of
+//     count — a Space with 12 pinned files doesn't make 12 round-trips.
+//   • Folders are dispatched serially (one attachment_add_folder per
+//     folder) so the Rust walker doesn't contend on the SQLite write
+//     lock; running 3 walkers in parallel would just queue inside
+//     rusqlite anyway.
+//   • A per-folder failure does NOT block subsequent folders — useful
+//     for partially-broken Space states (one pinned folder was moved
+//     off disk; the rest should still load).
+//   • Files dispatch BEFORE folders so the user sees small inline
+//     attachments while the walker churns.
+//   • Empty / non-array `pinned` → fast-return, no invokes, but
+//     onComplete still fires so callers can do unconditional cleanup.
+async function instantiateSpacePinnedAttachments(invokeFn, chatId, pinned, opts) {
+  opts = opts || {};
+  if (!chatId || !Array.isArray(pinned) || pinned.length === 0) {
+    if (opts.onComplete) opts.onComplete();
+    return;
+  }
+  const filePaths = pinned
+    .filter(function (a) { return a && a.kind === "file"; })
+    .map(function (a) { return a.path; })
+    .filter(Boolean);
+  const folderPaths = pinned
+    .filter(function (a) { return a && a.kind === "folder"; })
+    .map(function (a) { return a.path; })
+    .filter(Boolean);
+
+  if (filePaths.length) {
+    try {
+      await invokeFn("attachment_add_files", { chatId: chatId, paths: filePaths });
+    } catch (e) {
+      if (opts.onError) opts.onError(e, "files");
+    }
+  }
+
+  for (const path of folderPaths) {
+    try {
+      await invokeFn("attachment_add_folder", { chatId: chatId, path: path });
+    } catch (e) {
+      if (opts.onError) opts.onError(e, "folder", path);
+    }
+  }
+
+  if (opts.onComplete) opts.onComplete();
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -648,7 +685,7 @@ if (typeof module !== "undefined" && module.exports) {
     genId,
     defaultIntervalForKind,
     ekFilesGroupByPath,
-    groupChatsForSidebar,
+    bucketChatsByDate,
     getTauriRoot,
     getInvoke,
     getChannel,
@@ -657,5 +694,6 @@ if (typeof module !== "undefined" && module.exports) {
     getEventApi,
     getNotificationApi,
     getWindowApi,
+    instantiateSpacePinnedAttachments,
   };
 }

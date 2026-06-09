@@ -119,17 +119,16 @@ function TitleBar({
 // History layout (top → bottom):
 //   • Search box
 //   • New chat / private / compare buttons
-//   • Groups (user-defined folders), with [+ New group] button below
-//   • An "Ungrouped" drop-zone (only while a drag is in progress, and only
-//     if at least one group exists — otherwise dragging a chat would have
-//     nowhere to go)
-//   • Date sections (Today / Yesterday / …) for ungrouped chats
+//   • Spaces section (with the "All chats" pseudo-row at the top and a
+//     "+ New Space" button below the Space rows)
+//   • Date sections (Today / Yesterday / Last 7 days / Last 30 days /
+//     Older) for chats in the current view — filtered upstream by the
+//     active Space
 //   • Message-content hits from full-text search (only when searching)
 //
-// `chats` is the new `{ groups, dateSections }` shape from
-// `groupChatsForSidebar` in utils.js. Filtering by the search query is
-// done across BOTH lists; empty groups stay visible (so a just-created
-// folder doesn't disappear before the user files anything into it).
+// `chats` is the `{ dateSections }` shape from `bucketChatsByDate` in
+// utils.js. Filtering by the search query operates on the date-section
+// items only.
 function Sidebar({
   chats,
   activeId,
@@ -142,13 +141,24 @@ function Sidebar({
   onNewPrivate,
   onNewCompare,
   width,
-  // Group management. `groups` is the raw [{id, name}, ...] list — the
-  // context menu needs every group, not just ones with items in view.
-  groups = [],
-  onCreateGroup,
-  onRenameGroup,
-  onDeleteGroup,
-  onMoveChatToGroup,
+  // Space management. `spaces` is the raw [{id, name, slug, color, …}]
+  // list from `space_list`. `activeSpaceId` is the currently-selected
+  // Space (or null for the "All chats" pseudo-row); the chat list is
+  // pre-filtered upstream in main.jsx, so the Sidebar only renders the
+  // section UI + dispatches actions. See ui/main.jsx for the filter.
+  spaces = [],
+  activeSpaceId = null,
+  onSelectSpace,
+  onCreateSpace,
+  onRenameSpace,
+  onRecolorSpace,
+  onDeleteSpace,
+  onMoveChatToSpace,
+  // The Space settings modal needs the live prompts library so the user
+  // can pick which prompts to pin. List is shared with the prompt
+  // library panel — main.jsx owns the fetch, here it's just plumbing.
+  promptsLibrary = [],
+  onEditSpaceSave,
   // Full-text-search hits (from messages_fts MATCH bm25). Empty when no
   // query is active. Owner: App in main.jsx, populated by a debounced
   // invoke to the `search_chats` Rust command.
@@ -156,64 +166,51 @@ function Sidebar({
   onPickHit,
 }) {
   // ── Search filter ──
-  // Apply the query across BOTH groups and dateSections in one pass. Empty
-  // groups are filtered out *while searching only* (showing an empty
-  // group during a search would imply "no results" with extra noise).
+  // Apply the query to the date-section items. Empty sections are
+  // filtered out — showing an empty "Today" header during a search would
+  // imply "no results in Today" rather than the cleaner unified empty
+  // state below.
   const filtered = useMemo(() => {
     if (!query.trim()) return chats;
     const q = query.toLowerCase();
     const matches = (c) => c.title.toLowerCase().includes(q);
     return {
-      groups: (chats.groups || [])
-        .map((g) => ({ ...g, items: g.items.filter(matches) }))
-        .filter((g) => g.items.length),
       dateSections: (chats.dateSections || [])
         .map((s) => ({ ...s, items: s.items.filter(matches) }))
         .filter((s) => s.items.length),
     };
   }, [chats, query]);
-  const searching = !!query.trim();
-  const totalItems =
-    (filtered.groups || []).reduce((n, g) => n + g.items.length, 0) +
-    (filtered.dateSections || []).reduce((n, s) => n + s.items.length, 0);
-  const anyResults = totalItems > 0 || messageHits.length > 0;
 
-  // ── Collapsed-state per group (localStorage-backed) ──
-  // Persist across launches so a user's collapsed Research folder stays
-  // collapsed after a restart. Keyed by group id; missing key = expanded.
-  // We inline the read/write (rather than calling usePersistedState) to
-  // avoid the script-load-order trap: this file loads before main.jsx
-  // where usePersistedState is defined.
-  const COLLAPSE_LS_KEY = "ekorbia.groupCollapsed";
-  const [collapsedGroups, setCollapsedGroups] = useState(() => {
-    try {
-      const raw = localStorage.getItem(COLLAPSE_LS_KEY);
-      if (raw !== null) return JSON.parse(raw) || {};
-    } catch {}
-    return {};
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(COLLAPSE_LS_KEY, JSON.stringify(collapsedGroups));
-    } catch {}
-  }, [collapsedGroups]);
-  const toggleCollapse = (groupId) =>
-    setCollapsedGroups((m) => ({ ...m, [groupId]: !m[groupId] }));
+  // Lookup table for the per-chat sidebar dot. The dot color falls back
+  // to the chat's model color (via MODELS_BY_ID), but most user-installed
+  // models aren't in that curated list — they render as the muted fg3
+  // gray. When the chat is in a Space, the Space's color is a much more
+  // useful signal at a glance ("oh this chat is in Novel"), so we
+  // prefer it. Built once per render rather than per-row so a large
+  // sidebar doesn't re-scan the Spaces array N times.
+  const spaceColorById = useMemo(() => {
+    const m = new Map();
+    const resolve = window.spaceColorHex;
+    for (const s of (spaces || [])) {
+      // Only memoize Spaces that actually have a color set; an unset
+      // color would resolve to fg2 (the same muted fallback the model
+      // dot already uses), which adds no information.
+      if (s.color && resolve) m.set(s.id, resolve(s.color));
+    }
+    return m;
+  }, [spaces]);
+  const searching = !!query.trim();
+  const totalItems = (filtered.dateSections || []).reduce(
+    (n, s) => n + s.items.length,
+    0,
+  );
+  const anyResults = totalItems > 0 || messageHits.length > 0;
 
   // ── Right-click context menu state ──
   // Single instance at a time — opening a new menu closes any prior.
-  // `chat` is the sidebar-item (with id, title, groupId, …); `x`/`y` come
+  // `chat` is the sidebar-item (with id, title, spaceId, …); `x`/`y` come
   // from the right-click coords (viewport-relative for `position: fixed`).
   const [rowMenu, setRowMenu] = useState(null);
-
-  // ── Group-name modal state ──
-  // `mode` is 'create' or 'rename'. For rename, `group` carries the
-  // existing row so the input pre-fills with its current name.
-  const [nameModal, setNameModal] = useState(null);
-  const openCreateGroupModal = () =>
-    setNameModal({ mode: "create", initial: "" });
-  const openRenameGroupModal = (group) =>
-    setNameModal({ mode: "rename", group, initial: group.name });
 
   // ── Chat rename + chat delete modal states ──
   // window.prompt() / window.confirm() are blocked in Tauri's WKWebView
@@ -224,24 +221,29 @@ function Sidebar({
   const [renameChatModal, setRenameChatModal] = useState(null);
   const [confirmDeleteChat, setConfirmDeleteChat] = useState(null);
 
+  // ── Space modal states ──
+  // `createSpaceModal` is non-null when the create-Space modal is open
+  // (no payload needed — the modal owns its own name + color state).
+  // `renameSpaceModal.space` carries the row being renamed so the input
+  // can pre-fill with the current name.
+  // `recolorSpaceModal.space` carries the row whose color is being
+  // edited — the popover renders the palette anchored next to the row.
+  // `confirmDeleteSpace.space` carries the row being deleted so the
+  // confirm body can name it.
+  const [createSpaceModal, setCreateSpaceModal] = useState(null);
+  const [renameSpaceModal, setRenameSpaceModal] = useState(null);
+  const [recolorSpaceModal, setRecolorSpaceModal] = useState(null);
+  const [confirmDeleteSpace, setConfirmDeleteSpace] = useState(null);
+  // `editSpaceModal.space` is the row being edited; the modal owns its
+  // own draft state for every editable field so cancel reverts cleanly.
+  const [editSpaceModal, setEditSpaceModal] = useState(null);
+
   // ── Action handlers wired into the row context menu ──
-  const handleMenuMove = (groupId) => {
+  const handleMenuMoveToSpace = (spaceId) => {
     if (!rowMenu) return;
     const chatId = rowMenu.chat.id;
     setRowMenu(null);
-    onMoveChatToGroup && onMoveChatToGroup(chatId, groupId);
-  };
-  const handleMenuNewGroup = () => {
-    if (!rowMenu) return;
-    const chatId = rowMenu.chat.id;
-    setRowMenu(null);
-    // Open the name modal; on save, create the group and move the chat
-    // into it as a single user-perceived action.
-    setNameModal({
-      mode: "create",
-      initial: "",
-      andMoveChatId: chatId,
-    });
+    onMoveChatToSpace && onMoveChatToSpace(chatId, spaceId);
   };
   const handleMenuRename = () => {
     if (!rowMenu) return;
@@ -260,24 +262,6 @@ function Sidebar({
     const chat = rowMenu.chat;
     setRowMenu(null);
     onPick(chat);
-  };
-
-  // ── Name-modal submit ──
-  // Wraps create vs. rename in one place so the modal stays dumb. The
-  // create-then-move case (from the "+ New group…" context-menu item)
-  // chains the two ops in sequence.
-  const handleNameModalSubmit = async (name) => {
-    const m = nameModal;
-    setNameModal(null);
-    if (!m) return;
-    if (m.mode === "create") {
-      const newId = onCreateGroup ? await onCreateGroup(name) : null;
-      if (newId && m.andMoveChatId && onMoveChatToGroup) {
-        await onMoveChatToGroup(m.andMoveChatId, newId);
-      }
-    } else if (m.mode === "rename") {
-      onRenameGroup && onRenameGroup(m.group.id, name);
-    }
   };
 
   const handleRenameChatSubmit = (newTitle) => {
@@ -376,7 +360,14 @@ function Sidebar({
           <span style={{ flex: 1 }} />
           <span style={{ color: T.fg3, fontSize: 10 }}>{MOD_GLYPH}N</span>
         </button>
-        {onNewPrivate && (
+        {/* Private chat is disabled inside a Space — the Space's whole
+            point is persistent context (system prompt, pinned attachments,
+            pinned prompts, memory), all of which assume the chat reaches
+            the DB. Surfacing the lock would invite the user to create
+            ephemeral chats that mysteriously DON'T inherit the Space.
+            Cleaner: hide the affordance, the user can leave the Space
+            (click "All chats") first if they want a private chat. */}
+        {onNewPrivate && !activeSpaceId && (
           <button
             onClick={onNewPrivate}
             title="Private chat — not saved to disk"
@@ -436,19 +427,55 @@ function Sidebar({
           padding: "4px 0 12px",
         }}
       >
-        {/* ── Groups (user-defined folders) ── */}
-        {(filtered.groups || []).map((g) => (
-          <GroupSection
-            key={g.id}
-            group={g}
-            collapsed={!!collapsedGroups[g.id]}
-            onToggle={() => toggleCollapse(g.id)}
-            onRename={() => openRenameGroupModal(g)}
-            onDelete={() => onDeleteGroup && onDeleteGroup(g.id)}
-            onDropChat={(chatId) =>
-              onMoveChatToGroup && onMoveChatToGroup(chatId, g.id)
+        {/* ── Spaces (workspace bundles) ──
+            Always rendered above groups + date sections. The "All chats"
+            pseudo-row sits at the top; each Space row follows in
+            sort_index order. Clicking a row filters the chat list below
+            (the filter itself is applied upstream in main.jsx so the
+            Sidebar doesn't have to know about chats.spaceId). */}
+        {!searching && onSelectSpace && (
+          <SpacesSection
+            spaces={spaces}
+            activeSpaceId={activeSpaceId}
+            onSelect={onSelectSpace}
+            onRename={(s) => setRenameSpaceModal({ space: s })}
+            onRecolor={(s, anchorRect) => setRecolorSpaceModal({ space: s, anchorRect })}
+            onDelete={(s) => setConfirmDeleteSpace({ space: s })}
+            onEdit={(s) => setEditSpaceModal({ space: s })}
+            onCreate={() => setCreateSpaceModal({})}
+            // Drag-and-drop into a Space row reuses the existing
+            // `onMoveChatToSpace` writer. The Space row is the drop
+            // target; the chat row is already a drag source (the
+            // `text/x-ekorbia-chat-id` dataTransfer payload set by
+            // ChatRow's onDragStart). Passing null for spaceId unfiles
+            // the chat (handled by the "All chats" row).
+            onDropChat={(chatId, spaceId) =>
+              onMoveChatToSpace && onMoveChatToSpace(chatId, spaceId)
             }
-            renderChild={(c) => {
+          />
+        )}
+
+        {/* ── Date sections ──
+            Today / Yesterday / Last 7 days / Last 30 days / Older.
+            Chats arrive here already pre-filtered by the active Space
+            (the filter runs upstream in main.jsx before bucketChatsByDate),
+            so this is pure date-bucketing render. */}
+        {(filtered.dateSections || []).map((section) => (
+          <div key={section.section} style={{ marginBottom: 6 }}>
+            <div
+              style={{
+                padding: "8px 14px 4px",
+                fontFamily: T.mono,
+                fontSize: 10,
+                fontWeight: 500,
+                color: T.fg3,
+                textTransform: "uppercase",
+                letterSpacing: 0.6,
+              }}
+            >
+              {section.section}
+            </div>
+            {section.items.map((c) => {
               const active = c.id === activeId;
               const model = MODELS_BY_ID[c.model];
               return (
@@ -456,6 +483,7 @@ function Sidebar({
                   key={c.id}
                   chat={c}
                   model={model}
+                  spaceColor={c.spaceId ? spaceColorById.get(c.spaceId) : undefined}
                   active={active}
                   onClick={() => onPick(c)}
                   onDelete={() => onDelete(c.id)}
@@ -465,98 +493,9 @@ function Sidebar({
                   query={query}
                 />
               );
-            }}
-          />
+            })}
+          </div>
         ))}
-
-        {/* [+ New group] — always visible at the bottom of the groups
-            stack so the affordance is discoverable on first launch even
-            before any groups exist (matches default #3 in the plan). */}
-        {!searching && onCreateGroup && (
-          <button
-            onClick={openCreateGroupModal}
-            data-new-group
-            style={{
-              margin: "2px 8px 10px",
-              padding: "5px 10px",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              background: "transparent",
-              border: `1px dashed ${T.border}`,
-              borderRadius: 4,
-              color: T.fg3,
-              fontFamily: T.mono,
-              fontSize: 10.5,
-              cursor: "pointer",
-              width: "calc(100% - 16px)",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = T.fg1;
-              e.currentTarget.style.borderColor = T.borderStrong;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = T.fg3;
-              e.currentTarget.style.borderColor = T.border;
-            }}
-          >
-            <I.Plus size={9} />
-            <span>New group</span>
-          </button>
-        )}
-
-        {/* ── Date sections (ungrouped chats), wrapped in a permanent
-            drop target ──
-            This wrapper is ALWAYS rendered (even when there are no
-            ungrouped chats), so the DOM doesn't shift mid-drag. That
-            shift was the root cause of the "can't drag ungrouped → group"
-            bug: WebKit cancels an in-flight drag when the source's
-            preceding DOM is mutated, and a conditionally-rendered
-            ungrouped-drop-zone above the source's date section triggered
-            exactly that mutation on drag-start.
-            Drops here move the chat to NULL group (unfile). */}
-        <UngroupedSectionsDropTarget
-          hasGroups={(chats.groups || []).length > 0}
-          onDropChat={(chatId) =>
-            onMoveChatToGroup && onMoveChatToGroup(chatId, null)
-          }
-        >
-          {(filtered.dateSections || []).map((section) => (
-            <div key={section.section} style={{ marginBottom: 6 }}>
-              <div
-                style={{
-                  padding: "8px 14px 4px",
-                  fontFamily: T.mono,
-                  fontSize: 10,
-                  fontWeight: 500,
-                  color: T.fg3,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.6,
-                }}
-              >
-                {section.section}
-              </div>
-              {section.items.map((c) => {
-                const active = c.id === activeId;
-                const model = MODELS_BY_ID[c.model];
-                return (
-                  <ChatRow
-                    key={c.id}
-                    chat={c}
-                    model={model}
-                    active={active}
-                    onClick={() => onPick(c)}
-                    onDelete={() => onDelete(c.id)}
-                    onContextMenu={(e) =>
-                      setRowMenu({ x: e.clientX, y: e.clientY, chat: c })
-                    }
-                    query={query}
-                  />
-                );
-              })}
-            </div>
-          ))}
-        </UngroupedSectionsDropTarget>
         {/* Message-content hits (full-text search). Only rendered while a */}
         {/* query is active. Sits below title-matched chats so the user can */}
         {/* see the high-confidence matches (titles) first, then dig into   */}
@@ -634,27 +573,12 @@ function Sidebar({
           x={rowMenu.x}
           y={rowMenu.y}
           chat={rowMenu.chat}
-          groups={groups}
+          spaces={spaces}
           onOpen={handleMenuOpen}
           onRename={handleMenuRename}
           onDelete={handleMenuDelete}
-          onMove={handleMenuMove}
-          onNewGroup={handleMenuNewGroup}
+          onMoveToSpace={handleMenuMoveToSpace}
           onClose={() => setRowMenu(null)}
-        />
-      )}
-
-      {/* Group-name modal — shared for both "create new group" and
-          "rename group". Mode-driven so the title + button copy change
-          to match. */}
-      {nameModal && (
-        <NameModal
-          title={nameModal.mode === "rename" ? "Rename group" : "New group"}
-          confirmLabel={nameModal.mode === "rename" ? "Save" : "Create"}
-          initial={nameModal.initial}
-          placeholder="Group name"
-          onCancel={() => setNameModal(null)}
-          onSubmit={handleNameModalSubmit}
         />
       )}
 
@@ -689,43 +613,285 @@ function Sidebar({
           onConfirm={handleConfirmDeleteChat}
         />
       )}
+
+      {/* ── Space modals ──
+          Create has its own modal class because it needs name + color
+          in one shot. Rename re-uses the NameModal pattern (name only;
+          changing a Space's color goes through the recolor popover). */}
+      {createSpaceModal && (
+        <SpaceCreateModal
+          onCancel={() => setCreateSpaceModal(null)}
+          onSubmit={async (name, color, andConfigure) => {
+            setCreateSpaceModal(null);
+            if (!onCreateSpace) return;
+            const created = await onCreateSpace(name, color);
+            if (!created) return;
+            // `created` is the new Space row when wired through main.jsx;
+            // older test fixtures may return just an id string. Accept
+            // both shapes so the test surface is forgiving.
+            const newId = typeof created === "object" ? created.id : created;
+            const newSpace = typeof created === "object" ? created : null;
+            // Newly-created Space becomes the active filter so the user
+            // lands inside the workspace they just made. selectSpace is
+            // the canonical activator (it owns the reload pipeline).
+            if (newId && onSelectSpace) onSelectSpace(newId);
+            // "Create & configure…" path: immediately open the settings
+            // dialog on the new Space. Requires the full row; the id
+            // alone isn't enough (the modal needs slug + timestamps to
+            // round-trip through space_update).
+            if (andConfigure && newSpace) {
+              setEditSpaceModal({ space: newSpace });
+            }
+          }}
+        />
+      )}
+      {renameSpaceModal && (
+        <NameModal
+          title="Rename Space"
+          confirmLabel="Save"
+          initial={renameSpaceModal.space.name}
+          placeholder="Space name"
+          onCancel={() => setRenameSpaceModal(null)}
+          onSubmit={(name) => {
+            const s = renameSpaceModal.space;
+            setRenameSpaceModal(null);
+            if (name && name !== s.name) onRenameSpace && onRenameSpace(s.id, name);
+          }}
+        />
+      )}
+      {recolorSpaceModal && (
+        <SpaceColorPickerPopover
+          anchorRect={recolorSpaceModal.anchorRect}
+          current={recolorSpaceModal.space.color || null}
+          onPick={(color) => {
+            const s = recolorSpaceModal.space;
+            setRecolorSpaceModal(null);
+            onRecolorSpace && onRecolorSpace(s.id, color);
+          }}
+          onClose={() => setRecolorSpaceModal(null)}
+        />
+      )}
+      {editSpaceModal && (
+        <SpaceSettingsModal
+          space={editSpaceModal.space}
+          promptsLibrary={promptsLibrary}
+          onCancel={() => setEditSpaceModal(null)}
+          onSave={async (draft) => {
+            const s = editSpaceModal.space;
+            setEditSpaceModal(null);
+            if (onEditSpaceSave) await onEditSpaceSave(s.id, draft);
+          }}
+        />
+      )}
+      {confirmDeleteSpace && (
+        <ConfirmModal
+          title="Delete Space?"
+          body={
+            <span>
+              The Space{" "}
+              <strong>{confirmDeleteSpace.space.name || "Unnamed"}</strong>{" "}
+              will be removed. Chats in this Space stay in your history —
+              they just move back to{" "}
+              <span style={{ fontFamily: T.mono, color: T.fg1 }}>All chats</span>.
+              This can't be undone.
+            </span>
+          }
+          cancelLabel="Cancel"
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setConfirmDeleteSpace(null)}
+          onConfirm={() => {
+            const s = confirmDeleteSpace.space;
+            setConfirmDeleteSpace(null);
+            onDeleteSpace && onDeleteSpace(s.id);
+          }}
+        />
+      )}
     </aside>
   );
 }
 
-// ─── GroupSection ───────────────────────────────────────────
+// ─── SpacesSection ──────────────────────────────────────────
 //
-// One collapsible folder header + its child chats. Drops a chat onto the
-// header (or anywhere in the body) by listening for `text/x-ekorbia-chat-id`
-// in the dataTransfer. Drop-target hover state highlights the header so
-// the user can see what they're about to commit to.
+// Renders the "Spaces" sidebar section: a "SPACES" header, an
+// "All chats" pseudo-row (always present), one row per Space, and a
+// "+ New Space" button at the bottom.
 //
-// Children are rendered via the `renderChild` prop so the Sidebar stays
-// the single source of truth for ChatRow wiring (onPick / onDelete /
-// onContextMenu / drag handlers). Keeps GroupSection presentation-only.
-function GroupSection({
-  group,
-  collapsed,
-  onToggle,
+// The active row gets a left-edge accent bar in the Space's color (or
+// fg2 for the "All chats" row). Hovering a Space row reveals an
+// overflow "⋯" button that opens a popover menu — Rename / Change
+// color / Delete — analogous to GroupOverflowMenu.
+//
+// Presentation-only: receives every state + handler from Sidebar. The
+// recolor handler takes an `anchorRect` so the color popover can
+// position itself next to the row that opened it (clicking "Change
+// color" inside the overflow menu).
+function SpacesSection({
+  spaces = [],
+  activeSpaceId = null,
+  onSelect,
   onRename,
+  onRecolor,
+  onDelete,
+  onEdit,
+  onCreate,
+  onDropChat,
+}) {
+  return (
+    <div data-spaces-section style={{ marginBottom: 8 }}>
+      {/* Section header — same typographic treatment as the "Messages"
+          and date-section labels so it reads as a sidebar landmark. */}
+      <div
+        style={{
+          padding: "8px 14px 4px",
+          fontFamily: T.mono,
+          fontSize: 10,
+          fontWeight: 500,
+          color: T.fg3,
+          textTransform: "uppercase",
+          letterSpacing: 0.6,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <span style={{ flex: 1 }}>Spaces</span>
+      </div>
+
+      {/* "All chats" pseudo-row — always rendered, always at the top.
+          Active when no Space is selected; clicking deactivates any
+          current Space filter. */}
+      <SpaceRow
+        label="All chats"
+        colorHex={T.fg2}
+        active={!activeSpaceId}
+        onClick={() => onSelect && onSelect(null)}
+        // Dropping a chat on "All chats" unfiles it from whatever Space
+        // it was in (space_id = NULL). Symmetric with the per-Space
+        // drop target below.
+        onDropChat={(chatId) => onDropChat && onDropChat(chatId, null)}
+        dataAll
+      />
+
+      {(spaces || []).map((s) => (
+        <SpaceRow
+          key={s.id}
+          space={s}
+          label={s.name}
+          colorHex={
+            window.spaceColorHex
+              ? window.spaceColorHex(s.color)
+              : s.color
+                ? T[s.color] || T.fg2
+                : T.fg2
+          }
+          active={activeSpaceId === s.id}
+          onClick={() => onSelect && onSelect(s.id)}
+          onRename={() => onRename && onRename(s)}
+          onRecolor={(anchorRect) => onRecolor && onRecolor(s, anchorRect)}
+          onEdit={() => onEdit && onEdit(s)}
+          onDelete={() => onDelete && onDelete(s)}
+          onDropChat={(chatId) => onDropChat && onDropChat(chatId, s.id)}
+        />
+      ))}
+
+      {/* [+ New Space] — dashed button mirroring the "[+ New group]"
+          affordance so the two sections feel parallel. Always visible
+          while not searching so the affordance is discoverable on
+          first launch. */}
+      {onCreate && (
+        <button
+          onClick={onCreate}
+          data-new-space
+          style={{
+            margin: "4px 8px 4px",
+            padding: "5px 10px",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            background: "transparent",
+            border: `1px dashed ${T.border}`,
+            borderRadius: 4,
+            color: T.fg3,
+            fontFamily: T.mono,
+            fontSize: 10.5,
+            cursor: "pointer",
+            width: "calc(100% - 16px)",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = T.fg1;
+            e.currentTarget.style.borderColor = T.borderStrong;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = T.fg3;
+            e.currentTarget.style.borderColor = T.border;
+          }}
+        >
+          <I.Plus size={9} />
+          <span>New Space</span>
+        </button>
+      )}
+
+      {/* Visual separator so the Spaces section reads as a distinct
+          band from the groups section below. Faint horizontal line —
+          the dashed [+ New group] right below already provides some
+          breathing room. */}
+      <div
+        style={{
+          margin: "6px 14px 2px",
+          borderBottom: `1px solid ${T.border}`,
+        }}
+      />
+    </div>
+  );
+}
+
+// ─── SpaceRow ───────────────────────────────────────────────
+//
+// One row in the Spaces section. Used for both the "All chats" pseudo-
+// row (no Space data, no overflow menu) and per-Space rows (with all
+// affordances). `dataAll` triggers a stable test selector for the All
+// row; `space` carries the row for Space rows so the overflow handlers
+// can address it.
+function SpaceRow({
+  label,
+  colorHex,
+  active,
+  onClick,
+  onRename,
+  onRecolor,
+  onEdit,
   onDelete,
   onDropChat,
-  renderChild,
+  space,
+  dataAll,
 }) {
+  const [hover, setHover] = useState(false);
   const [dropHover, setDropHover] = useState(false);
-  const [headerHover, setHeaderHover] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  // `menuOpen` is null when the overflow menu is closed, or `{x, y}`
+  // with viewport coordinates of the menu's desired top-left when open.
+  // Two open paths feed this:
+  //   • Clicking the ⋯ button — computes coords from the button's rect
+  //     (-130px on x to right-align the wider menu with the button).
+  //   • Right-clicking the row — uses the cursor coordinates directly.
+  const [menuOpen, setMenuOpen] = useState(null);
   const menuBtnRef = useRef(null);
+  // Row ref is used by the "Change color…" handler to anchor the colour
+  // popover under the row regardless of how the overflow menu opened.
+  // Without this, a right-click open would lose its anchor when the
+  // menu closes (the original code read `menuBtnRef.current` which can
+  // be null if the ⋯ button never mounted because hover state lagged).
+  const rowRef = useRef(null);
+  const isAllChats = !!dataAll;
+  const showOverflow = !isAllChats && hover;
 
-  // Drop-target plumbing. preventDefault on dragover is required for the
-  // drop event to fire at all (HTML5 D&D quirk). We DON'T gate on the
-  // dataTransfer.types list here — WebKit historically returned a
-  // DOMStringList (no .includes()) and also hides custom MIME types from
-  // `types` during dragover for security, so a check would false-negative
-  // and the drop would never enable. We accept all drags at dragover time
-  // and filter for our custom MIME at drop time instead, where the
-  // dataTransfer is fully readable.
+  // Drop-target plumbing — same shape as GroupSection.onDragOver. We
+  // don't gate on dataTransfer.types here (WebKit hides custom MIME
+  // names during dragover for security); we accept any drag and then
+  // filter on the actual payload at drop time. Setting dropEffect to
+  // 'move' is what tells the browser to render the move cursor.
   const onDragOver = (e) => {
+    if (!onDropChat) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (!dropHover) setDropHover(true);
@@ -734,150 +900,183 @@ function GroupSection({
   const onDrop = (e) => {
     setDropHover(false);
     const chatId = e.dataTransfer.getData("text/x-ekorbia-chat-id");
-    if (chatId) {
+    if (chatId && onDropChat) {
       e.preventDefault();
-      onDropChat && onDropChat(chatId);
+      onDropChat(chatId);
     }
   };
 
+  // Right-click on a Space row opens the same overflow menu as the ⋯
+  // button — symmetric with the chat-row "Move to Space" right-click.
+  // Skipped on the "All chats" pseudo-row because that row has no
+  // edit / rename / recolor / delete actions to expose.
+  const onContextMenu = isAllChats
+    ? undefined
+    : (e) => {
+        e.preventDefault();
+        setMenuOpen({ x: e.clientX, y: e.clientY });
+      };
+
   return (
     <div
-      style={{ marginBottom: 4 }}
+      ref={rowRef}
+      data-space-row={isAllChats ? undefined : ""}
+      data-space-id={space?.id}
+      data-all-chats-row={isAllChats ? "" : undefined}
+      data-active={active ? "true" : "false"}
+      data-drop-hover={dropHover ? "true" : "false"}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-    >
-      {/* Folder header — chevron + 📁 + name + (count) + overflow menu */}
-      <div
-        onMouseEnter={() => setHeaderHover(true)}
-        onMouseLeave={() => setHeaderHover(false)}
-        style={{
-          margin: "0 6px",
-          padding: "4px 8px",
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          background: dropHover
-            ? `${T.amber}33`
-            : headerHover
+      style={{
+        margin: "0 8px",
+        padding: "5px 8px",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        // Drop-hover wins over hover wins over active when both apply
+        // — the strongest feedback for the most-recent user action. The
+        // amber tint matches the GroupSection drop-target tint so the
+        // two organizational concepts feel cohesive in this transitional
+        // release (groups will be removed entirely in Phase 2).
+        background: dropHover
+          ? `${T.amber}33`
+          : active
+            ? T.bg3
+            : hover
               ? T.bg2
               : "transparent",
-          border: dropHover
-            ? `1px solid ${T.amber}`
-            : "1px solid transparent",
-          borderRadius: 4,
-          cursor: "pointer",
-          fontFamily: T.mono,
-          fontSize: 10.5,
-          color: T.fg1,
-          textTransform: "uppercase",
-          letterSpacing: 0.4,
-          userSelect: "none",
+        // Amber border on drop-hover doubles down on the affordance; a
+        // 1px border avoids any layout shift relative to the transparent
+        // default.
+        border: dropHover
+          ? `1px solid ${T.amber}`
+          : "1px solid transparent",
+        borderRadius: 4,
+        cursor: "pointer",
+        userSelect: "none",
+        position: "relative",
+        // Left-edge accent bar in the Space color when active. Plain
+        // box-shadow inset is cheaper than a border that would shift
+        // the layout.
+        boxShadow: active
+          ? `inset 2px 0 0 0 ${colorHex}`
+          : "none",
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          display: "inline-block",
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          background: colorHex,
+          flexShrink: 0,
         }}
-        onClick={onToggle}
-        data-group-header
-        data-group-id={group.id}
+      />
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          fontFamily: T.mono,
+          fontSize: 11.5,
+          color: active ? T.fg : T.fg1,
+        }}
       >
-        <span style={{ fontSize: 9, color: T.fg2, width: 8, textAlign: "center" }}>
-          {collapsed ? "▶" : "▼"}
-        </span>
-        <span style={{ color: T.fg2 }}>📁</span>
-        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
-          {group.name}
-        </span>
-        <span style={{ color: T.fg3, fontSize: 10 }}>
-          {group.items.length}
-        </span>
-        {/* Overflow menu (rename / delete). Hidden until hover so the
-            row stays clean in the resting state. */}
-        {headerHover && (
-          <button
-            ref={menuBtnRef}
-            onClick={(e) => {
-              e.stopPropagation();
-              setMenuOpen((v) => !v);
-            }}
-            title="Group actions"
-            style={{
-              width: 14,
-              height: 14,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              border: "none",
-              background: "transparent",
-              color: T.fg3,
-              cursor: "pointer",
-              padding: 0,
-              fontSize: 12,
-              lineHeight: 1,
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
-            onMouseLeave={(e) => (e.currentTarget.style.color = T.fg3)}
-          >
-            ⋯
-          </button>
-        )}
-      </div>
-
-      {/* Overflow menu pop-out. Positioned absolutely below the button so
-          it doesn't shift layout when it appears. */}
-      {menuOpen && menuBtnRef.current && (
-        <GroupOverflowMenu
-          anchor={menuBtnRef.current}
+        {label}
+      </span>
+      {showOverflow && (
+        <button
+          ref={menuBtnRef}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (menuOpen) {
+              setMenuOpen(null);
+              return;
+            }
+            // Anchor below the button + offset left so the wider menu's
+            // right edge roughly aligns with the button. Preserves the
+            // pre-right-click positioning.
+            const r = e.currentTarget.getBoundingClientRect();
+            setMenuOpen({ x: r.left - 130, y: r.bottom + 4 });
+          }}
+          title="Space actions"
+          data-space-menu-btn
+          style={{
+            width: 16,
+            height: 16,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            border: "none",
+            background: "transparent",
+            color: T.fg3,
+            cursor: "pointer",
+            padding: 0,
+            fontSize: 12,
+            lineHeight: 1,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = T.fg3)}
+        >
+          ⋯
+        </button>
+      )}
+      {menuOpen && (
+        <SpaceOverflowMenu
+          x={menuOpen.x}
+          y={menuOpen.y}
+          onEdit={() => {
+            setMenuOpen(null);
+            onEdit && onEdit();
+          }}
           onRename={() => {
-            setMenuOpen(false);
-            onRename();
+            setMenuOpen(null);
+            onRename && onRename();
+          }}
+          onRecolor={() => {
+            // Anchor the colour popover to the row itself rather than to
+            // the ⋯ button. Works the same whether the menu opened from
+            // the button (button rect → menu rect) or from a right-click
+            // (cursor coords → menu rect), AND survives the case where
+            // the ⋯ button isn't currently mounted (e.g. right-click
+            // before hover state propagated).
+            const rect = rowRef.current?.getBoundingClientRect()
+              || { bottom: menuOpen.y, left: menuOpen.x };
+            setMenuOpen(null);
+            onRecolor && onRecolor(rect);
           }}
           onDelete={() => {
-            setMenuOpen(false);
-            onDelete();
+            setMenuOpen(null);
+            onDelete && onDelete();
           }}
-          onClose={() => setMenuOpen(false)}
+          onClose={() => setMenuOpen(null)}
         />
-      )}
-
-      {/* Folder body — children when expanded. When collapsed, the drop
-          target still works (covers the header), so dropping a chat onto
-          a collapsed folder files it without expanding. */}
-      {!collapsed && (
-        <div style={{ paddingTop: 2 }}>
-          {group.items.length === 0 ? (
-            <div
-              style={{
-                margin: "2px 14px 4px",
-                padding: "4px 0",
-                color: T.fg3,
-                fontFamily: T.sans,
-                fontSize: 11,
-                fontStyle: "italic",
-              }}
-            >
-              Empty — drag a chat here
-            </div>
-          ) : (
-            group.items.map((c) => renderChild(c))
-          )}
-        </div>
       )}
     </div>
   );
 }
 
-// ─── GroupOverflowMenu ──────────────────────────────────────
-// Small popover anchored under a group's "⋯" button. Two items: Rename
-// and Delete. Dismisses via a transparent backdrop (catches outside
-// clicks bulletproof) and via Esc.
+// ─── SpaceOverflowMenu ──────────────────────────────────────
+// Small popover anchored at user-supplied (x, y) coordinates — fed by
+// either the ⋯ button (which passes its rect's bottom-left offset by
+// -130 so the right edges roughly align) or a right-click on the row
+// (which passes the cursor coords directly). Four items: Edit settings,
+// Rename, Change color, Delete.
 //
-// Backdrop pattern explanation: rather than attach a `mousedown` listener
-// to document and check `e.target` containment (which races with React
-// re-renders and has subtle ordering bugs vs. menu-item clicks), we
-// render a full-viewport transparent div at one z-index below the menu.
-// Any click that lands on the backdrop is by definition "outside the
-// menu" — backdrop's onClick calls onClose. Clicks on menu items hit
-// the menu (which is above the backdrop), so they fire normally and the
-// item handler runs.
-function GroupOverflowMenu({ anchor, onRename, onDelete, onClose }) {
+// Clamps to the viewport internally so a near-edge open doesn't render
+// off-screen. Mirrors the dismissal pattern from ChatContextMenu: a
+// transparent full-viewport backdrop at the layer below catches outside
+// clicks; Esc dismisses via the keydown effect.
+function SpaceOverflowMenu({ x, y, onEdit, onRename, onRecolor, onDelete, onClose }) {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") onClose();
@@ -886,9 +1085,14 @@ function GroupOverflowMenu({ anchor, onRename, onDelete, onClose }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Anchor positioning: read the button's rect each render so the menu
-  // stays glued to it even if the sidebar scrolls.
-  const rect = anchor.getBoundingClientRect();
+  // Approximate natural dimensions of the 4-item menu (minWidth + padding
+  // + 4 rows). Clamp so a click within ~150px of the right edge or
+  // ~120px of the bottom edge still renders fully on screen.
+  const menuW = 160;
+  const menuH = 130;
+  const clampedX = Math.max(8, Math.min(x, window.innerWidth - menuW - 8));
+  const clampedY = Math.max(8, Math.min(y, window.innerHeight - menuH - 8));
+
   return (
     <Fragment>
       <div
@@ -905,117 +1109,1526 @@ function GroupOverflowMenu({ anchor, onRename, onDelete, onClose }) {
         }}
       />
       <div
+        data-space-overflow-menu
         style={{
           position: "fixed",
-          top: rect.bottom + 4,
-          left: rect.left - 100,
+          top: clampedY,
+          left: clampedX,
           zIndex: 60,
           background: T.bg2,
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 5,
           padding: 4,
-          minWidth: 120,
+          minWidth: 140,
           boxShadow: "0 8px 20px rgba(0,0,0,0.4)",
         }}
       >
-        <MenuItem onClick={onRename}>Rename group</MenuItem>
+        <MenuItem onClick={onEdit}>Edit settings…</MenuItem>
+        <MenuItem onClick={onRename}>Rename Space</MenuItem>
+        <MenuItem onClick={onRecolor}>Change color…</MenuItem>
         <MenuItem onClick={onDelete} danger>
-          Delete group
+          Delete Space
         </MenuItem>
       </div>
     </Fragment>
   );
 }
 
-// ─── UngroupedSectionsDropTarget ────────────────────────────
+// ─── SpaceCreateModal ───────────────────────────────────────
 //
-// Permanent wrapper around the date sections that acts as a drop target
-// for "unfile" (move chat to NULL group). Always rendered — never
-// conditionally based on drag state. This is load-bearing for drag
-// correctness: HTML5 D&D cancels the in-flight drag whenever the
-// source's preceding-DOM gets shifted, and an earlier version that
-// only mounted a drop zone WHILE dragging triggered exactly that shift
-// on drag-start from a date-section chat. The cure is to never mutate
-// the DOM around the source on dragstart at all.
+// Modal for creating a new Space — name input + color palette grid.
+// Distinct from NameModal because we need to capture both pieces in
+// one user gesture; rename re-uses NameModal (color stays put).
 //
-// Visual: invisible in the resting state (renders as a plain wrapper
-// around the existing date sections). When a drag enters during which
-// the user is filed-into-a-group → ungroup intent, the wrapper picks up
-// a soft amber background to confirm the drop will land. When there
-// are zero ungrouped chats but the user has groups and is dragging out
-// of one, we surface a small "Drop here to ungroup" hint so the
-// affordance is still discoverable.
-function UngroupedSectionsDropTarget({ hasGroups, onDropChat, children }) {
-  const [hover, setHover] = useState(false);
-  // See GroupSection.onDragOver for why we don't gate on dataTransfer
-  // types here — WebKit hides custom MIME type names during dragover.
-  const onDragOver = (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    if (!hover) setHover(true);
-  };
-  const onDragLeave = () => setHover(false);
-  const onDrop = (e) => {
-    setHover(false);
-    const chatId = e.dataTransfer.getData("text/x-ekorbia-chat-id");
-    if (chatId) {
-      e.preventDefault();
-      onDropChat && onDropChat(chatId);
-    }
-  };
-  // React.Children.count is the cheapest "are there any rendered date
-  // sections?" check. When there are zero AND the user has groups, we
-  // surface a thin hint so the drop affordance stays discoverable —
-  // otherwise the wrapper would be completely empty (just whitespace).
-  const dateSectionsCount = React.Children.count(children);
-  const showEmptyHint = hasGroups && dateSectionsCount === 0;
+// Color defaults to the first palette key so a user who just hits
+// Enter still gets a sensibly-tinted Space. Selecting "no color" is
+// also valid (the dot falls back to fg2 in the sidebar).
+function SpaceCreateModal({ onCancel, onSubmit }) {
+  const [name, setName] = useState("");
+  const palette = window.SPACE_COLORS || {};
+  const paletteKeys = Object.keys(palette);
+  const [color, setColor] = useState(paletteKeys[0] || null);
+  const inputRef = useRef(null);
+
+  // Autofocus the name input on mount + Esc dismiss / Enter submit.
+  useEffect(() => {
+    if (inputRef.current) inputRef.current.focus();
+  }, []);
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onCancel();
+      // Enter defaults to the primary action ("Create" — quick path).
+      // To use "Create & configure…" the user must click that button.
+      if (e.key === "Enter" && name.trim()) onSubmit(name.trim(), color, false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [name, color, onCancel, onSubmit]);
+
   return (
-    <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      data-ungrouped-dropzone
-      style={{
-        margin: "0 6px 8px",
-        padding: "2px 0",
-        background: hover ? `${T.amber}22` : "transparent",
-        border: hover
-          ? `1px dashed ${T.amber}`
-          : "1px dashed transparent",
-        borderRadius: 4,
-        minHeight: 24,
-        transition: "background-color 120ms",
-      }}
-    >
-      {showEmptyHint && (
+    <Fragment>
+      {/* Backdrop — catches outside clicks AND dims the chrome behind. */}
+      <div
+        onClick={onCancel}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.4)",
+          zIndex: 70,
+        }}
+      />
+      <div
+        role="dialog"
+        aria-label="Create Space"
+        data-space-create-modal
+        style={{
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%,-50%)",
+          background: T.bg1,
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 8,
+          padding: 20,
+          width: 380,
+          zIndex: 71,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.6)",
+        }}
+      >
         <div
           style={{
-            padding: "10px 8px",
-            color: hover ? T.fg1 : T.fg3,
-            fontFamily: T.mono,
-            fontSize: 10.5,
-            textAlign: "center",
+            fontFamily: T.sans,
+            fontSize: 14,
+            fontWeight: 600,
+            color: T.fg,
+            marginBottom: 14,
           }}
         >
-          Drop here to ungroup
+          New Space
         </div>
-      )}
+
+        <input
+          ref={inputRef}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Space name (e.g. Novel, Q4 plans)"
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "8px 10px",
+            background: T.bg2,
+            border: `1px solid ${T.border}`,
+            borderRadius: 5,
+            color: T.fg,
+            fontFamily: T.sans,
+            fontSize: 13,
+            outline: "none",
+          }}
+        />
+
+        <div
+          style={{
+            marginTop: 16,
+            marginBottom: 8,
+            fontFamily: T.mono,
+            fontSize: 10,
+            color: T.fg2,
+            textTransform: "uppercase",
+            letterSpacing: 0.6,
+          }}
+        >
+          Color
+        </div>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            alignItems: "center",
+          }}
+        >
+          {paletteKeys.map((k) => {
+            const selected = color === k;
+            return (
+              <button
+                key={k}
+                onClick={() => setColor(k)}
+                title={k}
+                data-color-swatch={k}
+                aria-pressed={selected}
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: "50%",
+                  background: palette[k],
+                  border: selected
+                    ? `2px solid ${T.fg}`
+                    : `2px solid transparent`,
+                  cursor: "pointer",
+                  padding: 0,
+                  outline: "none",
+                  flexShrink: 0,
+                }}
+              />
+            );
+          })}
+          {/* "No color" option — falls through to the muted fg2 in the
+              sidebar dot. Useful for visually-noisy users who don't want
+              tinting at all. */}
+          <button
+            onClick={() => setColor(null)}
+            title="No color"
+            data-color-swatch="none"
+            aria-pressed={!color}
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: "50%",
+              background: "transparent",
+              border: !color
+                ? `2px solid ${T.fg}`
+                : `2px dashed ${T.border}`,
+              cursor: "pointer",
+              padding: 0,
+              outline: "none",
+              flexShrink: 0,
+              color: T.fg3,
+              fontFamily: T.mono,
+              fontSize: 9,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            ∅
+          </button>
+        </div>
+
+        <div
+          style={{
+            marginTop: 20,
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+          }}
+        >
+          <button
+            onClick={onCancel}
+            style={{
+              padding: "7px 14px",
+              background: "transparent",
+              border: `1px solid ${T.border}`,
+              borderRadius: 5,
+              color: T.fg2,
+              fontFamily: T.sans,
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => name.trim() && onSubmit(name.trim(), color, true)}
+            disabled={!name.trim()}
+            data-space-create-and-configure
+            title="Create the Space and open its settings dialog so you can set system prompt, default model, memory file, pinned prompts, and pinned attachments"
+            style={{
+              padding: "7px 14px",
+              background: "transparent",
+              border: `1px solid ${name.trim() ? T.borderStrong : T.border}`,
+              borderRadius: 5,
+              color: name.trim() ? T.fg1 : T.fg3,
+              fontFamily: T.sans,
+              fontSize: 12,
+              cursor: name.trim() ? "pointer" : "not-allowed",
+            }}
+          >
+            Create &amp; configure…
+          </button>
+          <button
+            onClick={() => name.trim() && onSubmit(name.trim(), color, false)}
+            disabled={!name.trim()}
+            data-space-create-confirm
+            style={{
+              padding: "7px 14px",
+              background: name.trim() ? T.amber : T.bg3,
+              border: `1px solid ${name.trim() ? T.amber : T.border}`,
+              borderRadius: 5,
+              color: name.trim() ? T.bg0 : T.fg3,
+              fontFamily: T.sans,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: name.trim() ? "pointer" : "not-allowed",
+            }}
+          >
+            Create
+          </button>
+        </div>
+      </div>
+    </Fragment>
+  );
+}
+
+// ─── SpaceColorPickerPopover ────────────────────────────────
+//
+// Small popover anchored next to a Space row, opened from the Change-
+// color overflow item. Clicking a swatch immediately calls onPick + closes;
+// clicking outside cancels (no Change button — there's nothing to confirm
+// because the only state is the picked color).
+function SpaceColorPickerPopover({ anchorRect, current, onPick, onClose }) {
+  const palette = window.SPACE_COLORS || {};
+  const paletteKeys = Object.keys(palette);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Anchor below the row's overflow button. If anchorRect isn't supplied
+  // (defensive), center on the viewport.
+  const rect = anchorRect || {
+    bottom: window.innerHeight / 2,
+    left: window.innerWidth / 2 - 100,
+  };
+
+  return (
+    <Fragment>
+      <div
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 65,
+          background: "transparent",
+        }}
+      />
+      <div
+        data-space-color-popover
+        style={{
+          position: "fixed",
+          top: rect.bottom + 6,
+          left: Math.max(8, rect.left - 60),
+          background: T.bg1,
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 6,
+          padding: 10,
+          zIndex: 66,
+          boxShadow: "0 8px 20px rgba(0,0,0,0.45)",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          maxWidth: 180,
+        }}
+      >
+        {paletteKeys.map((k) => {
+          const selected = current === k;
+          return (
+            <button
+              key={k}
+              onClick={() => onPick(k)}
+              title={k}
+              data-color-swatch={k}
+              aria-pressed={selected}
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: "50%",
+                background: palette[k],
+                border: selected
+                  ? `2px solid ${T.fg}`
+                  : `2px solid transparent`,
+                cursor: "pointer",
+                padding: 0,
+                outline: "none",
+                flexShrink: 0,
+              }}
+            />
+          );
+        })}
+        <button
+          onClick={() => onPick(null)}
+          title="No color"
+          data-color-swatch="none"
+          aria-pressed={!current}
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: "50%",
+            background: "transparent",
+            border: !current
+              ? `2px solid ${T.fg}`
+              : `2px dashed ${T.border}`,
+            cursor: "pointer",
+            padding: 0,
+            outline: "none",
+            flexShrink: 0,
+            color: T.fg3,
+            fontFamily: T.mono,
+            fontSize: 9,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          ∅
+        </button>
+      </div>
+    </Fragment>
+  );
+}
+
+// ─── SpaceSettingsModal ─────────────────────────────────────
+//
+// Full Space-editing dialog. Five sections, stacked vertically inside a
+// tall modal:
+//   1. Name + Color (palette swatches)
+//   2. Default model (dropdown — model id preselected for new chats in
+//      this Space; empty = inherit the global default)
+//   3. Memory file (path display + Browse / Edit / Reveal / Clear)
+//   4. Pinned prompts (search + alphabetised list with lock toggle
+//      per pinned row + "+ New prompt for this Space" affordance)
+//   5. Pinned attachments (list with Add file / Add folder / Remove)
+//
+// Draft state lives in this component — Cancel reverts cleanly without
+// touching the backend. Save calls the `onSave(draft)` callback once
+// with everything the parent needs to diff + dispatch:
+//   {
+//     row: { ...space, name, color, defaultModel, memoryPath },
+//     promptSlugs:   string[],          // desired final pin set
+//     lockedSlugs:   string[],          // subset that's locked
+//     attachments:   [{ kind, path }],  // desired final pin set
+//   }
+//
+// The earlier `systemPrompt` row field was dropped in favour of locked
+// pinned prompts — see CLAUDE.md / db.rs for the data-model story.
+//
+// Pinned-prompt + pinned-attachment data is fetched lazily on mount via
+// the same `space_prompts_list` / `space_attachments_list` commands the
+// instantiate-on-new-chat helper uses (Phase 4). The modal renders a
+// loading skeleton while those resolve so the user doesn't see flicker.
+//
+// Memory file actions (Browse / Edit / Reveal) talk to the backend
+// directly via `space_memory_open` / `getDialogApi`. These are leaf
+// actions that don't need to round-trip through the parent.
+function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
+  // ── Draft state for the row-level fields ──
+  // Color and slug are loaded from the live row; slug is read-only
+  // (display only) because `space_update`'s SET clause excludes it
+  // (the Phase 1 contract — memory file path on disk is keyed by slug).
+  const [name, setName] = useState(space.name || "");
+  const [color, setColor] = useState(space.color || null);
+  const [defaultModel, setDefaultModel] = useState(space.defaultModel || "");
+  const [memoryPath, setMemoryPath] = useState(space.memoryPath || "");
+  // Search filter for the pinned-prompts picker. Empty string means
+  // "show everything" — the picker still splits into Pinned + All.
+  const [promptSearch, setPromptSearch] = useState("");
+  // Subset of `promptSlugs` that's locked. Loaded from the
+  // `space_prompts_list` rows' `locked` flag on mount; mutated when the
+  // user toggles the lock icon on a pinned row. The parent uses this
+  // alongside `promptSlugs` to diff against the live DB state on save
+  // (add new pins with locked=true, fire space_prompt_set_locked on
+  // existing pins whose lock state changed).
+  const [lockedSlugs, setLockedSlugs] = useState(new Set());
+  // "+ New prompt for this Space" inline form state. `null` when closed,
+  // `{name, body}` when open. The form materialises a new prompt in the
+  // user's library AND pins it (locked) on save.
+  const [newPromptForm, setNewPromptForm] = useState(null);
+  // Prompts created via the inline form during this modal session.
+  // Merged with the live `promptsLibrary` prop for picker rendering so
+  // they appear immediately — the parent's library refresh fires on
+  // modal close and brings them in officially.
+  const [newlyCreatedPrompts, setNewlyCreatedPrompts] = useState([]);
+  // Saving-in-flight flag for the inline form — disables Save while the
+  // backend round-trips so the user can't double-fire.
+  const [newPromptSaving, setNewPromptSaving] = useState(false);
+
+  // ── Pinned prompts + attachments (loaded lazily) ──
+  // We fetch on mount so the user opens the modal and immediately sees
+  // the current pin set. `loaded` gates the render between "skeleton"
+  // and "real fields" so the user doesn't briefly see an empty list
+  // and think nothing's pinned.
+  const [promptSlugs, setPromptSlugs] = useState([]);
+  const [attachments, setAttachments] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  // Installed Ollama models for the default-model picker. Empty until
+  // the on-mount fetch resolves; the picker degrades gracefully when
+  // the list is empty (still shows "Inherit global default" + the
+  // currently-saved value if any).
+  const [availableModels, setAvailableModels] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const invoke = window.getInvoke && window.getInvoke();
+      if (!invoke) {
+        // Headless / test fixture without a Tauri mock — render as
+        // "loaded with empty lists" so the modal stays interactive.
+        setLoaded(true);
+        return;
+      }
+      try {
+        const [prompts, attaches, tags] = await Promise.all([
+          invoke("space_prompts_list", { spaceId: space.id }),
+          invoke("space_attachments_list", { spaceId: space.id }),
+          // ollama_tags can throw on IPC failure (Ollama down) — wrap
+          // separately so it doesn't take down the prompt/attachment
+          // loads with it. Treats absence as "no models available."
+          invoke("ollama_tags").catch(() => null),
+        ]);
+        if (cancelled) return;
+        const slugList = (prompts || []).map((p) => p.promptSlug).filter(Boolean);
+        setPromptSlugs(slugList);
+        // Bootstrap the locked-set from the rows' `locked` flag. Slugs
+        // not in the set are unlocked; the diff in `saveSpaceSettings`
+        // catches both "newly locked" and "newly unlocked" by reading
+        // membership against this Set.
+        const lockedFromRows = new Set(
+          (prompts || []).filter((p) => p && p.locked).map((p) => p.promptSlug),
+        );
+        setLockedSlugs(lockedFromRows);
+        setAttachments(
+          (attaches || []).map((a) => ({ id: a.id, kind: a.kind, path: a.path })),
+        );
+        // Sort alphabetically — matches the other model pickers in the
+        // app (composer, overlay, compare-mode picker) for muscle-memory
+        // consistency.
+        const models = ((tags && tags.models) || [])
+          .map((m) => m && m.name)
+          .filter(Boolean);
+        models.sort((a, b) => a.localeCompare(b));
+        setAvailableModels(models);
+      } catch (e) {
+        console.error("space modal fetch failed:", e);
+      }
+      if (!cancelled) setLoaded(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [space.id]);
+
+  // ── Esc dismisses ──
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onCancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  // ── Memory file actions (leaf — talk directly to Tauri) ──
+  const browseMemoryPath = async () => {
+    const dialogApi = window.getDialogApi && window.getDialogApi();
+    if (!dialogApi) return;
+    try {
+      const picked = await dialogApi.save({
+        title: `Memory file for ${space.name || "Space"}`,
+        // Suggest the canonical default — parent dir is created by
+        // space_memory_open on first Edit. The user can override.
+        defaultPath: `Ekorbia/Spaces/${space.slug}/memory.md`,
+        filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
+      });
+      if (picked) setMemoryPath(picked);
+    } catch (e) {
+      console.error("space memory browse failed:", e);
+    }
+  };
+  const editMemory = async () => {
+    const invoke = window.getInvoke && window.getInvoke();
+    if (!invoke) return;
+    // If no path is set yet, derive the canonical default so the user
+    // can hit Edit on a fresh Space without going through Browse first.
+    const path = memoryPath
+      || `${space.slug ? "~/Documents/Ekorbia/Spaces/" + space.slug + "/memory.md" : ""}`;
+    if (!path) return;
+    try {
+      await invoke("space_memory_open", { path, reveal: false });
+      // If we just created the file via the canonical default, pin the
+      // path so Save persists it on the row. Without this, hitting
+      // Edit-then-Cancel would leave the row's memoryPath unset.
+      if (!memoryPath) setMemoryPath(path);
+    } catch (e) {
+      console.error("space_memory_open failed:", e);
+      window.ekToast?.({ kind: "error", title: "Open memory failed", body: String(e) });
+    }
+  };
+  const revealMemory = async () => {
+    const invoke = window.getInvoke && window.getInvoke();
+    if (!invoke || !memoryPath) return;
+    try {
+      await invoke("space_memory_open", { path: memoryPath, reveal: true });
+    } catch (e) {
+      console.error("space_memory_open(reveal) failed:", e);
+      window.ekToast?.({ kind: "error", title: "Reveal failed", body: String(e) });
+    }
+  };
+  const clearMemory = () => setMemoryPath("");
+
+  // ── Pinned attachment actions ──
+  const addPinnedFile = async () => {
+    const dialogApi = window.getDialogApi && window.getDialogApi();
+    if (!dialogApi) return;
+    try {
+      const picked = await dialogApi.open({
+        multiple: true,
+        filters: [
+          {
+            name: "Documents & images",
+            extensions: ["txt", "md", "markdown", "pdf", "png", "jpg", "jpeg", "webp"],
+          },
+        ],
+      });
+      if (!picked) return;
+      const paths = Array.isArray(picked) ? picked : [picked];
+      // De-dupe against current draft so the same file isn't pinned
+      // twice. Match on (kind, path) since Spaces pin a kind+path pair.
+      setAttachments((cur) => {
+        const seen = new Set(cur.map((a) => `${a.kind}::${a.path}`));
+        const fresh = paths
+          .filter((p) => !seen.has(`file::${p}`))
+          .map((p) => ({ id: null, kind: "file", path: p }));
+        return [...cur, ...fresh];
+      });
+    } catch (e) {
+      console.error("space pin file dialog failed:", e);
+    }
+  };
+  const addPinnedFolder = async () => {
+    const dialogApi = window.getDialogApi && window.getDialogApi();
+    if (!dialogApi) return;
+    try {
+      const picked = await dialogApi.open({ directory: true, multiple: false });
+      if (!picked) return;
+      const path = Array.isArray(picked) ? picked[0] : picked;
+      if (!path) return;
+      setAttachments((cur) => {
+        if (cur.some((a) => a.kind === "folder" && a.path === path)) return cur;
+        return [...cur, { id: null, kind: "folder", path }];
+      });
+    } catch (e) {
+      console.error("space pin folder dialog failed:", e);
+    }
+  };
+  const removeAttachment = (idx) =>
+    setAttachments((cur) => cur.filter((_, i) => i !== idx));
+
+  // ── Pinned prompt actions ──
+  const togglePromptSlug = (slug) =>
+    setPromptSlugs((cur) =>
+      cur.includes(slug) ? cur.filter((s) => s !== slug) : [...cur, slug],
+    );
+
+  // ── Save ──
+  const handleSave = () => {
+    const trimmedName = name.trim();
+    if (!trimmedName) return; // disabled below; defence in depth
+    const draft = {
+      row: {
+        ...space,
+        name: trimmedName,
+        color: color || null,
+        defaultModel: defaultModel.trim() || null,
+        memoryPath: memoryPath.trim() || null,
+      },
+      promptSlugs,
+      // Only include slugs that are ALSO in promptSlugs — a lock flag
+      // on an unpinned slug is meaningless. Filter defensively in case
+      // the user toggled lock-then-unpin without the lockedSlugs Set
+      // catching up; the parent shouldn't have to think about it.
+      lockedSlugs: promptSlugs.filter((s) => lockedSlugs.has(s)),
+      attachments: attachments.map((a) => ({ kind: a.kind, path: a.path })),
+    };
+    onSave(draft);
+  };
+
+  const palette = window.SPACE_COLORS || {};
+  const paletteKeys = Object.keys(palette);
+
+  return (
+    <Fragment>
+      <div
+        onClick={onCancel}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.4)",
+          zIndex: 70,
+        }}
+      />
+      <div
+        role="dialog"
+        aria-label={`Edit Space ${space.name}`}
+        data-space-settings-modal
+        style={{
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%,-50%)",
+          background: T.bg1,
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 8,
+          width: 560,
+          maxHeight: "85vh",
+          display: "flex",
+          flexDirection: "column",
+          zIndex: 71,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.6)",
+        }}
+      >
+        <div
+          style={{
+            padding: "16px 20px 12px",
+            borderBottom: `1px solid ${T.border}`,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: T.sans,
+              fontSize: 14,
+              fontWeight: 600,
+              color: T.fg,
+            }}
+          >
+            Space settings — {space.name}
+          </div>
+          <div
+            style={{
+              marginTop: 4,
+              fontFamily: T.sans,
+              fontSize: 11.5,
+              color: T.fg3,
+              lineHeight: 1.4,
+            }}
+          >
+            Everything below is optional — a Space with just a name works fine as a folder.
+          </div>
+        </div>
+
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: "16px 20px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 18,
+          }}
+        >
+          {/* ── 1. Name + Color ── */}
+          <div>
+            <SectionLabel>Name</SectionLabel>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Space name"
+              data-space-settings-name
+              style={modalInputStyle}
+            />
+            <div style={{ height: 12 }} />
+            <SectionLabel>Color</SectionLabel>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {paletteKeys.map((k) => {
+                const selected = color === k;
+                return (
+                  <button
+                    key={k}
+                    onClick={() => setColor(k)}
+                    title={k}
+                    data-color-swatch={k}
+                    aria-pressed={selected}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: "50%",
+                      background: palette[k],
+                      border: selected
+                        ? `2px solid ${T.fg}`
+                        : `2px solid transparent`,
+                      cursor: "pointer",
+                      padding: 0,
+                      flexShrink: 0,
+                    }}
+                  />
+                );
+              })}
+              <button
+                onClick={() => setColor(null)}
+                title="No color"
+                data-color-swatch="none"
+                aria-pressed={!color}
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: "50%",
+                  background: "transparent",
+                  border: !color
+                    ? `2px solid ${T.fg}`
+                    : `2px dashed ${T.border}`,
+                  cursor: "pointer",
+                  padding: 0,
+                  flexShrink: 0,
+                  color: T.fg3,
+                  fontFamily: T.mono,
+                  fontSize: 9,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                ∅
+              </button>
+            </div>
+          </div>
+
+          {/* ── 2. Default model ──
+              Native <select> populated from `ollama_tags` (installed
+              local models). Falls back gracefully when Ollama is down
+              or the fetch failed — the dropdown still renders with
+              "Inherit global default" + the currently-saved value (if
+              any) marked "(not installed)" so a stale pick isn't
+              silently dropped on save. */}
+          <div>
+            <SectionLabel>
+              Default model
+              <SectionHint>
+                Preselected for new chats in this Space. Pick "Inherit global default" to use your composer's default model instead.
+              </SectionHint>
+            </SectionLabel>
+            <select
+              value={defaultModel}
+              onChange={(e) => setDefaultModel(e.target.value)}
+              data-space-settings-default-model
+              style={{
+                ...modalInputStyle,
+                fontFamily: T.mono,
+                // The native select's appearance varies per platform —
+                // leave it unstyled rather than fighting the OS dropdown.
+                appearance: "auto",
+                cursor: "pointer",
+              }}
+            >
+              <option value="">Inherit global default</option>
+              {/* If the saved defaultModel isn't in the installed list
+                  (model was uninstalled OR Ollama is down), surface it
+                  as a separate option marked "(not installed)" so the
+                  value isn't silently lost on save. */}
+              {defaultModel && !availableModels.includes(defaultModel) && (
+                <option value={defaultModel} data-model-not-installed>
+                  {defaultModel} (not installed)
+                </option>
+              )}
+              {availableModels.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            {/* If the list came back empty AND no value is saved, surface
+                a small hint pointing the user at how to populate it. The
+                empty-AND-something-saved case is already handled by the
+                "(not installed)" option above. */}
+            {loaded && availableModels.length === 0 && !defaultModel && (
+              <div
+                style={{
+                  marginTop: 6,
+                  fontFamily: T.sans,
+                  fontSize: 11,
+                  color: T.fg3,
+                  lineHeight: 1.4,
+                }}
+              >
+                No installed models found. Start Ollama and pull a model (e.g. <span style={{ fontFamily: T.mono, color: T.fg2 }}>ollama pull gemma4:latest</span>) to populate this list.
+              </div>
+            )}
+          </div>
+
+          {/* ── 3. Memory file ── */}
+          <div>
+            <SectionLabel>
+              Memory file
+              <SectionHint>
+                Injected as a system message every send, after your global memory file.
+              </SectionHint>
+            </SectionLabel>
+            <div
+              data-space-settings-memory-path
+              style={{
+                padding: "6px 8px",
+                background: T.bg2,
+                border: `1px solid ${T.border}`,
+                borderRadius: 4,
+                fontFamily: T.mono,
+                fontSize: 11,
+                color: memoryPath ? T.fg1 : T.fg3,
+                wordBreak: "break-all",
+                minHeight: 24,
+              }}
+            >
+              {memoryPath || "(no memory file set)"}
+            </div>
+            <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <SmallButton onClick={browseMemoryPath} data-space-memory-browse>
+                Browse…
+              </SmallButton>
+              <SmallButton onClick={editMemory} data-space-memory-edit>
+                Edit
+              </SmallButton>
+              <SmallButton
+                onClick={revealMemory}
+                disabled={!memoryPath}
+                data-space-memory-reveal
+              >
+                Reveal
+              </SmallButton>
+              <SmallButton
+                onClick={clearMemory}
+                disabled={!memoryPath}
+                danger
+                data-space-memory-clear
+              >
+                Clear
+              </SmallButton>
+            </div>
+          </div>
+
+          {/* ── 4. Pinned prompts ──
+              Search-and-section picker (Option A from the proposal):
+                • Search input pinned at the top filters by name (case-
+                  insensitive substring match).
+                • Two stacked sections inside one scrollable area —
+                  "Pinned" (current selection, alphabetical) then "All
+                  prompts" (everything else, alphabetical).
+                • Each row: checkbox + favourite color dot + prompt name.
+                • Click anywhere on the row to toggle pinned state — the
+                  row instantly reflows between the two sections.
+                • Sections collapse to empty when they have no matches
+                  for the current filter; if BOTH are empty the picker
+                  shows a "no matches" message. */}
+          <div>
+            <SectionLabel>
+              Pinned prompts
+              <SectionHint>
+                Auto-attached to every new chat in this Space. Click a row to toggle.
+              </SectionHint>
+            </SectionLabel>
+            {!loaded ? (
+              <div style={{ color: T.fg3, fontSize: 11, fontFamily: T.mono }}>
+                loading…
+              </div>
+            ) : promptsLibrary.length === 0 && newlyCreatedPrompts.length === 0 ? (
+              <div style={{ color: T.fg3, fontSize: 11, fontFamily: T.sans }}>
+                No prompts in your library yet — add some in the Prompts panel, or use "+ New prompt for this Space" below.
+              </div>
+            ) : (
+              (() => {
+                // Compute pinned + unpinned splits once per render. Cheap
+                // for libraries under a few hundred prompts (the loop is
+                // single-pass) — useMemo would be over-optimisation since
+                // the inputs (promptsLibrary identity, promptSlugs array,
+                // promptSearch string) all change rarely.
+                //
+                // Merge `newlyCreatedPrompts` with the live library
+                // (deduped by id) so prompts the user just created via
+                // the inline form appear immediately, without waiting
+                // for the parent's library refresh on modal close.
+                const q = promptSearch.trim().toLowerCase();
+                const matches = (p) =>
+                  !q || (p.name || p.id).toLowerCase().includes(q);
+                const sorter = (a, b) =>
+                  (a.name || a.id).localeCompare(b.name || b.id);
+                const pinnedSet = new Set(promptSlugs);
+                const seen = new Set();
+                const merged = [];
+                for (const p of [...newlyCreatedPrompts, ...promptsLibrary]) {
+                  if (!p || !p.id || seen.has(p.id)) continue;
+                  seen.add(p.id);
+                  merged.push(p);
+                }
+                const pinned = [];
+                const unpinned = [];
+                for (const p of merged) {
+                  if (!matches(p)) continue;
+                  if (pinnedSet.has(p.id)) pinned.push(p);
+                  else unpinned.push(p);
+                }
+                pinned.sort(sorter);
+                unpinned.sort(sorter);
+
+                const renderRow = (p, isSelected) => {
+                  const fav = p.favorite && window.FAVORITE_COLOR_MAP
+                    ? window.FAVORITE_COLOR_MAP[p.favorite]
+                    : null;
+                  return (
+                    <div
+                      key={p.id}
+                      onClick={() => togglePromptSlug(p.id)}
+                      data-prompt-toggle={p.id}
+                      data-selected={isSelected ? "true" : "false"}
+                      role="checkbox"
+                      aria-checked={isSelected}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === " " || e.key === "Enter") {
+                          e.preventDefault();
+                          togglePromptSlug(p.id);
+                        }
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "6px 10px",
+                        cursor: "pointer",
+                        background: isSelected ? `${T.amber}14` : "transparent",
+                        borderLeft: isSelected
+                          ? `2px solid ${T.amber}`
+                          : "2px solid transparent",
+                        fontFamily: T.sans,
+                        fontSize: 12,
+                        color: isSelected ? T.fg : T.fg1,
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) e.currentTarget.style.background = T.bg3;
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSelected) e.currentTarget.style.background = "transparent";
+                      }}
+                    >
+                      {/* Checkbox indicator */}
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          width: 14,
+                          height: 14,
+                          flexShrink: 0,
+                          border: `1px solid ${isSelected ? T.amber : T.borderStrong}`,
+                          background: isSelected ? T.amber : "transparent",
+                          borderRadius: 3,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: T.bg0,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          lineHeight: 1,
+                        }}
+                      >
+                        {isSelected ? "✓" : ""}
+                      </span>
+                      {/* Favourite color dot (only when the prompt has one
+                          set). The dot uses the same colour the prompt
+                          library uses for its favourites — keeps visual
+                          continuity across screens. */}
+                      {fav && (
+                        <span
+                          aria-hidden="true"
+                          title={`Favourite: ${p.favorite}`}
+                          style={{
+                            width: 7,
+                            height: 7,
+                            flexShrink: 0,
+                            borderRadius: "50%",
+                            background: fav.color || fav,
+                          }}
+                        />
+                      )}
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {p.name || p.id}
+                      </span>
+                      {/* Lock toggle — only meaningful for pinned rows.
+                          A locked pin (filled amber lock) is always
+                          attached to new chats in this Space AND its
+                          composer chip's × is suppressed at render time.
+                          Clicking the lock stops propagation so it
+                          doesn't also fire the row's "toggle pinned"
+                          handler. */}
+                      {isSelected && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLockedSlugs((cur) => {
+                              const next = new Set(cur);
+                              if (next.has(p.id)) next.delete(p.id);
+                              else next.add(p.id);
+                              return next;
+                            });
+                          }}
+                          title={
+                            lockedSlugs.has(p.id)
+                              ? "Locked — always attached to chats in this Space. Click to unlock."
+                              : "Click to lock — the prompt will always be attached, can't be detached per-chat."
+                          }
+                          data-prompt-lock-toggle={p.id}
+                          data-locked={lockedSlugs.has(p.id) ? "true" : "false"}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            padding: 2,
+                            cursor: "pointer",
+                            color: lockedSlugs.has(p.id) ? T.amber : T.fg3,
+                            display: "flex",
+                            alignItems: "center",
+                            flexShrink: 0,
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!lockedSlugs.has(p.id))
+                              e.currentTarget.style.color = T.fg1;
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!lockedSlugs.has(p.id))
+                              e.currentTarget.style.color = T.fg3;
+                          }}
+                        >
+                          <I.Lock size={11} />
+                        </button>
+                      )}
+                    </div>
+                  );
+                };
+
+                const sectionHeader = (label) => (
+                  <div
+                    data-prompt-section-header={label}
+                    style={{
+                      padding: "5px 10px 4px",
+                      fontFamily: T.mono,
+                      fontSize: 9.5,
+                      letterSpacing: 0.4,
+                      textTransform: "uppercase",
+                      color: T.fg3,
+                      background: T.bg3,
+                      borderBottom: `1px solid ${T.border}`,
+                      position: "sticky",
+                      top: 0,
+                      zIndex: 1,
+                    }}
+                  >
+                    {label}
+                  </div>
+                );
+
+                return (
+                  <>
+                    <input
+                      type="text"
+                      placeholder="Search prompts…"
+                      value={promptSearch}
+                      onChange={(e) => setPromptSearch(e.target.value)}
+                      data-space-settings-prompts-search
+                      style={{
+                        ...modalInputStyle,
+                        marginBottom: 6,
+                        fontFamily: T.sans,
+                      }}
+                    />
+                    <div
+                      data-space-settings-prompts-list
+                      style={{
+                        maxHeight: 280,
+                        overflowY: "auto",
+                        border: `1px solid ${T.border}`,
+                        borderRadius: 4,
+                        background: T.bg2,
+                      }}
+                    >
+                      {pinned.length > 0 && sectionHeader(`Pinned (${pinned.length})`)}
+                      {pinned.map((p) => renderRow(p, true))}
+                      {unpinned.length > 0 && sectionHeader(
+                        pinned.length > 0 ? "All prompts" : `All prompts (${unpinned.length})`,
+                      )}
+                      {unpinned.map((p) => renderRow(p, false))}
+                      {pinned.length === 0 && unpinned.length === 0 && (
+                        <div
+                          data-prompts-no-matches
+                          style={{
+                            padding: "14px 10px",
+                            color: T.fg3,
+                            fontSize: 11,
+                            fontFamily: T.sans,
+                            textAlign: "center",
+                          }}
+                        >
+                          No prompts match "{promptSearch}".
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()
+            )}
+
+            {/* ── "+ New prompt for this Space" inline affordance ──
+                Creates a new prompt in the user's library AND auto-pins
+                it (locked) on this Space. Button → form: name + body,
+                Save + Cancel. The new prompt also appears in the user's
+                regular prompt library — it's not Space-private, just
+                created from here for convenience. */}
+            {!newPromptForm && (
+              <button
+                onClick={() => setNewPromptForm({
+                  name: `${space.name} framing`,
+                  body: "",
+                })}
+                data-space-new-prompt-open
+                style={{
+                  marginTop: 8,
+                  padding: "5px 10px",
+                  background: "transparent",
+                  border: `1px dashed ${T.border}`,
+                  borderRadius: 4,
+                  color: T.fg3,
+                  fontFamily: T.mono,
+                  fontSize: 10.5,
+                  cursor: "pointer",
+                  width: "100%",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = T.fg1;
+                  e.currentTarget.style.borderColor = T.borderStrong;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = T.fg3;
+                  e.currentTarget.style.borderColor = T.border;
+                }}
+              >
+                + New prompt for this Space
+              </button>
+            )}
+            {newPromptForm && (
+              <div
+                data-space-new-prompt-form
+                style={{
+                  marginTop: 8,
+                  padding: 10,
+                  background: T.bg2,
+                  border: `1px solid ${T.borderStrong}`,
+                  borderRadius: 5,
+                }}
+              >
+                <SectionLabel>Name</SectionLabel>
+                <input
+                  value={newPromptForm.name}
+                  onChange={(e) =>
+                    setNewPromptForm((cur) => ({ ...cur, name: e.target.value }))
+                  }
+                  placeholder="Prompt name"
+                  data-space-new-prompt-name
+                  style={{ ...modalInputStyle, marginBottom: 8 }}
+                />
+                <SectionLabel>Body</SectionLabel>
+                <textarea
+                  value={newPromptForm.body}
+                  onChange={(e) =>
+                    setNewPromptForm((cur) => ({ ...cur, body: e.target.value }))
+                  }
+                  placeholder="Prompt body — what the model should see as a system message."
+                  data-space-new-prompt-body
+                  rows={4}
+                  style={{
+                    ...modalInputStyle,
+                    resize: "vertical",
+                    minHeight: 80,
+                  }}
+                />
+                <SectionHint>
+                  Creates the prompt in your library and pins it (locked) on this Space.
+                </SectionHint>
+                <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                  <SmallButton
+                    onClick={() => setNewPromptForm(null)}
+                    data-space-new-prompt-cancel
+                  >
+                    Cancel
+                  </SmallButton>
+                  <SmallButton
+                    onClick={async () => {
+                      const trimmedName = (newPromptForm.name || "").trim();
+                      const trimmedBody = (newPromptForm.body || "").trim();
+                      if (!trimmedName || !trimmedBody || newPromptSaving) return;
+                      const invoke = window.getInvoke && window.getInvoke();
+                      if (!invoke) return;
+                      setNewPromptSaving(true);
+                      try {
+                        // prompts_save derives the slug from the name on
+                        // the Rust side, dedupes against the prompts dir,
+                        // and returns the resulting prompt row. We use
+                        // that row's id (= slug) for the pin so the
+                        // settings save's pinned-prompts diff matches it
+                        // against the library on disk.
+                        const created = await invoke("prompts_save", {
+                          // No id = create new (vs. update existing).
+                          name: trimmedName,
+                          body: trimmedBody,
+                          tags: [],
+                          favorite: null,
+                        });
+                        if (created && created.id) {
+                          // Local optimistic merge — the picker render
+                          // shows it immediately. Parent's library
+                          // refresh on modal close brings it in
+                          // canonically.
+                          setNewlyCreatedPrompts((cur) => [created, ...cur]);
+                          setPromptSlugs((cur) =>
+                            cur.includes(created.id) ? cur : [...cur, created.id],
+                          );
+                          setLockedSlugs((cur) => {
+                            const next = new Set(cur);
+                            next.add(created.id);
+                            return next;
+                          });
+                        }
+                        setNewPromptForm(null);
+                      } catch (e) {
+                        console.error("prompts_save (Space inline) failed:", e);
+                        window.ekToast?.({
+                          kind: "error",
+                          title: "Couldn't create prompt",
+                          body: String(e),
+                        });
+                      } finally {
+                        setNewPromptSaving(false);
+                      }
+                    }}
+                    disabled={
+                      newPromptSaving
+                      || !(newPromptForm.name || "").trim()
+                      || !(newPromptForm.body || "").trim()
+                    }
+                    data-space-new-prompt-save
+                  >
+                    {newPromptSaving ? "Saving…" : "Save & pin"}
+                  </SmallButton>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── 5. Pinned attachments ── */}
+          <div>
+            <SectionLabel>
+              Pinned attachments
+              <SectionHint>
+                Auto-attached to every new chat in this Space.
+              </SectionHint>
+            </SectionLabel>
+            <div style={{ marginBottom: 8, display: "flex", gap: 6 }}>
+              <SmallButton onClick={addPinnedFile} data-space-pin-file>
+                Add file…
+              </SmallButton>
+              <SmallButton onClick={addPinnedFolder} data-space-pin-folder>
+                Add folder…
+              </SmallButton>
+            </div>
+            {!loaded ? (
+              <div style={{ color: T.fg3, fontSize: 11, fontFamily: T.mono }}>
+                loading…
+              </div>
+            ) : attachments.length === 0 ? (
+              <div style={{ color: T.fg3, fontSize: 11, fontFamily: T.sans }}>
+                Nothing pinned yet.
+              </div>
+            ) : (
+              <div data-space-settings-attachments-list>
+                {attachments.map((a, idx) => (
+                  <div
+                    key={idx}
+                    data-space-attachment-row
+                    data-attachment-kind={a.kind}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "5px 8px",
+                      background: T.bg2,
+                      border: `1px solid ${T.border}`,
+                      borderRadius: 4,
+                      marginBottom: 4,
+                      fontFamily: T.mono,
+                      fontSize: 11,
+                    }}
+                  >
+                    <span style={{ color: T.fg3, fontSize: 9, textTransform: "uppercase" }}>
+                      {a.kind}
+                    </span>
+                    <span
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        color: T.fg1,
+                        wordBreak: "break-all",
+                      }}
+                    >
+                      {a.path}
+                    </span>
+                    <button
+                      onClick={() => removeAttachment(idx)}
+                      title="Remove pin"
+                      data-attachment-remove={idx}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: T.fg3,
+                        cursor: "pointer",
+                        padding: 4,
+                      }}
+                    >
+                      <I.X size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div
+          style={{
+            padding: "12px 20px",
+            borderTop: `1px solid ${T.border}`,
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+          }}
+        >
+          <button
+            onClick={onCancel}
+            data-space-settings-cancel
+            style={{
+              padding: "7px 14px",
+              background: "transparent",
+              border: `1px solid ${T.border}`,
+              borderRadius: 5,
+              color: T.fg2,
+              fontFamily: T.sans,
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!name.trim()}
+            data-space-settings-save
+            style={{
+              padding: "7px 14px",
+              background: name.trim() ? T.amber : T.bg3,
+              border: `1px solid ${name.trim() ? T.amber : T.border}`,
+              borderRadius: 5,
+              color: name.trim() ? T.bg0 : T.fg3,
+              fontFamily: T.sans,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: name.trim() ? "pointer" : "not-allowed",
+            }}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </Fragment>
+  );
+}
+
+// Small section-label component used throughout SpaceSettingsModal.
+// Local to this file so the modal's styling stays self-contained.
+function SectionLabel({ children }) {
+  return (
+    <div
+      style={{
+        fontFamily: T.mono,
+        fontSize: 10,
+        color: T.fg2,
+        textTransform: "uppercase",
+        letterSpacing: 0.6,
+        marginBottom: 6,
+      }}
+    >
       {children}
     </div>
   );
 }
 
+function SectionHint({ children }) {
+  return (
+    <div
+      style={{
+        fontFamily: T.sans,
+        fontSize: 11,
+        color: T.fg3,
+        textTransform: "none",
+        letterSpacing: 0,
+        marginTop: 2,
+        fontWeight: 400,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SmallButton({ children, onClick, disabled, danger, ...rest }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      {...rest}
+      style={{
+        padding: "5px 10px",
+        background: T.bg2,
+        border: `1px solid ${T.border}`,
+        borderRadius: 4,
+        color: disabled ? T.fg3 : danger ? T.red : T.fg1,
+        fontFamily: T.sans,
+        fontSize: 11,
+        cursor: disabled ? "not-allowed" : "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+const modalInputStyle = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "7px 10px",
+  background: T.bg2,
+  border: `1px solid ${T.border}`,
+  borderRadius: 4,
+  color: T.fg,
+  fontFamily: T.sans,
+  fontSize: 12.5,
+  outline: "none",
+};
+
+
 // ─── ChatContextMenu ────────────────────────────────────────
 // Fixed-position menu anchored at the right-click coordinates. Items:
-// Open, Rename, divider, Move-to-group list (with current group marked,
-// "(none)" entry to unfile, "+ New group…" to create), divider, Delete.
+// Open, Rename, divider, Move-to-Space list (rendered only when at
+// least one Space exists; "(none)" entry to unfile), divider, Delete.
 //
 // Dismisses on click-outside, Esc, or any menu action. Clicks inside
 // the menu must stopPropagation to avoid the document listener closing
 // before the item handler runs.
 function ChatContextMenu({
-  x, y, chat, groups,
-  onOpen, onRename, onDelete, onMove, onNewGroup, onClose,
+  x, y, chat, spaces = [],
+  onOpen, onRename, onDelete, onMoveToSpace, onClose,
 }) {
   useEffect(() => {
     const onKey = (e) => {
@@ -1077,28 +2690,50 @@ function ChatContextMenu({
       >
       <MenuItem onClick={onOpen}>Open</MenuItem>
       <MenuItem onClick={onRename}>Rename…</MenuItem>
-      <MenuDivider />
-      <MenuLabel>Move to group</MenuLabel>
-      <MenuItem
-        onClick={() => onMove(null)}
-        selected={!chat.groupId}
-        indent
-      >
-        (none)
-      </MenuItem>
-      {(groups || []).map((g) => (
-        <MenuItem
-          key={g.id}
-          onClick={() => onMove(g.id)}
-          selected={chat.groupId === g.id}
-          indent
-        >
-          {g.name}
-        </MenuItem>
-      ))}
-      <MenuItem onClick={onNewGroup} indent>
-        <span style={{ color: T.fg2 }}>+ New group…</span>
-      </MenuItem>
+      {/* Move to Space submenu — only shown when a Space mover is wired
+          AND there's at least one Space to move into (avoids a dead
+          submenu on a fresh install before any Spaces exist). The "(none)"
+          row always appears alongside Spaces so a user filed into a
+          Space can unfile via the menu without dragging. */}
+      {onMoveToSpace && spaces.length > 0 && (
+        <Fragment>
+          <MenuDivider />
+          <MenuLabel>Move to Space</MenuLabel>
+          <MenuItem
+            onClick={() => onMoveToSpace(null)}
+            selected={!chat.spaceId}
+            indent
+            data-move-to-space="none"
+          >
+            (none)
+          </MenuItem>
+          {spaces.map((s) => (
+            <MenuItem
+              key={s.id}
+              onClick={() => onMoveToSpace(s.id)}
+              selected={chat.spaceId === s.id}
+              indent
+              data-move-to-space={s.id}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  display: "inline-block",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: window.spaceColorHex
+                    ? window.spaceColorHex(s.color)
+                    : (s.color ? T[s.color] || T.fg2 : T.fg2),
+                  marginRight: 8,
+                  verticalAlign: "middle",
+                }}
+              />
+              {s.name}
+            </MenuItem>
+          ))}
+        </Fragment>
+      )}
       <MenuDivider />
       <MenuItem onClick={onDelete} danger>
         Delete chat
@@ -1111,7 +2746,14 @@ function ChatContextMenu({
 // Generic single menu item — used by both the row context menu and the
 // group overflow menu. `selected` marks the current state with a leading
 // checkmark glyph; `danger` colours destructive actions red on hover.
-function MenuItem({ children, onClick, selected, danger, indent }) {
+function MenuItem({ children, onClick, selected, danger, indent, ...rest }) {
+  // ...rest forwards any extra HTML attributes (especially `data-*` for
+  // Playwright selectors) to the underlying div. Without it, callers can
+  // pass `data-move-to-space="s1"` and the prop just vanishes in the
+  // component boundary — the test then can't find a stable hook for
+  // clicking the specific item. Forwarding is safe here: MenuItem
+  // doesn't accept any other unknown props in production code, and
+  // React skips unknown attrs that aren't `data-*`/`aria-*` on the DOM.
   const [hover, setHover] = useState(false);
   return (
     <div
@@ -1122,6 +2764,7 @@ function MenuItem({ children, onClick, selected, danger, indent }) {
         e.stopPropagation();
         onClick && onClick();
       }}
+      {...rest}
       style={{
         padding: indent ? "4px 8px 4px 24px" : "4px 8px",
         borderRadius: 3,
@@ -1500,6 +3143,15 @@ function MessageHitRow({ hit, onClick }) {
 function ChatRow({
   chat,
   model,
+  // Resolved Space color for this chat (passed pre-computed from the
+  // Sidebar so we don't re-scan the spaces array per row). Undefined
+  // when the chat isn't in a Space, or is in a Space with no color
+  // set. When defined, it wins over the model color — most users have
+  // a stack of installed Ollama models that aren't in MODELS_BY_ID and
+  // would otherwise render as a meaningless muted gray dot; the Space
+  // color is far more informative at a glance ("oh this chat is in
+  // Novel").
+  spaceColor,
   active,
   onClick,
   onDelete,
@@ -1576,7 +3228,11 @@ function ChatRow({
           style={{ color: T.amber, position: "absolute", left: -2, top: 7 }}
         />
       )}
-      <ModelDot color={model?.color || T.fg3} size={6} glow={false} />
+      <ModelDot
+        color={spaceColor || model?.color || T.fg3}
+        size={6}
+        glow={false}
+      />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{

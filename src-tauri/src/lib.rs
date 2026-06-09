@@ -13,6 +13,7 @@
 //! - `db`            — DbState, SCHEMA, `now_unix`, `get_setting`/`set_setting`
 //! - `text_extract`  — shared PDF/text extraction
 //! - `chat`          — chat + message persistence commands
+//! - `spaces`        — Spaces (workspace bundles): system prompt, default model, pinned attachments, pinned prompts, optional memory file
 //! - `search`        — FTS5 chat search
 //! - `prompts`       — file-system prompt store + commands
 //! - `settings`      — generic `setting_get`/`setting_set`
@@ -34,6 +35,7 @@ mod prompts;
 mod screenshot;
 mod search;
 mod settings;
+mod spaces;
 mod text_extract;
 mod watch;
 
@@ -142,12 +144,21 @@ pub fn run() {
             chat::db_clear_all_chats,
             chat::db_truncate_chat_from,
             chat::chat_export_to_path,
-            chat::db_load_groups,
-            chat::db_create_group,
-            chat::db_rename_group,
-            chat::db_delete_group,
-            chat::db_move_chat_to_group,
-            chat::db_reorder_groups,
+            spaces::space_list,
+            spaces::space_get,
+            spaces::space_create,
+            spaces::space_update,
+            spaces::space_delete,
+            spaces::space_reorder,
+            spaces::db_move_chat_to_space,
+            spaces::space_attachments_list,
+            spaces::space_attachment_add,
+            spaces::space_attachment_remove,
+            spaces::space_prompts_list,
+            spaces::space_prompt_add,
+            spaces::space_prompt_set_locked,
+            spaces::space_prompt_remove,
+            spaces::space_prompt_reorder,
             search::search_chats,
             attachments::commands::attachment_list,
             attachments::commands::attachment_add_files,
@@ -196,6 +207,8 @@ pub fn run() {
             memory::memory_read,
             memory::memory_set_path,
             memory::memory_open,
+            memory::space_memory_read,
+            memory::space_memory_open,
         ])
         .setup(|app| {
             let win = app

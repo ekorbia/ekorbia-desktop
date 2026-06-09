@@ -8,7 +8,7 @@
 //! is sync and would block the executor thread) — see CLAUDE.md "DB lock held
 //! across await deadlocks".
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::sync::Mutex;
 
 pub(crate) struct DbState(pub(crate) Mutex<Connection>);
@@ -44,26 +44,133 @@ CREATE TABLE IF NOT EXISTS chats (
     -- single-mode. Capped at 3 entries by the UI per the v1 column-
     -- count decision.
     multi_models TEXT,
-    -- Optional user-defined group (folder) this chat belongs to. NULL
-    -- means ungrouped — the chat shows under the date buckets at the
-    -- bottom of the sidebar. Fresh installs get the FK below; upgrade
-    -- installs only get the bare column (ALTER TABLE can't add an FK),
-    -- and `db_delete_group` does the cleanup in app code instead.
-    group_id TEXT REFERENCES chat_groups(id) ON DELETE SET NULL
+    -- Optional Space membership. A Space bundles a system prompt,
+    -- default model, optional pinned attachments, optional pinned
+    -- prompts, and an optional Space-scoped memory file. New chats
+    -- created inside a Space inherit all of those. NULL = chat is not
+    -- in any Space (the ''All chats'' view shows it regardless).
+    --
+    -- Fresh installs get the FK below; upgrade installs only get the
+    -- bare column (ALTER TABLE can't add an FK), and `db_delete_space`
+    -- does the cleanup in app code instead.
+    --
+    -- Note: an earlier 0.2.0 build also had `chats.group_id` for a
+    -- simpler ''sidebar folder'' concept that Spaces replaced in 0.4.0.
+    -- The `migrate_groups_to_spaces` + `drop_chat_groups_artifacts`
+    -- migrations transfer any group filings to Space filings and drop
+    -- the old column and table. Don't add group_id back — Spaces serve
+    -- the lightweight-folder use case (a Space with no system prompt /
+    -- no pins behaves as a pure organisational bucket).
+    space_id TEXT REFERENCES spaces(id) ON DELETE SET NULL
 );
 
--- ── Chat groups (user-defined folders in the sidebar) ─────────────────────
--- Single-membership grouping: each chat row's `group_id` points to 0 or 1
--- entry here. Groups are displayed above the date buckets in the sidebar;
--- chats with NULL group_id fall through to the date sections. Ordering is
--- user-controlled via `sort_order` (set by `db_reorder_groups`); ties break
--- on creation time.
-CREATE TABLE IF NOT EXISTS chat_groups (
+-- ── Spaces (workspace bundles) ─────────────────────────────────────────────
+-- A Space is a named container for a related body of work. It bundles:
+--   • a system prompt (prepended to every chat in the Space)
+--   • a default model (preselected for new chats in the Space)
+--   • optional pinned attachments (auto-attached to new chats — see
+--     space_attachments below)
+--   • optional pinned prompts (auto-attached to new chats — see
+--     space_prompts below)
+--   • an optional Space-scoped memory file (injected as system context
+--     AFTER the global memory.md so Space memory overlays on top)
+--
+-- A chat sits in 0 or 1 Space at a time (chats.space_id). A Space with
+-- no system prompt, no default model, no pinned attachments, and no
+-- pinned prompts behaves identically to the lightweight sidebar-folder
+-- concept Spaces replaced — the user gets organisation without context.
+--
+-- `slug` is the stable identifier used for the default Space memory file
+-- path (~/Documents/Ekorbia/Spaces/<slug>/memory.md). Display name lives
+-- in `name`; renaming the Space changes `name` only — the slug stays
+-- pinned so the memory file doesn't move out from under the user.
+--
+-- `color` is a palette key (not a hex literal) — the UI maps it to the
+-- active theme's accent colors so a Space tinted ''amber'' renders the
+-- same conceptual color across themes. NULL = no color set (sidebar
+-- falls back to the default fg color).
+--
+-- `default_model` / `memory_path` are nullable so a Space can be created
+-- with just a name and filled in later. `sort_index` controls sidebar
+-- ordering; ties break on created_at.
+--
+-- Note: an earlier 0.4.0 build had a `system_prompt TEXT` column here
+-- for free-form Space framing. Replaced by ''locked pinned prompts''
+-- (see space_prompts.locked) — a locked pin is a library .md file the
+-- Space always attaches to new chats AND that the composer can''t
+-- detach. The `drop_spaces_system_prompt` migration drops the old
+-- column on upgrade installs. Don''t add it back.
+CREATE TABLE IF NOT EXISTS spaces (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    slug TEXT NOT NULL UNIQUE,
+    color TEXT,
+    default_model TEXT,
+    memory_path TEXT,
+    sort_index INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
+
+-- Pinned files/folders for a Space. At new-chat-in-Space creation time
+-- each row is instantiated as a real attachment on the chat (going
+-- through the existing attachment pipeline — small files inlined, large
+-- text + folders chunked + embedded). The Space row is the canonical
+-- source; the per-chat attachments are derived copies the user can
+-- detach without affecting the Space.
+--
+-- `kind` is the user's intent at pin time: ''file'' for a single file
+-- (text/PDF/image — the attachment pipeline figures out which when
+-- instantiated) or ''folder'' for a directory tree. Aligned with the
+-- chooser UI (paperclip vs folder button) rather than with
+-- attachments.kind (''text''/''image''/''folder'') because the latter
+-- requires reading the file to decide, which we defer to instantiation.
+CREATE TABLE IF NOT EXISTS space_attachments (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    path TEXT NOT NULL,
+    added_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+-- Pinned prompts for a Space. References the prompt by slug (its .md
+-- filename without extension) — matches the prompt_meta join pattern
+-- so the row is harmless if the underlying .md file is deleted; the
+-- read-time JOIN against the live prompts library silently drops the
+-- orphan, same as the library itself handles missing files.
+--
+-- UNIQUE(space_id, prompt_slug) prevents the same prompt from being
+-- pinned twice to the same Space (would have no UI effect but would
+-- clutter the list and double-attach on new chats).
+--
+-- `sort_index` controls the order pinned prompts attach to new chats
+-- in the Space. Ties break on added_at.
+--
+-- `locked` (0 or 1) marks a pin as ''always attached, can''t be detached
+-- per-chat''. Locked pins still surface as composer chips on the user
+-- message (visibility / audit) but their × button is suppressed at
+-- render time so the user can''t remove them from a chat in this Space.
+-- Replaces the earlier free-form spaces.system_prompt field — see the
+-- spaces table comment for why.
+CREATE TABLE IF NOT EXISTS space_prompts (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    prompt_slug TEXT NOT NULL,
+    sort_index INTEGER NOT NULL DEFAULT 0,
+    added_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    locked INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(space_id, prompt_slug)
+);
+
+-- Indices on the new tables' own columns are safe in SCHEMA — both
+-- fresh and upgrade installs create the table and the index in the
+-- same execute_batch pass. The chats(space_id) index is different:
+-- it lives in apply_migrations because chats.space_id is a migration-
+-- added column on upgrade installs.
+CREATE INDEX IF NOT EXISTS idx_space_attachments_space
+    ON space_attachments(space_id);
+CREATE INDEX IF NOT EXISTS idx_space_prompts_space
+    ON space_prompts(space_id, sort_index);
 
 CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY,
@@ -377,25 +484,356 @@ pub(crate) fn apply_migrations(conn: &Connection) -> Result<(), String> {
     add_column_if_missing(conn, "messages", "variant_group_id", "TEXT")?;
     add_column_if_missing(conn, "messages", "is_picked", "INTEGER")?;
 
-    // ── Chat groups (sidebar folders) ───────────────────────────────────
-    // The `chat_groups` table itself is in SCHEMA (CREATE TABLE IF NOT
-    // EXISTS handles both fresh and upgrade installs uniformly). The
-    // `chats.group_id` column also lives in SCHEMA — but on upgrade
-    // installs CREATE TABLE IF NOT EXISTS is a no-op, so we add the
-    // column here. Note ALTER TABLE can't add an FK, so upgrade DBs
+    // ── Spaces (workspace bundles) ──────────────────────────────────────
+    // The `spaces`, `space_attachments`, and `space_prompts` tables
+    // themselves live in SCHEMA (CREATE TABLE IF NOT EXISTS handles both
+    // fresh and upgrade installs uniformly — the tables are new in this
+    // version, so both code paths actually create them). The
+    // `chats.space_id` column also lives in SCHEMA, but on upgrade
+    // installs CREATE TABLE IF NOT EXISTS is a no-op for chats, so we
+    // add the column here. ALTER TABLE can't add an FK, so upgrade DBs
     // get the bare column without the ON DELETE SET NULL action; the
-    // `db_delete_group` command does that cleanup in app code instead.
+    // `space_delete` command does that cleanup in app code instead.
     //
-    // The index lives HERE (not in SCHEMA) per the CLAUDE.md migration-
-    // ordering gotcha: an index on a migration-added column would fail
-    // on upgrade installs if it ran in SCHEMA before this ALTER TABLE.
-    add_column_if_missing(conn, "chats", "group_id", "TEXT")?;
+    // The chats(space_id) index lives HERE (not in SCHEMA) per the
+    // migration-ordering gotcha: an index on a migration-added column
+    // would fail on upgrade installs if it ran in SCHEMA before this
+    // ALTER TABLE. The covering shape (space_id, updated_at DESC) lets
+    // the sidebar filter-by-Space query — "show this Space's chats,
+    // most-recent first" — resolve as a single index range scan.
+    add_column_if_missing(conn, "chats", "space_id", "TEXT")?;
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chats_group ON chats(group_id)",
+        "CREATE INDEX IF NOT EXISTS idx_chats_space ON chats(space_id, updated_at DESC)",
         [],
     )
     .map_err(|e| e.to_string())?;
+
+    // ── Groups → Spaces conversion ──────────────────────────────────────
+    // Spaces subsume chat groups: a Space is a richer container that adds
+    // a system prompt, default model, pinned attachments/prompts, and an
+    // optional memory file on top of what a group does. This one-shot
+    // migration turns every existing chat_group into an equivalent Space
+    // (no system prompt, no pins — same lightweight-folder behaviour) and
+    // re-files chats accordingly.
+    //
+    // For each chat with group_id set:
+    //   • If space_id is ALSO set (only possible from a dev DB that was
+    //     opened with both features simultaneously — no public release
+    //     ever exposed both axes), keep the Space filing and clear
+    //     group_id. The explicit Space pick wins.
+    //   • Otherwise, copy group_id into space_id and clear group_id.
+    //
+    // Gated on a settings key + per-Space existence check, so re-running
+    // on an already-migrated DB is a no-op.
+    migrate_groups_to_spaces(conn)?;
+
+    // ── Drop chat_groups artifacts ──────────────────────────────────────
+    // Now that every group is mirrored as a Space and every filed chat
+    // points at a Space, the chat_groups table and chats.group_id column
+    // are dead weight. Drop them — the data has already been migrated
+    // above, and the UI no longer exposes group concepts. Idempotent
+    // (DROP TABLE IF EXISTS, PRAGMA introspection before DROP COLUMN).
+    drop_chat_groups_artifacts(conn)?;
+
+    // ── Locked pinned prompts ───────────────────────────────────────────
+    // Replace the old `spaces.system_prompt` free-form text field with
+    // `space_prompts.locked` (a boolean on each pin). Locked pins are
+    // always attached to new chats in the Space AND can''t be detached
+    // per-chat in the composer. Decided dev-only — no migration of
+    // existing system_prompt content; the column is just dropped. See
+    // CLAUDE.md for the user-facing model.
+    add_locked_to_space_prompts(conn)?;
+    drop_spaces_system_prompt(conn)?;
+
     Ok(())
+}
+
+/// One-shot migration: convert every `chat_groups` row into an equivalent
+/// `spaces` row and transfer `chats.group_id` filings to `chats.space_id`.
+///
+/// Idempotent in two layers:
+///   1. A settings-table flag (`groups_to_spaces_migrated_v1`) gates the
+///      whole function — a second call returns immediately.
+///   2. Per-Space existence check (`SELECT 1 FROM spaces WHERE id = ?`) so
+///      even if the flag is somehow cleared, we don't double-insert.
+///
+/// Migrated Spaces are *minimal*: name + slug + sort_index + timestamps
+/// copied from the group; color / system_prompt / default_model /
+/// memory_path are all NULL. Equivalent to a Space the user just
+/// created and never opened the settings dialog on — i.e. a folder.
+fn migrate_groups_to_spaces(conn: &Connection) -> Result<(), String> {
+    const FLAG_KEY: &str = "groups_to_spaces_migrated_v1";
+
+    // Defence in depth: tolerate missing tables that we depend on.
+    // In production SCHEMA's `CREATE TABLE IF NOT EXISTS` runs immediately
+    // before apply_migrations, so `app_settings`, `chat_groups`, and
+    // `spaces` are all guaranteed to exist. The guards exist for:
+    //   • Legacy-shape unit tests that construct a minimal pre-SCHEMA
+    //     DB to exercise the column-add migrations in isolation.
+    //   • A theoretical "this migration runs against a partial DB"
+    //     scenario which we can't prove impossible but should still
+    //     fail gracefully (silently skip + run again on next launch
+    //     when SCHEMA has caught up).
+    if !table_exists(conn, "app_settings")? {
+        // No place to record the flag, so we can't be idempotent. Skip
+        // entirely; next launch (after SCHEMA runs) will retry.
+        return Ok(());
+    }
+    if get_setting(conn, FLAG_KEY).is_some() {
+        return Ok(());
+    }
+    if !table_exists(conn, "chat_groups")? || !table_exists(conn, "spaces")? {
+        // Either pre-Phase-0.2 (no chat_groups) or pre-Spaces (no spaces).
+        // Mark the migration done — there's nothing to migrate, and the
+        // SCHEMA pass that creates these tables will run before this
+        // function ever sees real data.
+        set_setting(conn, FLAG_KEY, "1")?;
+        return Ok(());
+    }
+
+    // Load every group row. We can't iterate + insert inside the same
+    // prepared-stmt borrow without lifetime gymnastics, so collect first
+    // then loop.
+    let groups: Vec<(String, String, i64, i64)> = {
+        let mut stmt = conn
+            .prepare("SELECT id, name, sort_order, created_at FROM chat_groups")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let collected: Result<Vec<_>, _> = rows.collect();
+        collected.map_err(|e| e.to_string())?
+    };
+
+    for (id, name, sort_order, created_at) in groups {
+        // Existence check: if a Space with this id already exists (re-run
+        // after the flag was cleared, or a dev DB where the same id was
+        // used for both a group and a Space), skip. The flag will still
+        // get set at the end, so subsequent runs no-op cleanly.
+        let exists: bool = conn
+            .query_row("SELECT 1 FROM spaces WHERE id = ?1", [&id], |_| Ok(true))
+            .optional()
+            .map_err(|e| e.to_string())?
+            .unwrap_or(false);
+        if exists {
+            continue;
+        }
+
+        // Slug: slugify the name, fall back to "space" if it nukes to
+        // empty (emoji-only names), then dedup against the existing
+        // `spaces.slug` set. The UNIQUE constraint on `spaces.slug` is
+        // the authoritative protector; this is the polite version.
+        let base = slugify(&name, None);
+        let base = if base.is_empty() {
+            "space".to_string()
+        } else {
+            base
+        };
+        let slug = dedupe_slug_for_migration(conn, &base)?;
+
+        // Updated_at = created_at — the group's last modification time
+        // isn't tracked, and using `now_unix()` would make every
+        // migrated Space look like it was just touched. Static
+        // created_at = updated_at is the right shape for a row
+        // imported from a model that didn't track updates.
+        conn.execute(
+            "INSERT INTO spaces \
+                (id, name, slug, color, default_model, \
+                 memory_path, sort_index, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, NULL, NULL, NULL, ?4, ?5, ?5)",
+            (&id, &name, &slug, sort_order, created_at),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    // Two-statement filing transfer. ORDER MATTERS — the first UPDATE
+    // copies group_id into space_id for chats that are ONLY filed by
+    // group. The second clears group_id on chats that had BOTH set
+    // (dev DBs only; public users can't reach this state). Doing the
+    // second statement first would silently lose the group_id before
+    // the first statement could copy it.
+    conn.execute(
+        "UPDATE chats SET space_id = group_id, group_id = NULL \
+         WHERE group_id IS NOT NULL AND space_id IS NULL",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE chats SET group_id = NULL \
+         WHERE group_id IS NOT NULL AND space_id IS NOT NULL",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+
+    set_setting(conn, FLAG_KEY, "1")?;
+    Ok(())
+}
+
+/// One-shot cleanup: drop the now-empty `chat_groups` table and the
+/// `chats.group_id` column. Runs after `migrate_groups_to_spaces` has
+/// transferred every group filing into a Space — so dropping is safe.
+///
+/// Idempotent in two layers:
+///   1. `DROP TABLE IF EXISTS` no-ops on fresh installs where SCHEMA
+///      never created the table, and on second-run upgrades where this
+///      function already dropped it.
+///   2. `chats.group_id` is dropped only after a PRAGMA introspection
+///      confirms it exists — SQLite's `ALTER TABLE … DROP COLUMN`
+///      doesn't support `IF EXISTS`. The rusqlite-bundled SQLite is
+///      3.42+, well above the 3.35 cutoff that introduced DROP COLUMN.
+///
+/// A small unfile-before-drop pass clears any `space_id IS NULL AND
+/// group_id IS NOT NULL` rows: this is the same case `migrate_groups_to_spaces`
+/// handles, but a defence-in-depth UPDATE here guards against a partial
+/// migration state (e.g. the previous migration aborted halfway). If the
+/// group_id column doesn't exist, the UPDATE is skipped.
+///
+/// No settings flag: the operations themselves are conditional on
+/// presence, so re-running is naturally a no-op.
+fn drop_chat_groups_artifacts(conn: &Connection) -> Result<(), String> {
+    // Defensive unfile pass for any chats still pointing at a group
+    // (would only happen if migrate_groups_to_spaces aborted mid-way).
+    // Only runs if the column still exists.
+    let has_group_id = column_exists(conn, "chats", "group_id")?;
+    if has_group_id {
+        // Best-effort: copy any orphan group_id values into space_id
+        // when space_id is null, then NULL them out. Matches the
+        // migration's collision rule.
+        conn.execute(
+            "UPDATE chats SET space_id = group_id, group_id = NULL \
+             WHERE group_id IS NOT NULL AND space_id IS NULL",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE chats SET group_id = NULL \
+             WHERE group_id IS NOT NULL AND space_id IS NOT NULL",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        // Drop the index first — leaving an index on a now-dropped
+        // column would be invalid. DROP INDEX IF EXISTS is safe either
+        // way (no-op on fresh installs where the index was never
+        // created in the first place).
+        conn.execute("DROP INDEX IF EXISTS idx_chats_group", [])
+            .map_err(|e| e.to_string())?;
+        // ALTER TABLE … DROP COLUMN was added in SQLite 3.35; rusqlite
+        // bundles a much newer version. No `IF EXISTS` clause is
+        // supported — guard above via PRAGMA introspection.
+        conn.execute("ALTER TABLE chats DROP COLUMN group_id", [])
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Drop the chat_groups table. IF EXISTS handles both fresh installs
+    // (table never existed) and re-runs after the table was already
+    // dropped.
+    conn.execute("DROP TABLE IF EXISTS chat_groups", [])
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Add `space_prompts.locked` if missing. Idempotent — fresh installs
+/// no-op because SCHEMA already created the column; upgrade installs
+/// from the brief "system_prompt + unlocked pins" build get the column
+/// added here.
+///
+/// `INTEGER NOT NULL DEFAULT 0` means existing rows on upgrade installs
+/// default to "not locked" — matches the old behaviour where every pin
+/// was detachable from chats.
+fn add_locked_to_space_prompts(conn: &Connection) -> Result<(), String> {
+    // Tolerate a missing `space_prompts` table — possible only in legacy
+    // unit-test fixtures, since SCHEMA creates it on every real install.
+    if !table_exists(conn, "space_prompts")? {
+        return Ok(());
+    }
+    add_column_if_missing(
+        conn,
+        "space_prompts",
+        "locked",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+}
+
+/// Drop the `spaces.system_prompt` column (if it exists). Replaces the
+/// earlier free-form "system prompt per Space" model with locked pinned
+/// prompts (see `add_locked_to_space_prompts`). Idempotent via the
+/// `column_exists` gate — DROP COLUMN doesn't support `IF EXISTS`.
+///
+/// No data migration: the column held dev-only test content, and the
+/// user explicitly opted out of preserving it. Anyone who wants to
+/// re-create the framing can do so as a locked pinned prompt from the
+/// settings UI.
+fn drop_spaces_system_prompt(conn: &Connection) -> Result<(), String> {
+    if !table_exists(conn, "spaces")? {
+        return Ok(());
+    }
+    if column_exists(conn, "spaces", "system_prompt")? {
+        conn.execute("ALTER TABLE spaces DROP COLUMN system_prompt", [])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Cheap "does this column exist on `table`?" probe via PRAGMA
+/// `table_info`. Mirrors the introspection shape `add_column_if_missing`
+/// uses; lifted into its own helper because the groups-artifacts drop
+/// needs the same primitive but for a *removal* gate rather than an
+/// *insertion* gate.
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("PRAGMA table_info({table}): {e}"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("PRAGMA table_info({table}) query: {e}"))?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(names.iter().any(|n| n == column))
+}
+
+/// Cheap "does this table exist?" probe via `sqlite_master`. Used by the
+/// groups→Spaces migration to tolerate partial DB shapes (legacy test
+/// fixtures, mid-upgrade weirdness) instead of erroring out.
+fn table_exists(conn: &Connection, name: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+        [name],
+        |_| Ok(true),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+    .map(|opt| opt.unwrap_or(false))
+}
+
+/// Slug dedup helper local to the migration. Mirrors
+/// `spaces::dedupe_slug_in_db` so the migration is self-contained — the
+/// spaces module is for the runtime command surface, not for migration
+/// code, and a private copy here avoids a `pub(crate)` widening just for
+/// one caller. Both helpers have the same contract: return `base` if
+/// free, then `base-2`, `base-3`, ... up to 1000 tries, then stamp a
+/// unix timestamp.
+fn dedupe_slug_for_migration(conn: &Connection, base: &str) -> Result<String, String> {
+    let mut stmt = conn
+        .prepare("SELECT 1 FROM spaces WHERE slug = ?1 LIMIT 1")
+        .map_err(|e| e.to_string())?;
+    if !stmt.exists([base]).map_err(|e| e.to_string())? {
+        return Ok(base.to_string());
+    }
+    for n in 2..1000u32 {
+        let cand = format!("{base}-{n}");
+        if !stmt.exists([cand.as_str()]).map_err(|e| e.to_string())? {
+            return Ok(cand);
+        }
+    }
+    Ok(format!("{base}-{}", now_unix()))
 }
 
 /// Idempotent `ALTER TABLE … ADD COLUMN`. Reads `PRAGMA table_info(table)`
@@ -647,11 +1085,13 @@ mod tests {
             "attachment_sources",
             "attachments",
             "chat_files",
-            "chat_groups",
             "chats",
             "messages",
             "messages_fts",
             "prompt_meta",
+            "space_attachments",
+            "space_prompts",
+            "spaces",
             "watch_events",
             "watches",
         ] {
@@ -1181,46 +1621,91 @@ mod tests {
         );
     }
 
-    // ── Chat groups (sidebar folders) ──────────────────────────────────────
+    // ── Spaces (workspace bundles) ─────────────────────────────────────────
     //
-    // These cover the schema shape and the upgrade-install path. The
-    // command-layer behaviour (move, delete, upsert-preserves-group_id) is
-    // exercised against the raw SQL the commands use, because wiring up
-    // tauri::State in a unit test is more ceremony than payoff.
+    // Same shape as the chat_groups tests above: pin the fresh-install
+    // schema, the upgrade-install ALTER + index path, the FK semantics
+    // (cascade for child rows, SET NULL for chat membership), the
+    // upsert-doesn't-clobber-space_id contract, and the UNIQUE constraints
+    // on `spaces.slug` and `space_prompts(space_id, prompt_slug)`.
 
     #[test]
-    fn fresh_db_has_chat_groups_table_and_chats_group_id_column() {
+    fn fresh_db_has_spaces_tables_and_chats_space_id_column() {
         let conn = fresh_db();
-        // Table exists with the expected shape.
-        let group_cols = columns_of(&conn, "chat_groups");
-        for expected in ["id", "name", "sort_order", "created_at"] {
+
+        // All three new tables exist with the expected columns.
+        // (`system_prompt` was dropped in favour of `space_prompts.locked`
+        // — see `drop_spaces_system_prompt` in apply_migrations.)
+        let space_cols = columns_of(&conn, "spaces");
+        for expected in [
+            "id",
+            "name",
+            "slug",
+            "color",
+            "default_model",
+            "memory_path",
+            "sort_index",
+            "created_at",
+            "updated_at",
+        ] {
             assert!(
-                group_cols.iter().any(|c| c == expected),
-                "chat_groups.{expected} missing; got {group_cols:?}"
+                space_cols.iter().any(|c| c == expected),
+                "spaces.{expected} missing; got {space_cols:?}"
             );
         }
+        assert!(
+            !space_cols.iter().any(|c| c == "system_prompt"),
+            "spaces.system_prompt must not exist post-migration; got {space_cols:?}"
+        );
+
+        let attach_cols = columns_of(&conn, "space_attachments");
+        for expected in ["id", "space_id", "kind", "path", "added_at"] {
+            assert!(
+                attach_cols.iter().any(|c| c == expected),
+                "space_attachments.{expected} missing; got {attach_cols:?}"
+            );
+        }
+
+        let prompt_cols = columns_of(&conn, "space_prompts");
+        for expected in [
+            "id",
+            "space_id",
+            "prompt_slug",
+            "sort_index",
+            "added_at",
+            "locked",
+        ] {
+            assert!(
+                prompt_cols.iter().any(|c| c == expected),
+                "space_prompts.{expected} missing; got {prompt_cols:?}"
+            );
+        }
+
         // chats has the new column too.
-        assert!(columns_of(&conn, "chats").iter().any(|c| c == "group_id"));
+        assert!(columns_of(&conn, "chats").iter().any(|c| c == "space_id"));
     }
 
     #[test]
-    fn migrations_add_group_id_and_index_to_legacy_db() {
-        // Upgrade-install path: the legacy_db helper deliberately omits
-        // group_id (and the chat_groups table doesn't exist at all). After
-        // SCHEMA + apply_migrations, chats.group_id must be present AND the
-        // covering index must exist. The index lives in apply_migrations
-        // per the migration-ordering gotcha — this test pins that.
+    fn migrations_add_space_id_and_index_to_legacy_db() {
+        // Upgrade-install path: legacy_db has no space_id, no spaces tables.
+        // After SCHEMA + apply_migrations:
+        //   • chats.space_id must be present (added via ALTER TABLE)
+        //   • idx_chats_space must exist (created inside apply_migrations
+        //     because chats.space_id is migration-added — putting the index
+        //     in SCHEMA would fail on upgrade installs per the migration-
+        //     ordering gotcha)
+        //   • all three Spaces tables must exist (created by SCHEMA's
+        //     CREATE TABLE IF NOT EXISTS — they're new tables, so the
+        //     "no-op when table exists" behavior doesn't apply)
         let conn = legacy_db();
-        assert!(!columns_of(&conn, "chats").iter().any(|c| c == "group_id"));
+        assert!(!columns_of(&conn, "chats").iter().any(|c| c == "space_id"));
 
-        // Simulate the real startup sequence: SCHEMA first (CREATE TABLE IF
-        // NOT EXISTS for chat_groups is a no-op for chats since it already
-        // exists, but it does create chat_groups), then migrations.
         conn.execute_batch(SCHEMA)
             .expect("SCHEMA must apply over legacy DB");
         apply_migrations(&conn).expect("apply_migrations over legacy DB");
 
-        assert!(columns_of(&conn, "chats").iter().any(|c| c == "group_id"));
+        assert!(columns_of(&conn, "chats").iter().any(|c| c == "space_id"));
+
         let indices: Vec<String> = {
             let mut stmt = conn
                 .prepare(
@@ -1234,140 +1719,233 @@ mod tests {
                 .collect()
         };
         assert!(
-            indices.iter().any(|n| n == "idx_chats_group"),
-            "idx_chats_group missing after migration; got {indices:?}"
+            indices.iter().any(|n| n == "idx_chats_space"),
+            "idx_chats_space missing after migration; got {indices:?}"
         );
+
+        // The new tables were created by SCHEMA's CREATE TABLE IF NOT EXISTS.
+        for t in ["spaces", "space_attachments", "space_prompts"] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [t],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "table {t} missing after migration");
+        }
     }
 
     #[test]
-    fn move_chat_to_group_round_trips() {
-        // Mirrors `db_move_chat_to_group`'s SQL. Pin the round-trip so a
-        // refactor of the column type (e.g. switching to TEXT NOT NULL by
-        // accident) trips this.
+    fn deleting_a_space_cascades_to_its_attachments_and_prompts() {
+        // FK ON DELETE CASCADE: deleting a Space wipes its space_attachments
+        // and space_prompts rows. (Chats in the Space are handled by
+        // db_delete_space in app code, not by FK — see the
+        // deleting_a_space_unfiles_chats_without_deleting_them test below.)
         let conn = fresh_db();
         conn.execute(
-            "INSERT INTO chat_groups (id, name, sort_order) VALUES ('g1', 'Work', 0)",
+            "INSERT INTO spaces (id, name, slug) VALUES ('s1', 'Novel', 'novel')",
             [],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO chats (id, title, model) VALUES ('c1', 'Q2 plan', 'm')",
+            "INSERT INTO space_attachments (id, space_id, kind, path) \
+             VALUES ('sa1', 's1', 'folder', '/notes')",
             [],
         )
         .unwrap();
-        // Newly created chats start ungrouped.
-        let initial: Option<String> = conn
-            .query_row("SELECT group_id FROM chats WHERE id = 'c1'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert!(initial.is_none(), "new chats start with NULL group_id");
-
-        // File it into the group.
-        conn.execute("UPDATE chats SET group_id = ?2 WHERE id = ?1", ("c1", "g1"))
-            .unwrap();
-        let filed: Option<String> = conn
-            .query_row("SELECT group_id FROM chats WHERE id = 'c1'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(filed.as_deref(), Some("g1"));
-
-        // Unfile by setting back to NULL — same UPDATE shape, with a
-        // SQL NULL bound parameter as `db_move_chat_to_group` does.
-        let none_id: Option<String> = None;
         conn.execute(
-            "UPDATE chats SET group_id = ?2 WHERE id = ?1",
-            ("c1", &none_id),
+            "INSERT INTO space_attachments (id, space_id, kind, path) \
+             VALUES ('sa2', 's1', 'file', '/style.md')",
+            [],
         )
         .unwrap();
-        let unfiled: Option<String> = conn
-            .query_row("SELECT group_id FROM chats WHERE id = 'c1'", [], |r| {
-                r.get(0)
-            })
+        conn.execute(
+            "INSERT INTO space_prompts (id, space_id, prompt_slug, sort_index) \
+             VALUES ('sp1', 's1', 'tone-reframer', 0)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM spaces WHERE id = 's1'", [])
             .unwrap();
-        assert!(unfiled.is_none(), "passing None must NULL the column");
+
+        let attach_left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM space_attachments WHERE space_id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let prompt_left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM space_prompts WHERE space_id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            attach_left, 0,
+            "space_attachments must cascade on Space delete"
+        );
+        assert_eq!(prompt_left, 0, "space_prompts must cascade on Space delete");
     }
 
     #[test]
-    fn delete_group_unfiles_chats_without_deleting_them() {
-        // Mirrors `db_delete_group`. The transaction MUST unfile the chats
-        // (set group_id NULL) before dropping the group row, so a user
-        // doesn't lose chats when they remove a folder.
+    fn deleting_a_space_unfiles_chats_without_deleting_them() {
+        // Mirrors what `db_delete_space` will do in Phase 1. The chats.space_id
+        // FK declares ON DELETE SET NULL on fresh installs, but upgrade
+        // installs lack the FK (ALTER TABLE can't add one), so the command
+        // does the cleanup in app code. This test reproduces that shape.
+        //
+        // On fresh installs the FK does the SET NULL automatically; we still
+        // run the explicit UPDATE so the same transaction works on both DB
+        // shapes (and the test doesn't care which path it's on).
         let mut conn = fresh_db();
         conn.execute(
-            "INSERT INTO chat_groups (id, name, sort_order) VALUES ('g1', 'Work', 0)",
+            "INSERT INTO spaces (id, name, slug) VALUES ('s1', 'Novel', 'novel')",
             [],
         )
         .unwrap();
         for id in ["c1", "c2"] {
             conn.execute(
-                "INSERT INTO chats (id, title, model, group_id) \
-                 VALUES (?1, 'chat', 'm', 'g1')",
+                "INSERT INTO chats (id, title, model, space_id) \
+                 VALUES (?1, 'chat', 'm', 's1')",
                 [id],
             )
             .unwrap();
         }
-        // A third chat in NO group — must not be touched by the delete.
+        // A control chat in NO Space — must not be touched.
         conn.execute(
             "INSERT INTO chats (id, title, model) VALUES ('c3', 'lone', 'm')",
             [],
         )
         .unwrap();
 
-        // Same shape as db_delete_group.
         let tx = conn.transaction().unwrap();
         tx.execute(
-            "UPDATE chats SET group_id = NULL WHERE group_id = ?1",
-            ["g1"],
+            "UPDATE chats SET space_id = NULL WHERE space_id = ?1",
+            ["s1"],
         )
         .unwrap();
-        tx.execute("DELETE FROM chat_groups WHERE id = ?1", ["g1"])
+        tx.execute("DELETE FROM spaces WHERE id = ?1", ["s1"])
             .unwrap();
         tx.commit().unwrap();
 
-        // All chats survive — none cascade-deleted.
         let chat_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM chats", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(chat_count, 3, "deleting a group must not delete chats");
+        assert_eq!(chat_count, 3, "deleting a Space must not delete chats");
 
-        // c1 and c2 are now unfiled.
         let still_filed: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM chats WHERE group_id = 'g1'",
+                "SELECT COUNT(*) FROM chats WHERE space_id = 's1'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(still_filed, 0, "chats must be unfiled, not orphan-pointing");
+        assert_eq!(
+            still_filed, 0,
+            "chats must be unfiled from the Space, not orphan-pointing"
+        );
 
-        // Group is gone.
-        let groups: i64 = conn
-            .query_row("SELECT COUNT(*) FROM chat_groups", [], |r| r.get(0))
+        let spaces_left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM spaces", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(groups, 0);
+        assert_eq!(spaces_left, 0);
     }
 
     #[test]
-    fn upsert_chat_does_not_clobber_group_id_on_update() {
-        // CRITICAL: the SQL in `db_upsert_chat` deliberately omits
-        // `group_id` from the ON CONFLICT DO UPDATE SET clause — group
-        // membership is owned by db_move_chat_to_group. If a future
-        // refactor adds `group_id = excluded.group_id` to the SET list,
-        // every chat save from the UI would unfile chats whenever the JS
-        // ChatRow happened to be sent with group_id = null. This test
-        // pins that contract.
+    fn space_slug_is_unique() {
+        // The slug is what the default Space memory-file path is built from
+        // (~/Documents/Ekorbia/Spaces/<slug>/memory.md). Two Spaces with the
+        // same slug would collide on disk — UNIQUE on the column prevents it
+        // at the DB layer so app code can rely on collision-free slugs.
         let conn = fresh_db();
         conn.execute(
-            "INSERT INTO chat_groups (id, name, sort_order) VALUES ('g1', 'Work', 0)",
+            "INSERT INTO spaces (id, name, slug) VALUES ('s1', 'Novel', 'novel')",
             [],
         )
         .unwrap();
-        // Initial INSERT with a group — like a freshly-created chat.
+        let dup = conn.execute(
+            "INSERT INTO spaces (id, name, slug) VALUES ('s2', 'Novel 2', 'novel')",
+            [],
+        );
+        assert!(
+            dup.is_err(),
+            "duplicate slug must be rejected by UNIQUE constraint"
+        );
+    }
+
+    #[test]
+    fn space_prompts_unique_per_space_per_slug() {
+        // UNIQUE(space_id, prompt_slug) prevents double-pinning the same
+        // prompt to one Space. Double-pinning would have no user-visible
+        // effect but would double-attach the prompt to new chats in the
+        // Space, which is a bug.
+        //
+        // Pinning the SAME slug to a DIFFERENT Space must still work.
+        let conn = fresh_db();
         conn.execute(
-            "INSERT INTO chats (id, title, model, created_at, updated_at, tab_type, multi_models, group_id) \
-             VALUES ('c1', 'orig', 'm', 100, 100, NULL, NULL, 'g1') \
+            "INSERT INTO spaces (id, name, slug) VALUES ('s1', 'A', 'a')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spaces (id, name, slug) VALUES ('s2', 'B', 'b')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO space_prompts (id, space_id, prompt_slug, sort_index) \
+             VALUES ('sp1', 's1', 'tone-reframer', 0)",
+            [],
+        )
+        .unwrap();
+
+        // Same (space_id, slug) → rejected.
+        let dup = conn.execute(
+            "INSERT INTO space_prompts (id, space_id, prompt_slug, sort_index) \
+             VALUES ('sp2', 's1', 'tone-reframer', 1)",
+            [],
+        );
+        assert!(
+            dup.is_err(),
+            "duplicate (space_id, prompt_slug) must be rejected"
+        );
+
+        // Different space, same slug → allowed.
+        let cross_space = conn.execute(
+            "INSERT INTO space_prompts (id, space_id, prompt_slug, sort_index) \
+             VALUES ('sp3', 's2', 'tone-reframer', 0)",
+            [],
+        );
+        assert!(
+            cross_space.is_ok(),
+            "same slug across different Spaces must be allowed: {cross_space:?}"
+        );
+    }
+
+    #[test]
+    fn upsert_chat_does_not_clobber_space_id_on_update() {
+        // Same contract pinned for group_id — `db_upsert_chat` MUST omit
+        // `space_id` from the ON CONFLICT DO UPDATE SET clause. Space
+        // membership is owned by a dedicated move-to-Space command (Phase 1
+        // will name it `db_move_chat_to_space`); if a future refactor adds
+        // `space_id = excluded.space_id` to the SET list, every chat save
+        // would unfile chats whenever the JS ChatRow happens to be sent
+        // with space_id = null.
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO spaces (id, name, slug) VALUES ('s1', 'Novel', 'novel')",
+            [],
+        )
+        .unwrap();
+        // Initial INSERT with a space — like a freshly-created chat inside
+        // an active Space.
+        conn.execute(
+            "INSERT INTO chats (id, title, model, created_at, updated_at, tab_type, multi_models, space_id) \
+             VALUES ('c1', 'orig', 'm', 100, 100, NULL, NULL, 's1') \
              ON CONFLICT(id) DO UPDATE SET \
                 title = excluded.title, \
                 model = excluded.model, \
@@ -1378,7 +1956,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            conn.query_row("SELECT group_id FROM chats WHERE id = 'c1'", [], |r| r
+            conn.query_row("SELECT space_id FROM chats WHERE id = 'c1'", [], |r| r
                 .get::<_, Option<
                 String,
             >>(
@@ -1386,15 +1964,15 @@ mod tests {
             ))
             .unwrap()
             .as_deref(),
-            Some("g1")
+            Some("s1")
         );
 
-        // Now simulate a normal chat-save from the UI: same SQL, but
-        // group_id parameter is NULL (UI doesn't track filing). The
-        // UPDATE clause must NOT touch group_id.
+        // Now simulate a normal chat-save: same SQL, but space_id is NULL
+        // (UI doesn't track Space membership on the ChatRow). The UPDATE
+        // clause must NOT touch space_id.
         let none_id: Option<String> = None;
         conn.execute(
-            "INSERT INTO chats (id, title, model, created_at, updated_at, tab_type, multi_models, group_id) \
+            "INSERT INTO chats (id, title, model, created_at, updated_at, tab_type, multi_models, space_id) \
              VALUES ('c1', 'renamed', 'm', 100, 200, NULL, NULL, ?1) \
              ON CONFLICT(id) DO UPDATE SET \
                 title = excluded.title, \
@@ -1406,50 +1984,444 @@ mod tests {
         )
         .unwrap();
 
-        // Title updated, group_id preserved.
-        let (title, group_id): (String, Option<String>) = conn
+        let (title, space_id): (String, Option<String>) = conn
             .query_row(
-                "SELECT title, group_id FROM chats WHERE id = 'c1'",
+                "SELECT title, space_id FROM chats WHERE id = 'c1'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
         assert_eq!(title, "renamed", "title should update");
         assert_eq!(
-            group_id.as_deref(),
-            Some("g1"),
-            "group_id must be preserved across upsert"
+            space_id.as_deref(),
+            Some("s1"),
+            "space_id must be preserved across upsert"
         );
     }
 
     #[test]
-    fn deleting_a_chat_does_not_delete_its_group() {
-        // Defensive: the FK direction goes chats → chat_groups, not the
-        // other way around. Deleting a chat should NEVER take the group
-        // with it. (CASCADE on this FK would be wrong; SET NULL is what
-        // we declared in SCHEMA. ALTER-TABLE upgrade installs don't have
-        // the FK at all and rely on app code — see db_delete_group.)
+    fn deleting_a_chat_does_not_delete_its_space() {
+        // FK direction is chats → spaces. Deleting a chat must never take
+        // its Space with it. (CASCADE on this FK would wipe Spaces when
+        // their last chat was deleted; SET NULL on the chat side is
+        // declared in SCHEMA for fresh installs and handled in app code
+        // for upgrade installs.)
         let conn = fresh_db();
         conn.execute(
-            "INSERT INTO chat_groups (id, name, sort_order) VALUES ('g1', 'Work', 0)",
+            "INSERT INTO spaces (id, name, slug) VALUES ('s1', 'Novel', 'novel')",
             [],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO chats (id, title, model, group_id) \
-             VALUES ('c1', 'chat', 'm', 'g1')",
+            "INSERT INTO chats (id, title, model, space_id) \
+             VALUES ('c1', 'chat', 'm', 's1')",
             [],
         )
         .unwrap();
         conn.execute("DELETE FROM chats WHERE id = 'c1'", [])
             .unwrap();
-        let groups: i64 = conn
+        let spaces: i64 = conn
+            .query_row("SELECT COUNT(*) FROM spaces WHERE id = 's1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(spaces, 1, "Space must survive chat deletion");
+    }
+
+    #[test]
+    fn migrations_no_op_on_fresh_db_for_spaces_columns() {
+        // Idempotency for the Spaces migration block. Running
+        // apply_migrations twice must not error and must converge on the
+        // same column set. (Both the column add and the index creation use
+        // IF NOT EXISTS / introspection-based gating, so this is just a
+        // belt-and-braces pin.)
+        let conn = fresh_db();
+        apply_migrations(&conn).expect("first run on fresh DB");
+        apply_migrations(&conn).expect("second run on fresh DB");
+
+        assert!(columns_of(&conn, "chats").iter().any(|c| c == "space_id"));
+        let indices: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type = 'index' AND tbl_name = 'chats'",
+                )
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        assert!(indices.iter().any(|n| n == "idx_chats_space"));
+    }
+
+    // ── Groups → Spaces migration ───────────────────────────────────────────
+    //
+    // These tests pin the contract documented at the top of
+    // `migrate_groups_to_spaces` AND the cleanup pass in
+    // `drop_chat_groups_artifacts`:
+    //   • Fresh DB (no groups, no Spaces) → no-op + flag set
+    //   • Groups present, Spaces empty → 1:1 conversion + chat filings
+    //     transferred from group_id to space_id, then chat_groups +
+    //     chats.group_id dropped
+    //   • Group name collides with an existing Space name → slug dedup
+    //     produces a unique row (UNIQUE constraint on spaces.slug)
+    //   • Chat has BOTH group_id AND space_id (dev-only collision case)
+    //     → space_id wins, group_id is cleared
+    //   • Re-running on an already-migrated DB → no-op via the flag
+
+    /// Helper: count rows in a single-column-COUNT query.
+    fn count(conn: &Connection, sql: &str) -> i64 {
+        conn.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    /// Helper: read a chat's space_id. (`group_id` is dropped by the
+    /// migration so the post-migration assertion only looks at space_id.)
+    fn chat_space_id(conn: &Connection, chat_id: &str) -> Option<String> {
+        conn.query_row("SELECT space_id FROM chats WHERE id = ?1", [chat_id], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    }
+
+    /// Construct an upgrade-install DB shape: 0.4.0 SCHEMA + the legacy
+    /// `chat_groups` table + `chats.group_id` column added back via
+    /// ALTER TABLE. This mirrors what a user upgrading from 0.2.0 / 0.3.0
+    /// would land on at apply_migrations entry. Used by every migration
+    /// test below.
+    ///
+    /// The fresh_db() helper already ran SCHEMA (which post-0.4.0 omits
+    /// these artifacts), so we add them back here to simulate the
+    /// pre-migration state.
+    fn upgrade_install_db() -> Connection {
+        let conn = fresh_db();
+        conn.execute("ALTER TABLE chats ADD COLUMN group_id TEXT", [])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE chat_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch())
+            )",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn migrate_groups_to_spaces_is_a_noop_on_fresh_db() {
+        // Fresh-install DB: post-0.4.0 SCHEMA has no chat_groups table,
+        // no chats.group_id column, no spaces rows. The migration's
+        // table_exists guard short-circuits and sets the flag without
+        // touching anything.
+        let conn = fresh_db();
+        apply_migrations(&conn).expect("apply_migrations on fresh db");
+
+        // No Spaces created.
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM spaces"), 0);
+        // chat_groups table never existed on a fresh install (SCHEMA
+        // doesn't create it post-0.4.0); the drop-artifacts pass leaves
+        // that state unchanged.
+        assert!(
+            !table_exists(&conn, "chat_groups").unwrap(),
+            "fresh install must not have chat_groups",
+        );
+        // Flag is set so a re-run skips at the top.
+        assert_eq!(
+            get_setting(&conn, "groups_to_spaces_migrated_v1").as_deref(),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn migrate_groups_to_spaces_creates_spaces_and_transfers_filings() {
+        // Upgrade-install DB with two groups and two chats, each filed
+        // into a group. Spaces table is empty. Apply migrations; expect:
+        //   • Two new Space rows mirroring the groups (same id, name,
+        //     sort_index = group.sort_order)
+        //   • Both chats now have space_id = original group_id
+        //   • chats.group_id column and chat_groups table are dropped
+        let conn = upgrade_install_db();
+        conn.execute(
+            "INSERT INTO chat_groups (id, name, sort_order, created_at) \
+             VALUES ('g1', 'Work', 0, 100), ('g2', 'Novel', 1, 200)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chats (id, title, model, created_at, updated_at, group_id) \
+             VALUES \
+                ('c1', 'Q2 plan', 'm', 100, 100, 'g1'), \
+                ('c2', 'Chapter 1', 'm', 200, 200, 'g2')",
+            [],
+        )
+        .unwrap();
+
+        apply_migrations(&conn).expect("apply_migrations");
+
+        // Two Spaces materialised, same ids.
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM spaces"), 2);
+        let (work_name, work_sort): (String, i64) = conn
             .query_row(
-                "SELECT COUNT(*) FROM chat_groups WHERE id = 'g1'",
+                "SELECT name, sort_index FROM spaces WHERE id = 'g1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(work_name, "Work");
+        assert_eq!(work_sort, 0, "sort_index = original sort_order");
+
+        // Chat filings transferred.
+        assert_eq!(
+            chat_space_id(&conn, "c1").as_deref(),
+            Some("g1"),
+            "c1: space populated from migrated group",
+        );
+        assert_eq!(
+            chat_space_id(&conn, "c2").as_deref(),
+            Some("g2"),
+            "c2: space populated from migrated group",
+        );
+
+        // Artifacts dropped.
+        assert!(
+            !columns_of(&conn, "chats").iter().any(|c| c == "group_id"),
+            "chats.group_id must be dropped after migration",
+        );
+        assert!(
+            !table_exists(&conn, "chat_groups").unwrap(),
+            "chat_groups table must be dropped after migration",
+        );
+    }
+
+    #[test]
+    fn migrate_groups_to_spaces_dedupes_slug_on_name_collision() {
+        // User has a Space called "Novel" (slug "novel") AND a chat group
+        // also called "Novel". The migration should create a SECOND Space
+        // row (not collide on UNIQUE slug). The new Space's slug must be
+        // "novel-2" — first available suffix from `dedupe_slug_for_migration`.
+        let conn = upgrade_install_db();
+        conn.execute(
+            "INSERT INTO spaces (id, name, slug, sort_index, created_at, updated_at) \
+             VALUES ('existing-novel', 'Novel', 'novel', 0, 50, 50)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chat_groups (id, name, sort_order, created_at) \
+             VALUES ('group-novel', 'Novel', 1, 100)",
+            [],
+        )
+        .unwrap();
+
+        apply_migrations(&conn).expect("apply_migrations");
+
+        // Both Spaces present, distinct slugs.
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM spaces"), 2);
+        let new_slug: String = conn
+            .query_row(
+                "SELECT slug FROM spaces WHERE id = 'group-novel'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(groups, 1, "group must survive chat deletion");
+        assert_eq!(new_slug, "novel-2", "dedup picks the next free suffix");
+    }
+
+    #[test]
+    fn migrate_groups_to_spaces_keeps_space_id_on_collision() {
+        // Dev-DB collision case (no public user can reach this state
+        // because the additive UI was never released). A chat has BOTH
+        // group_id and space_id set. The migration must keep the
+        // space_id and clear the group_id — the explicit Space pick wins.
+        let conn = upgrade_install_db();
+        conn.execute(
+            "INSERT INTO spaces (id, name, slug, sort_index, created_at, updated_at) \
+             VALUES ('s-novel', 'Novel', 'novel', 0, 50, 50)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chat_groups (id, name, sort_order, created_at) \
+             VALUES ('g-research', 'Research', 0, 100)",
+            [],
+        )
+        .unwrap();
+        // Chat is filed into BOTH the Novel space AND the Research group.
+        conn.execute(
+            "INSERT INTO chats (id, title, model, created_at, updated_at, group_id, space_id) \
+             VALUES ('c1', 'Chapter draft', 'm', 100, 100, 'g-research', 's-novel')",
+            [],
+        )
+        .unwrap();
+
+        apply_migrations(&conn).expect("apply_migrations");
+
+        // Space filing wins; group filing cleared.
+        assert_eq!(
+            chat_space_id(&conn, "c1").as_deref(),
+            Some("s-novel"),
+            "space_id preserved on collision (the explicit pick wins)",
+        );
+        // A Space for the migrated group still gets created — the
+        // migration converts EVERY group to a Space, even if a chat
+        // didn't end up filed into it (the user might re-file later).
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM spaces WHERE id = 'g-research'"),
+            1
+        );
+    }
+
+    #[test]
+    fn migrate_groups_to_spaces_is_idempotent_via_flag() {
+        // After a successful first migration, calling apply_migrations
+        // again must NOT create duplicate Spaces or re-touch chat
+        // filings. The settings-key flag is the primary guard; the
+        // per-Space existence check is the secondary one.
+        let conn = upgrade_install_db();
+        conn.execute(
+            "INSERT INTO chat_groups (id, name, sort_order, created_at) \
+             VALUES ('g1', 'Work', 0, 100)",
+            [],
+        )
+        .unwrap();
+
+        // First run migrates.
+        apply_migrations(&conn).expect("first migration");
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM spaces"), 1);
+
+        // Modify the migrated Space to detect accidental over-writes.
+        conn.execute("UPDATE spaces SET name = 'Renamed' WHERE id = 'g1'", [])
+            .unwrap();
+
+        // Second run: same SQL chain. The migration must short-circuit
+        // — both via the settings flag AND because the chat_groups table
+        // is already gone (drop_chat_groups_artifacts dropped it on the
+        // first run).
+        apply_migrations(&conn).expect("second migration");
+        let name: String = conn
+            .query_row("SELECT name FROM spaces WHERE id = 'g1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "Renamed", "second run must not overwrite Spaces");
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM spaces"), 1);
+    }
+
+    #[test]
+    fn migrate_groups_to_spaces_idempotent_even_without_flag() {
+        // Defence-in-depth: if the settings flag is somehow cleared
+        // (corruption, manual edit), re-running the migration must still
+        // not produce duplicates. After the first run the chat_groups
+        // table is dropped, so the migration's table_exists guard makes
+        // the function fast-return + re-set the flag.
+        let conn = upgrade_install_db();
+        conn.execute(
+            "INSERT INTO chat_groups (id, name, sort_order, created_at) \
+             VALUES ('g1', 'Work', 0, 100)",
+            [],
+        )
+        .unwrap();
+        apply_migrations(&conn).expect("first migration");
+
+        // Clear the flag to simulate corruption / manual reset.
+        conn.execute(
+            "DELETE FROM app_settings WHERE key = 'groups_to_spaces_migrated_v1'",
+            [],
+        )
+        .unwrap();
+
+        // Re-run. chat_groups is gone (dropped by the first run); the
+        // table_exists guard inside migrate_groups_to_spaces should
+        // short-circuit and re-set the flag.
+        apply_migrations(&conn).expect("re-run after flag cleared");
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM spaces"),
+            1,
+            "re-run with chat_groups already dropped must not duplicate Spaces",
+        );
+        assert_eq!(
+            get_setting(&conn, "groups_to_spaces_migrated_v1").as_deref(),
+            Some("1")
+        );
+    }
+
+    // ── Locked pinned prompts: schema migration ────────────────────────────
+
+    #[test]
+    fn fresh_install_has_no_system_prompt_and_has_locked_column() {
+        // SCHEMA + apply_migrations on a fresh DB lands the modern shape:
+        // spaces has no system_prompt column, space_prompts has the
+        // locked column. The drop_spaces_system_prompt migration is a
+        // no-op on a fresh install (column was never created by SCHEMA);
+        // the add_locked_to_space_prompts migration is also a no-op
+        // (SCHEMA already created the column). Both should still
+        // converge on the right shape.
+        let conn = fresh_db();
+        apply_migrations(&conn).expect("apply_migrations on fresh db");
+
+        let space_cols = columns_of(&conn, "spaces");
+        assert!(
+            !space_cols.iter().any(|c| c == "system_prompt"),
+            "fresh install must not have spaces.system_prompt; got {space_cols:?}"
+        );
+        let prompt_cols = columns_of(&conn, "space_prompts");
+        assert!(
+            prompt_cols.iter().any(|c| c == "locked"),
+            "fresh install must have space_prompts.locked; got {prompt_cols:?}"
+        );
+    }
+
+    #[test]
+    fn upgrade_install_drops_system_prompt_and_adds_locked() {
+        // Construct an "intermediate 0.4.0 build" DB shape: SCHEMA-built
+        // tables, then we add back `spaces.system_prompt` and remove
+        // `space_prompts.locked` via raw ALTER. apply_migrations should
+        // bring it back in line with the modern shape.
+        let conn = fresh_db();
+        // Add system_prompt back.
+        conn.execute("ALTER TABLE spaces ADD COLUMN system_prompt TEXT", [])
+            .unwrap();
+        assert!(columns_of(&conn, "spaces")
+            .iter()
+            .any(|c| c == "system_prompt"));
+        // Drop locked. (SQLite 3.35+ supports DROP COLUMN.)
+        conn.execute("ALTER TABLE space_prompts DROP COLUMN locked", [])
+            .unwrap();
+        assert!(!columns_of(&conn, "space_prompts")
+            .iter()
+            .any(|c| c == "locked"));
+
+        // Now run the migration — should converge.
+        apply_migrations(&conn).expect("apply_migrations on intermediate-shape db");
+
+        assert!(
+            !columns_of(&conn, "spaces")
+                .iter()
+                .any(|c| c == "system_prompt"),
+            "system_prompt must be dropped after migration"
+        );
+        assert!(
+            columns_of(&conn, "space_prompts")
+                .iter()
+                .any(|c| c == "locked"),
+            "locked must be added after migration"
+        );
+    }
+
+    #[test]
+    fn locked_migration_is_idempotent() {
+        // Both `add_locked_to_space_prompts` (PRAGMA-gated) and
+        // `drop_spaces_system_prompt` (column-existence gated) must be
+        // safe to run twice. The locked-pin work has no settings flag
+        // — it relies entirely on column-presence checks.
+        let conn = fresh_db();
+        apply_migrations(&conn).expect("first apply");
+        apply_migrations(&conn).expect("second apply must not error");
+
+        let space_cols = columns_of(&conn, "spaces");
+        assert!(!space_cols.iter().any(|c| c == "system_prompt"));
+        let prompt_cols = columns_of(&conn, "space_prompts");
+        assert!(prompt_cols.iter().any(|c| c == "locked"));
     }
 }

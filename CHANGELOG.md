@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Replaced chat groups with Spaces.** A Space is a named workspace
+  that bundles a default model, optional pinned files and folders,
+  optional pinned prompts (any of which can be **locked** to enforce
+  always-attached + composer-undetachable status), and an optional
+  Space-scoped memory file.
+
 ## [0.3.0] - 2026-06-03
 
 First release candidate for cross-platform support. macOS remains the

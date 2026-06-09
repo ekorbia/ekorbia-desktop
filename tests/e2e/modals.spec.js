@@ -58,16 +58,19 @@ test.describe("modal z-index contracts", () => {
 });
 
 test.describe("OnboardingTour navigation by click", () => {
-  test("clicking Next 4× then Done calls onClose exactly once", async ({ page }) => {
+  test("clicking Next through every slide then Done calls onClose exactly once", async ({ page }) => {
     await page.evaluate(() =>
       window.__TEST_MOUNT("OnboardingTour", { open: true })
     );
 
-    // 5 slides. The button text changes from "Next" → ... → "Done" on
-    // the last slide. We click the *last* visible button each time
-    // (the modal has Skip + Next; Skip is leftmost). The "Next" / "Done"
-    // button is always the rightmost in the toolbar.
-    for (let i = 0; i < 5; i++) {
+    // Walk every slide. The button text changes from "Next" → ... →
+    // "Done" on the last slide. We click the *last* visible button each
+    // time (the modal has Skip + Next; Skip is leftmost). The
+    // "Next" / "Done" button is always the rightmost in the toolbar.
+    // Loop bound is generous (10) so a future slide addition doesn't
+    // break this test the way the Spaces slide did — the early-break on
+    // onClose handles termination.
+    for (let i = 0; i < 10; i++) {
       // Find a button matching either "Next" or "Done" / "Got it" /
       // "Get started" — onboarding copy varies, so be flexible.
       const next = page

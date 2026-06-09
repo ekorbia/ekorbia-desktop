@@ -32,3 +32,38 @@ const T = {
   sans: '"Inter", system-ui, sans-serif',
   serif: '"Instrument Serif", Georgia, serif',
 };
+
+// ─── Space color palette ────────────────────────────────────
+//
+// Maps `spaces.color` palette keys (canonical strings stored in the DB)
+// to hex values pulled from `T`. Both the create modal's swatch grid and
+// the sidebar's Space-row color dot read from this map so a Space tinted
+// `"amber"` renders the same conceptual color whichever screen surfaces
+// it. Adding a new palette entry requires only adding it here — the
+// modal grid and sidebar dot both iterate Object.keys(SPACE_COLORS).
+//
+// Order matters: it's the order swatches appear in the create modal.
+// Earthy → cool → cool-cool → warm → warm-cool → warm-warm → red mirrors
+// the rough hue wheel for predictable visual scanning.
+const SPACE_COLORS = {
+  amber:  T.amber,
+  yellow: T.yellow,
+  green:  T.green,
+  teal:   T.teal,
+  blue:   T.blue,
+  purple: T.purple,
+  red:    T.red,
+};
+
+// Resolve a Space's color key (possibly null, possibly unknown after a
+// future palette purge) to a renderable hex. `null` or unknown keys fall
+// through to the muted fg2 so the row still reads as a Space.
+function spaceColorHex(key) {
+  if (!key) return T.fg2;
+  return SPACE_COLORS[key] || T.fg2;
+}
+
+// Expose globally — no bundler, components reference SPACE_COLORS and
+// spaceColorHex directly without import.
+window.SPACE_COLORS = SPACE_COLORS;
+window.spaceColorHex = spaceColorHex;

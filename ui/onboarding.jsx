@@ -206,6 +206,31 @@ function OnboardingTour({ open, onClose }) {
       ),
     },
     {
+      // New in 0.4: Spaces. The "+ New Space" affordance lives at the top
+      // of the sidebar — discoverable on first launch, but the concept
+      // deserves a dedicated slide so users understand what they're for.
+      title: "Group related chats into Spaces",
+      body: (
+        <>
+          <FeatureRow
+            icon={<I.Folder size={16} />}
+            title="What's a Space?"
+            text="A named workspace that bundles a system prompt, a default model, optional pinned files and folders, optional pinned prompts, and an optional memory file. New chats inside a Space inherit all of it automatically."
+          />
+          <FeatureRow
+            icon={<I.Plus size={16} />}
+            title="Create one from the sidebar"
+            text='Click "+ New Space" at the top. Name it ("Novel", "Therapy notes", "Q4 plans"), pick a color, save. Right-click any Space row for "Edit settings…" to fill in the system prompt, default model, pinned attachments, and pinned prompts.'
+          />
+          <FeatureRow
+            icon={<I.File size={16} />}
+            title="Filter without forgetting"
+            text='Click a Space to filter the chat list to just that workspace; click "All chats" at the top to see everything. Your active Space sticks across launches so you land back where you left off.'
+          />
+        </>
+      ),
+    },
+    {
       title: "You're ready",
       body: (
         <>

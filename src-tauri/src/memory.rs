@@ -167,3 +167,71 @@ pub(crate) fn memory_open(app: tauri::AppHandle) -> Result<(), String> {
     }
     spawn_opener(&path, /* reveal */ false)
 }
+
+// ── Space-scoped memory (Phase 5) ──────────────────────────────────────────
+//
+// A Space can optionally carry its own `memory.md` whose path lives in
+// `spaces.memory_path`. The UI looks it up from the cached Space row,
+// hands the path to these commands, and the send pipeline appends the
+// Space memory AFTER the global memory so Space context overlays on top
+// without clobbering the user's global preferences.
+//
+// These take the path as a parameter rather than reading a setting
+// because the spaces table itself is the source of truth — wrapping that
+// indirection through `app_settings` would just add an unnecessary
+// round-trip. The trust model matches `memory_read` / `memory_open`: the
+// user chose the path via the file picker, so we read/open it as-is.
+
+/// Read a Space's memory file at the given absolute path. Returns:
+///   • `Some(s)` when the file exists and is non-empty after trim
+///   • `None`    when the file is missing, empty, or the path is empty
+///
+/// Mirrors `memory_read`'s contract so the UI's send pipeline can use the
+/// same "None → omit the system message" code path for both files.
+#[tauri::command]
+pub(crate) fn space_memory_read(path: String) -> Result<Option<String>, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    match std::fs::read_to_string(trimmed) {
+        Ok(s) => {
+            if s.trim().is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(s))
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("read Space memory file: {e}")),
+    }
+}
+
+/// Open a Space's memory file in the OS default editor (when `reveal` is
+/// false) or reveal it in the file manager (when true). When opening for
+/// edit and the file doesn't exist yet, creates the parent directory and
+/// seeds a small template — same UX as `memory_open` so a fresh Space
+/// gets editable empty memory on first click.
+///
+/// Refuses an empty path with a clear error so the UI can show a toast
+/// rather than silently no-oping.
+#[tauri::command]
+pub(crate) fn space_memory_open(path: String, reveal: bool) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Space has no memory file set — pick one first".to_string());
+    }
+    if !reveal {
+        let p = std::path::Path::new(trimmed);
+        if !p.exists() {
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("create Space memory dir: {e}"))?;
+            }
+            let template = "# Space memory\n\n- \n";
+            std::fs::write(trimmed, template)
+                .map_err(|e| format!("create Space memory file: {e}"))?;
+        }
+    }
+    spawn_opener(trimmed, reveal)
+}

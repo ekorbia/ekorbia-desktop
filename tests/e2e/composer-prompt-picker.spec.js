@@ -53,6 +53,10 @@ async function mountWithPrompts(page, opts = {}) {
         ],
         onPickPrompt: onPickSpy,
         attachedPrompts: init.attachedPrompts || [],
+        // Functions don't survive page.evaluate serialization, so the
+        // test passes locked slugs as a plain string[] and we rebuild
+        // the Set on the browser side before handing it to Composer.
+        lockedPromptSlugs: new Set(init.lockedPromptSlugs || []),
         onDetachPrompt: () => undefined,
         attachments: [],
         onAttachFile: () => undefined,
@@ -141,5 +145,44 @@ test.describe("Composer prompt slash picker", () => {
     // Beta is attached — hidden from picker (still rendered as a chip
     // above the textarea, but not as a picker row).
     await expect(picker.getByText("Beta rubber duck")).not.toBeVisible();
+  });
+
+  // ── Locked pinned prompt chips ────────────────────────────────────────
+  // Space-pinned prompts marked `locked=1` in `space_prompts` cannot be
+  // detached from a single chat — main.jsx resolves the locked slug set
+  // for the active chat's Space and passes it through `lockedPromptSlugs`.
+  // The Composer's contract: a chip whose `p.id` (= slug) is in that set
+  // has its × button suppressed and a small lock glyph in its place.
+
+  test("locked attached prompt renders a lock glyph and no × button", async ({ page }) => {
+    await mountWithPrompts(page, {
+      attachedPrompts: [
+        { id: "beta", name: "Beta rubber duck", favorite: "red" },
+      ],
+      lockedPromptSlugs: ["beta"],
+    });
+    const chip = page.locator('[data-attached-prompt-chip="beta"]');
+    await expect(chip).toBeVisible();
+    await expect(chip).toHaveAttribute("data-locked", "1");
+    // The × button is gone, replaced by the lock glyph. We assert on
+    // BOTH so a regression that simply removes the × (without showing
+    // the lock) still fails.
+    await expect(chip.locator('[data-attached-prompt-detach="beta"]')).toHaveCount(0);
+    await expect(chip.locator('[data-attached-prompt-lock="beta"]')).toHaveCount(1);
+  });
+
+  test("unlocked attached prompt still has its × detach button", async ({ page }) => {
+    await mountWithPrompts(page, {
+      attachedPrompts: [
+        { id: "alpha", name: "Alpha translator", favorite: null },
+      ],
+      // No lockedPromptSlugs → empty Set on the prop, chip is unlocked.
+    });
+    const chip = page.locator('[data-attached-prompt-chip="alpha"]');
+    await expect(chip).toBeVisible();
+    await expect(chip).toHaveAttribute("data-locked", "0");
+    // × present, lock glyph absent — symmetric with the locked case.
+    await expect(chip.locator('[data-attached-prompt-detach="alpha"]')).toHaveCount(1);
+    await expect(chip.locator('[data-attached-prompt-lock="alpha"]')).toHaveCount(0);
   });
 });

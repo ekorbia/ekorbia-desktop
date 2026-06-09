@@ -28,6 +28,7 @@
 
 # Power features
 
+- [Spaces — workspaces for related chats](./spaces.md)
 - [Prompts library](./prompts.md)
 - [Watches](./watches.md)
 - [Quick-query overlay](./overlay.md)
