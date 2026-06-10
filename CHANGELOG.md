@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional pinned prompts (any of which can be **locked** to enforce
   always-attached + composer-undetachable status), and an optional
   Space-scoped memory file.
+- **All UI assets are now vendored — the app runs fully offline.**
+  React, ReactDOM, Babel-standalone, marked, highlight.js, DOMPurify,
+  and the Inter / JetBrains Mono / Instrument Serif fonts now ship
+  inside the app under `ui/vendor/` (pinned versions + checksums in
+  `ui/vendor/README.md`) instead of loading from unpkg.com and Google
+  Fonts at runtime. The only network traffic Ekorbia produces is to
+  the local Ollama server on `127.0.0.1:11434`. React also moves from
+  the development UMD build to the production build (smaller, faster;
+  React errors now surface as minified error codes — see
+  react.dev/errors). A new Playwright spec (`offline-boot.spec.js`)
+  boots the UI with all non-localhost requests blocked and fails if
+  any external request is even attempted.
 
 ## [0.3.0] - 2026-06-03
 

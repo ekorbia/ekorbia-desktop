@@ -4,13 +4,13 @@
 <meta charset="utf-8" />
 <title>Ekorbia — Local AI Desktop</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif&display=swap" rel="stylesheet">
+<!-- Self-hosted fonts (Inter, JetBrains Mono, Instrument Serif) — see
+     ui/vendor/README.md for versions/provenance. No network requests. -->
+<link href="vendor/fonts/fonts.css" rel="stylesheet">
 <!-- highlight.js github-dark theme for code blocks inside assistant
      messages. Pinned to the same version as the JS bundle below so theme
      classnames stay in sync (hljs-keyword, hljs-string, etc.). -->
-<link href="https://unpkg.com/@highlightjs/cdn-assets@11.10.0/styles/github-dark.min.css" rel="stylesheet">
+<link href="vendor/github-dark.min.css" rel="stylesheet">
 <style>
   html, body { margin: 0; padding: 0; height: 100%; }
   body {
@@ -280,18 +280,23 @@
 <body>
 <div id="root"></div>
 
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+<!-- All third-party libraries are vendored under ui/vendor/ (pinned
+     versions + checksums in ui/vendor/README.md) so the app boots and
+     runs fully offline — the only network traffic is local Ollama.
+     React is the production UMD build (errors surface as minified
+     react.dev/errors codes). No crossorigin attribute: these are plain
+     same-origin loads under the tauri:// protocol. -->
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/babel.min.js"></script>
 <!-- Markdown rendering pipeline for assistant messages (Phase 1a). Loaded
      unconditionally so any chat the user opens has them available; the
-     MarkdownMessage component degrades to plaintext if a library failed
-     to load (offline first run with no cached unpkg). The cdn-assets
-     highlight.js bundle is the "common" pack — ~35 popular languages —
-     not the full 190-language registry. -->
-<script src="https://unpkg.com/marked@13.0.0/marked.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@highlightjs/cdn-assets@11.10.0/highlight.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/dompurify@3.1.6/dist/purify.min.js" crossorigin="anonymous"></script>
+     MarkdownMessage component still degrades to plaintext if a library
+     fails to load. The highlight.js bundle is the cdn-assets "common"
+     pack — ~35 popular languages — not the full 190-language registry. -->
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/highlight.min.js"></script>
+<script src="vendor/purify.min.js"></script>
 
 <!-- Pure helpers extracted from the JSX so they can be unit-tested under
      Node. Loads as a plain script (not text/babel) so it's synchronous

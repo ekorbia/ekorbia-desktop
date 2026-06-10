@@ -34,9 +34,9 @@ cargo about generate --format json | python3 scripts/render-third-party-licenses
 ```
 
 Front-end libraries (React, ReactDOM, Babel-standalone, marked, highlight.js,
-DOMPurify, Google Fonts) are loaded at runtime from CDN (unpkg / Google
-Fonts) and are not vendored into the repository. Their licenses live with
-the upstream projects.
+DOMPurify) and fonts (Inter, JetBrains Mono, Instrument Serif) are vendored
+under `ui/vendor/` so the app runs fully offline. Their licenses are
+collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSES.md).
 
 ---
 

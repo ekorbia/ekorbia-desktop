@@ -7,8 +7,8 @@
 <!-- Path note: this file lives at /tests/e2e/fixtures/playwright.html and
      is served by Playwright's webserver rooted at the repo root, so every
      resource reference uses an absolute path (/ui/*, /tests/e2e/*). -->
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link href="https://unpkg.com/@highlightjs/cdn-assets@11.10.0/styles/github-dark.min.css" rel="stylesheet">
+<link href="/ui/vendor/fonts/fonts.css" rel="stylesheet">
+<link href="/ui/vendor/github-dark.min.css" rel="stylesheet">
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #0c0c0e; color: #e6e3dc; font-family: Inter, system-ui, sans-serif; }
   #test-root { width: 100vw; height: 100vh; }
@@ -113,13 +113,16 @@
   };
 </script>
 
-<!-- ─── Same external deps as production /ui/index.html ───────────────── -->
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/marked@13.0.0/marked.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@highlightjs/cdn-assets@11.10.0/highlight.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/dompurify@3.1.6/dist/purify.min.js" crossorigin="anonymous"></script>
+<!-- ─── Same vendored deps as production /ui/index.html ─────────────────
+     Identical files, not parallel copies: the fixture exercises the exact
+     bytes the app ships (production React included), and tests run fully
+     offline. See ui/vendor/README.md for versions + checksums. -->
+<script src="/ui/vendor/react.production.min.js"></script>
+<script src="/ui/vendor/react-dom.production.min.js"></script>
+<script src="/ui/vendor/babel.min.js"></script>
+<script src="/ui/vendor/marked.min.js"></script>
+<script src="/ui/vendor/highlight.min.js"></script>
+<script src="/ui/vendor/purify.min.js"></script>
 
 <!-- ─── Production code under test, in the same order as /ui/index.html ─ -->
 <script src="/ui/utils.js"></script>
