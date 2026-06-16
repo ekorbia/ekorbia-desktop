@@ -20,6 +20,7 @@ const {
   formatBytes,
   accumulatePullProgress,
   applyThinkPref,
+  recommendGemmaModel,
   ekFilesGroupByPath,
   bucketChatsByDate,
   instantiateSpacePinnedAttachments,
@@ -787,4 +788,50 @@ test("applyThinkPref: preserves other body fields and returns same object", () =
   assert.equal(out.model, "qwen3.5:2b");
   assert.equal(out.stream, true);
   assert.deepEqual(out.messages, [{ role: "user", content: "hi" }]);
+});
+
+// ── recommendGemmaModel ──────────────────────────────────────────────────
+
+const GiB = 1024 * 1024 * 1024;
+
+test("recommendGemmaModel: unknown RAM → safe e4b default, flagged", () => {
+  for (const v of [null, undefined, 0]) {
+    const r = recommendGemmaModel(v);
+    assert.equal(r.model, "gemma4:e4b");
+    assert.equal(r.unknownRam, true);
+    assert.equal(r.lowRam, false);
+  }
+});
+
+test("recommendGemmaModel: 8 GB machine → e2b with low-RAM flag", () => {
+  const r = recommendGemmaModel(8 * GiB);
+  assert.equal(r.model, "gemma4:e2b");
+  assert.equal(r.lowRam, true);
+  assert.equal(r.unknownRam, false);
+});
+
+test("recommendGemmaModel: 16 GB → e4b, no low-RAM flag", () => {
+  const r = recommendGemmaModel(16 * GiB);
+  assert.equal(r.model, "gemma4:e4b");
+  assert.equal(r.lowRam, false);
+});
+
+test("recommendGemmaModel: 32 GB → 12b", () => {
+  assert.equal(recommendGemmaModel(32 * GiB).model, "gemma4:12b");
+});
+
+test("recommendGemmaModel: 64 GB → 26b", () => {
+  assert.equal(recommendGemmaModel(64 * GiB).model, "gemma4:26b");
+});
+
+test("recommendGemmaModel: 128 GB → 31b", () => {
+  assert.equal(recommendGemmaModel(128 * GiB).model, "gemma4:31b");
+});
+
+test("recommendGemmaModel: every result carries a download size + reason", () => {
+  for (const gib of [4, 8, 16, 32, 64, 128]) {
+    const r = recommendGemmaModel(gib * GiB);
+    assert.match(r.approx, /\d/);
+    assert.ok(r.reason && r.reason.length > 0);
+  }
 });

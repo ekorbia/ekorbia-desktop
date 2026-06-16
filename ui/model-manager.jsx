@@ -40,15 +40,16 @@ function ekPullsSubscribe(fn) {
   return () => EK_PULL_LISTENERS.delete(fn);
 }
 
-// Start pulling `model`. Resolves true when Ollama reports
-// {"status":"success"}; false on error, cancel, or early stream end.
-// opts.silent suppresses the completion/error toasts (the guided
-// first-run renders its own status and doesn't want double feedback).
+// Start pulling `model`. Resolves { ok, error }: ok=true when Ollama
+// reports {"status":"success"}; ok=false on error, cancel, or early stream
+// end, with `error` carrying the reason (Ollama's HTTP/in-band message) for
+// callers that want to surface it. opts.silent suppresses the
+// completion/error toasts (the guided first-run renders its own status).
 async function ekPullModel(model, opts) {
   const silent = !!(opts && opts.silent);
   const invoke = getInvoke();
   model = (model || "").trim();
-  if (!invoke || !model) return false;
+  if (!invoke || !model) return { ok: false, error: "Ollama is not available" };
   if (EK_PULL_PROMISES.has(model)) return EK_PULL_PROMISES.get(model);
 
   const requestId = `pull:${model}:${genId()}`;
@@ -84,11 +85,13 @@ async function ekPullModel(model, opts) {
             body: last.error,
           });
         }
-        return false;
+        return { ok: false, error: last.error };
       }
       // The command resolving WITHOUT a success line means the stream was
       // cancelled (or Ollama closed early) — not a completed download.
-      if (!last || !last.done) return false;
+      if (!last || !last.done) {
+        return { ok: false, error: "Download didn't complete (cancelled or interrupted)" };
+      }
       if (!silent) {
         window.ekToast?.({
           kind: "success",
@@ -96,7 +99,7 @@ async function ekPullModel(model, opts) {
           body: "It now appears in the model picker.",
         });
       }
-      return true;
+      return { ok: true, error: null };
     } catch (e) {
       if (!silent) {
         window.ekToast?.({
@@ -105,7 +108,7 @@ async function ekPullModel(model, opts) {
           body: String(e),
         });
       }
-      return false;
+      return { ok: false, error: String(e) };
     } finally {
       EK_ACTIVE_PULLS.delete(model);
       EK_PULL_PROMISES.delete(model);
@@ -123,6 +126,15 @@ function ekCancelPull(model) {
   // Rust flips the cancel flag; ollama_pull resolves Ok and the finally
   // block above cleans the store. Fire-and-forget by design.
   invoke("ollama_pull_cancel", { requestId: cur.requestId }).catch(() => {});
+}
+
+// Window-accessible progress accessor. EK_ACTIVE_PULLS is a module-scope
+// const (not on window), so other scripts (e.g. OllamaGate in overlays.jsx)
+// that want to render a pull's progress read it through this function
+// declaration, which IS hoisted onto window. Returns the accumulated
+// progress object for `model`, or null if no pull is active for it.
+function ekGetPull(model) {
+  return EK_ACTIVE_PULLS.get(model) || null;
 }
 
 // Curated suggestions for the download box. Names + sizes verified against

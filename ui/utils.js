@@ -466,6 +466,52 @@ function applyThinkPref(body, thinkingCapable) {
   return body;
 }
 
+// Recommend a right-sized Gemma 4 model for the machine's RAM. Used by the
+// guided first-run flow. Returns { model, approx, lowRam, unknownRam,
+// reason } — `approx` is the download size, `reason` is a one-line "why"
+// for the UI card.
+//
+// Tiers are deliberately conservative: the chosen model should load with
+// headroom for the OS and the rest of the app, not max out the machine.
+// The user can always pick a bigger one via "Choose a different model".
+// Sizes verified against the Ollama gemma4 library (June 2026); all gemma4
+// variants are multimodal (text + image). Thresholds sit just above the
+// round GiB marks so a machine reporting e.g. 15.9 GiB still lands right.
+const GEMMA_TIERS = [
+  { maxGiB: 9,        model: "gemma4:e2b", approx: "7.2 GB", lowRam: true },
+  { maxGiB: 17,       model: "gemma4:e4b", approx: "9.6 GB", lowRam: false },
+  { maxGiB: 33,       model: "gemma4:12b", approx: "7.6 GB", lowRam: false },
+  { maxGiB: 65,       model: "gemma4:26b", approx: "18 GB",  lowRam: false },
+  { maxGiB: Infinity, model: "gemma4:31b", approx: "20 GB",  lowRam: false },
+];
+
+function recommendGemmaModel(ramBytes) {
+  if (!ramBytes || ramBytes <= 0) {
+    // RAM undetectable (Windows, or a probe failure). e4b is the balanced
+    // "latest" default that runs on most machines.
+    return {
+      model: "gemma4:e4b",
+      approx: "9.6 GB",
+      lowRam: false,
+      unknownRam: true,
+      reason: "We couldn't detect your memory, so this is a safe all-round default.",
+    };
+  }
+  const gib = ramBytes / (1024 * 1024 * 1024);
+  const tier = GEMMA_TIERS.find((t) => gib < t.maxGiB) || GEMMA_TIERS[GEMMA_TIERS.length - 1];
+  const gbRounded = Math.round(gib);
+  const reason = tier.lowRam
+    ? `Your machine has about ${gbRounded} GB of memory — this is the smallest, fastest Gemma 4 and the safest fit. It may still be tight; close other heavy apps.`
+    : `Sized for your ${gbRounded} GB of memory, with headroom for the rest of your apps.`;
+  return {
+    model: tier.model,
+    approx: tier.approx,
+    lowRam: tier.lowRam,
+    unknownRam: false,
+    reason,
+  };
+}
+
 // ── Sidebar chat date-bucketing (main.jsx + shell.jsx) ─────────────────────
 //
 // Group chats into Today / Yesterday / Last 7 days / Last 30 days / Older.
@@ -676,6 +722,7 @@ if (typeof window !== "undefined") {
   window.formatBytes = formatBytes;
   window.accumulatePullProgress = accumulatePullProgress;
   window.applyThinkPref = applyThinkPref;
+  window.recommendGemmaModel = recommendGemmaModel;
   window.ekFilesGroupByPath = ekFilesGroupByPath;
   window.bucketChatsByDate = bucketChatsByDate;
   window.getTauriRoot = getTauriRoot;
@@ -776,6 +823,7 @@ if (typeof module !== "undefined" && module.exports) {
     formatBytes,
     accumulatePullProgress,
     applyThinkPref,
+    recommendGemmaModel,
     ekFilesGroupByPath,
     bucketChatsByDate,
     getTauriRoot,

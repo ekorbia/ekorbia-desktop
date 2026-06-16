@@ -69,6 +69,9 @@
     // Capability probe (vision / tools / thinking). Default to a plain
     // model with no special capabilities; tests that care override it.
     model_capabilities: () => ({ vision: false, tools: false, thinking: false }),
+    // System profile for the guided first-run flow. Default: a 16 GiB
+    // Apple Silicon Mac; tests override totalRamBytes to exercise tiers.
+    system_profile: () => ({ totalRamBytes: 17179869184, platform: "macos", arch: "aarch64" }),
 
     // chat store
     db_load_chats: () => [],

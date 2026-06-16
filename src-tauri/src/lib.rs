@@ -36,6 +36,7 @@ mod screenshot;
 mod search;
 mod settings;
 mod spaces;
+mod system;
 mod text_extract;
 mod watch;
 
@@ -133,6 +134,7 @@ pub fn run() {
             ollama::ollama_pull,
             ollama::ollama_pull_cancel,
             ollama::ollama_delete,
+            system::system_profile,
             overlay::overlay_hide,
             overlay::overlay_resize,
             overlay::focus_main,

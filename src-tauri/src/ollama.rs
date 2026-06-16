@@ -574,19 +574,20 @@ pub(crate) async fn ollama_chat_stream(
 // ── Model pull / delete (in-app model manager) ─────────────────────────────
 //
 // `ollama_pull` streams /api/pull's NDJSON progress to the UI over a Tauri
-// Channel — the same shape as `ollama_chat_stream` above, with two
-// deliberate differences:
+// Channel — the same shape and cancellation model as `ollama_chat_stream`
+// above, with one deliberate difference:
 //
 //   • Timeout: the shared client's 120s default is a TOTAL request timeout
 //     in reqwest — it covers the entire streamed body, not just the first
 //     byte. A multi-GB pull takes far longer, so we override per-request
-//     to 24h (reqwest takes min(client, request), so the longer value
-//     must be set here).
-//   • Cancel latency: chat checks its cancel flag between chunks, which is
-//     fine when tokens arrive sub-second. A stalled download could leave a
-//     cancel unobserved for minutes, so each chunk read is wrapped in a
-//     500ms tokio::time::timeout — on Elapsed we re-check the flag and
-//     keep waiting instead of erroring.
+//     to 24h (the per-request value overrides the client default).
+//
+// Cancellation is checked between chunks (cancel latency = time to the next
+// progress line, sub-second during an active download). We deliberately do
+// NOT wrap the chunk read in a per-iteration tokio::time::timeout: on elapse
+// that drops the partially-polled body future, and re-issuing chunk()
+// corrupts reqwest's stream so it ends early — which made real downloads
+// report failure almost immediately. See the loop body for the full note.
 //
 // Cancellation shares the chat registry. The UI namespaces pull request
 // ids as `pull:<model>:<nonce>` so they can never collide with chat
@@ -628,14 +629,24 @@ pub(crate) async fn ollama_pull(
 
     let mut buf: Vec<u8> = Vec::new();
     loop {
+        // Cancellation is observed between chunks — exactly like
+        // ollama_chat_stream. During an active pull Ollama emits progress
+        // lines frequently, so cancel latency is sub-second.
+        //
+        // CRITICAL: do NOT wrap resp.chunk() in tokio::time::timeout. On
+        // elapse, timeout drops the partially-polled body future; re-issuing
+        // chunk() on the next iteration corrupts reqwest's stream and it
+        // ends early. That made a real multi-second download bail out almost
+        // immediately (success line never seen → pull reported as failed)
+        // while Ollama kept downloading in the background. The mocked tests
+        // never caught it because they don't stream a real HTTP body.
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        // Bounded wait so a stalled download still observes cancel quickly.
-        let next = match tokio::time::timeout(Duration::from_millis(500), resp.chunk()).await {
-            Err(_elapsed) => continue, // no bytes yet — re-check cancel above
-            Ok(read) => read.map_err(|e| format!("Ollama pull stream read failed: {e}"))?,
-        };
+        let next = resp
+            .chunk()
+            .await
+            .map_err(|e| format!("Ollama pull stream read failed: {e}"))?;
         let bytes = match next {
             Some(b) => b,
             None => break, // end of stream

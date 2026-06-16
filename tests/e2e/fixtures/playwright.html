@@ -67,6 +67,8 @@
       "onSendDemo", "onRename", "onScrollToMessage",
       // Multi-model compare-mode (Phase 4) handlers
       "onKeep", "onStopAll", "onStopColumn",
+      // OllamaGate (guided first-run) handlers
+      "onReady", "onDismiss", "onModelInstalled",
     ];
     handlerNames.forEach(function (name) {
       if (typeof finalProps[name] !== "function") {

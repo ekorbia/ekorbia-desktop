@@ -2,6 +2,12 @@
 
 Ekorbia doesn't ship with any models. You pull them yourself, one at a time, from Ollama's library. Picking a good first model depends on what you have in mind.
 
+## The easiest path: guided setup
+
+If you launch Ekorbia with no model installed, it offers to set one up for you — **no terminal required**. It detects how much memory your machine has, recommends a right-sized [Gemma 4](https://ai.google.dev/gemma) model, and downloads it (plus the embedding model, if you want folder search) with a progress bar. You'll land in a working chat in a couple of minutes.
+
+Want a different model than the one suggested? Click **Choose a different model** to open the full [model manager](../managing-models.md), or read on for how to pick one yourself.
+
 ## A quick model-picking primer
 
 Models come in different sizes (`1b`, `7b`, `26b`, …) and capabilities (chat-only, vision, tool use). Bigger models are smarter but slower and need more RAM. Roughly:

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Guided first-run setup.** Launch with no model installed and Ekorbia
+  detects your machine's memory, recommends a right-sized Gemma 4
+  (`e2b` for ≤8 GB up to `31b` for 64 GB+), and downloads it — plus the
+  `nomic-embed-text` embedding model if you want folder search — in-app
+  with a progress bar.
 - **In-app model manager — download and delete models without a
   terminal.** A new **Settings → Models** tab (also reachable via
   **Manage models…** in the composer's model picker, a **Download a

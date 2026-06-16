@@ -262,11 +262,10 @@ function OnboardingTour({ open, onClose }) {
             </span>.
           </p>
           <p style={{ margin: "12px 0 0", fontSize: 11, lineHeight: 1.55, color: T.fg3 }}>
-            Heads-up: if you haven't pulled any models yet, the status bar will
-            tell you. Run{" "}
-            <span style={{ fontFamily: T.mono, color: T.fg2 }}>ollama pull llama3</span>
-            {" "}(or any model you like) in a terminal and Ekorbia will pick it up
-            on the next message.
+            No model yet? No problem — when you close this tour, Ekorbia will
+            offer to download one sized for your machine, no terminal needed.
+            You can always manage models later from{" "}
+            <span style={{ fontFamily: T.mono, color: T.fg2 }}>Settings → Models</span>.
           </p>
         </>
       ),

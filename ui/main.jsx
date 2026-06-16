@@ -3684,10 +3684,26 @@ function App() {
   return (
     <>
       <OllamaGate
-        open={ollamaModalOpen}
+        // Defer the gate while the onboarding tour is open — both are
+        // top-of-tree modals and the gate (zIndex 9999) would otherwise
+        // bury the tour (9990) on a true first run. Order: tour → setup.
+        open={ollamaModalOpen && !onboardingOpen}
         modelId={model.id}
         onReady={() => { setOllamaModalOpen(false); warmModel(model.id); }}
         onDismiss={() => setOllamaModalOpen(false)}
+        onModelInstalled={(id) => {
+          // Guided setup finished: make the freshly-pulled model the active
+          // default (mirrors the composer's onModelChange), patch the
+          // current tab so the composer reflects it, close, and warm it —
+          // warming `id` (not the stale fallback modelId) so the first send
+          // is hot. Without this the startup validation no-ops on a
+          // zero-models launch and we'd warm a model that isn't installed.
+          setModelId(id);
+          persistComposerModel(id);
+          setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, model: id } : t));
+          setOllamaModalOpen(false);
+          warmModel(id);
+        }}
       />
       {/* In-app model download/delete. Mounted unconditionally (early-
           returns on !open); in-flight pulls live in module scope inside

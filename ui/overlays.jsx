@@ -841,19 +841,20 @@ function ConfirmDialog({
 
 // ─── Ollama Gate ─────────────────────────────────────────────
 // open: controlled by parent. onReady: Ollama confirmed running+model present. onDismiss: user chose to skip.
-function OllamaGate({ open, modelId, onReady, onDismiss }) {
-  // phase: 'checking' | 'not-running' | 'no-model' | 'starting' | 'error'
+function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
+  // phase: 'checking' | 'not-running' | 'recommend' | 'pulling' | 'starting' | 'error'
+  // 'recommend' replaces the old passive 'no-model' phase: instead of
+  // telling the user to run `ollama pull` in a terminal, we detect their
+  // RAM, recommend a right-sized Gemma 4, and pull it in-app.
   const [phase, setPhase] = useState("checking");
   const [errorMsg, setErrorMsg] = useState("");
-  const pollRef = useRef(null);
-  const pollCount = useRef(0);
-  // Shared by checkOllama() and startOllama() below.
+  // Guided-setup state.
+  const [rec, setRec] = useState(null); // recommendGemmaModel() result
+  const [alsoEmbed, setAlsoEmbed] = useState(true); // pull nomic-embed-text too
+  const [showTerminal, setShowTerminal] = useState(false); // reveal the manual `ollama pull` box
+  const [pullStep, setPullStep] = useState(null); // 'chat' | 'embed' — which sequential pull is live
+  const [, forcePullTick] = useState(0); // bumped on pull progress to re-render the bar
   const invoke = getInvoke();
-
-  const stopPolling = () => {
-    clearInterval(pollRef.current);
-    pollRef.current = null;
-  };
 
   const checkOllama = async () => {
     if (!invoke) return "not-running";
@@ -871,18 +872,108 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
     }
   };
 
-  // Run initial check whenever the modal opens
+  // Detect RAM and compute the recommended model. Failure → recommendation
+  // for unknown RAM (a safe default), never blocks the flow.
+  const loadRecommendation = async () => {
+    let bytes = null;
+    try {
+      const p = await invoke('system_profile');
+      bytes = p?.totalRamBytes ?? null;
+    } catch { /* unknown RAM → recommendGemmaModel handles null */ }
+    setRec(recommendGemmaModel(bytes));
+  };
+
+  // Run initial check whenever the modal opens.
+  // Route a checkOllama() result to the right phase. Shared by the open
+  // effect AND startOllama() so a "no model" outcome ALWAYS lands on the
+  // guided 'recommend' card — never the bare 'no-model' string, which has
+  // no body and no actions (a dead-end the user couldn't dismiss). That
+  // regression is exactly what this routing prevents.
+  const routeCheckResult = async (result) => {
+    if (result === "ready") {
+      onReady();
+      return;
+    }
+    if (result === "no-model") {
+      await loadRecommendation();
+      setPhase("recommend");
+      return;
+    }
+    setPhase(result); // 'not-running'
+  };
+
   useEffect(() => {
     if (!open) return;
     setPhase("checking");
     setErrorMsg("");
-    checkOllama().then((result) => {
-      if (result === "ready") {
-        onReady();
-      } else setPhase(result);
-    });
-    return stopPolling;
+    checkOllama().then(routeCheckResult);
   }, [open, modelId]);
+
+  // Safety net: Esc always dismisses the gate. Every phase normally has a
+  // skip/cancel action, but this guarantees the user can never get trapped
+  // even if some future phase ships without one.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); onDismiss?.(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onDismiss]);
+
+  // Re-render while a guided pull streams progress. EK_ACTIVE_PULLS lives
+  // in model-manager.jsx; we read it via the window-global ekGetPull() and
+  // subscribe via ekPullsSubscribe() (both function-hoisted onto window).
+  useEffect(() => {
+    if (!open) return;
+    const unsub = ekPullsSubscribe(() => forcePullTick((n) => n + 1));
+    return unsub;
+  }, [open]);
+
+  // Is `name` actually present in Ollama right now? This is the source of
+  // truth for "did the pull land" — we trust it over ekPullModel's
+  // stream-completion detection, because Ollama's final status line varies
+  // by version and a cached re-pull can finish before we latch `done`.
+  const isModelInstalled = async (name) => {
+    try {
+      const data = await invoke("ollama_tags");
+      return (data.models || []).some((m) => m.name === name);
+    } catch {
+      return false;
+    }
+  };
+
+  // Guided download: pull the recommended chat model, then (optionally) the
+  // embedding model, then hand the installed model to the parent (which
+  // sets it active, persists it, warms it, and closes the gate).
+  const downloadAndSetup = async () => {
+    if (!rec) return;
+    setErrorMsg("");
+    setPhase("pulling");
+    setPullStep("chat");
+    const res = await ekPullModel(rec.model, { silent: true });
+    // Verify against Ollama (source of truth), but surface the pull's own
+    // error detail when it failed so the message is diagnostic, not generic.
+    if (!(await isModelInstalled(rec.model))) {
+      const detail = res && res.error ? ` (${res.error})` : "";
+      setErrorMsg(
+        `Couldn't download ${rec.model}${detail}. Check your connection and try again, or use "Choose a different model".`,
+      );
+      setPhase("recommend");
+      return;
+    }
+    if (alsoEmbed) {
+      setPullStep("embed");
+      // Best-effort: a failed embedding model shouldn't block getting into
+      // chat — folder search just won't work until it's installed later.
+      await ekPullModel("nomic-embed-text", { silent: true });
+    }
+    onModelInstalled?.(rec.model);
+  };
+
+  const openOllamaDownload = () => {
+    try { getShellApi()?.open("https://ollama.com/download"); } catch {}
+  };
 
   const startOllama = async () => {
     setPhase("starting");
@@ -902,20 +993,25 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
       setErrorMsg(String(e));
       return;
     }
-    // Confirm the model is available now that Ollama is up.
-    const result = await checkOllama();
-    if (result === "ready") onReady();
-    else setPhase(result);
+    // Confirm the model is available now that Ollama is up. Route through
+    // the shared handler so "no model" lands on the guided card, not the
+    // dead-end 'no-model' phase.
+    await routeCheckResult(await checkOllama());
   };
 
   if (!open || phase === "checking") return null;
 
   const titles = {
     "not-running": "Ollama is not running",
-    "no-model": "Model not found",
+    recommend: "Let's get you a model",
+    pulling: "Setting things up…",
     starting: "Starting Ollama…",
-    error: "Failed to start Ollama",
+    error: "Something went wrong",
   };
+  // Header subtitle: the target model id only makes sense for the
+  // Ollama-state phases; the guided phases speak for themselves.
+  const subtitle =
+    phase === "recommend" || phase === "pulling" ? "Local AI setup" : modelId;
 
   return (
     <div
@@ -965,7 +1061,7 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
                 marginTop: 2,
               }}
             >
-              {modelId}
+              {subtitle}
             </div>
           </div>
         </div>
@@ -982,37 +1078,144 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
           >
             Ekorbia needs Ollama to run local AI models. Allow it to start
             Ollama automatically?
+            <div style={{ marginTop: 8 }}>
+              <span
+                onClick={openOllamaDownload}
+                style={{ color: T.amber, cursor: "pointer", textDecoration: "underline" }}
+              >
+                Don't have Ollama? Install it →
+              </span>
+            </div>
           </div>
         )}
-        {phase === "no-model" && (
+        {phase === "recommend" && rec && (
           <>
-            <div
-              style={{
-                fontFamily: T.sans,
-                fontSize: 13,
-                color: T.fg2,
-                lineHeight: 1.6,
-              }}
-            >
-              Ollama is running but{" "}
-              <code style={{ fontFamily: T.mono, color: T.amber }}>
-                {modelId}
-              </code>{" "}
-              isn't pulled yet. Run this in your terminal:
+            {errorMsg && (
+              <div
+                style={{
+                  background: "rgba(200,80,80,0.1)",
+                  border: "1px solid rgba(200,80,80,0.3)",
+                  borderRadius: 6,
+                  padding: "8px 12px",
+                  fontFamily: T.sans,
+                  fontSize: 12,
+                  color: "#e07070",
+                  lineHeight: 1.5,
+                }}
+              >
+                {errorMsg}
+              </div>
+            )}
+            <div style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2, lineHeight: 1.6 }}>
+              Ollama is running, but you don't have a model yet. Here's one
+              sized for your machine — Ekorbia will download it for you.
             </div>
+            {/* Recommended model card */}
             <div
               style={{
                 background: T.bg2,
-                border: `1px solid ${T.border}`,
-                borderRadius: 6,
-                padding: "8px 12px",
-                fontFamily: T.mono,
-                fontSize: 12,
-                color: T.amber,
+                border: `1px solid ${T.borderStrong}`,
+                borderRadius: 8,
+                padding: "12px 14px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
               }}
             >
-              ollama pull {modelId}
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: T.fg, flex: 1 }}>
+                  {rec.model}
+                </span>
+                <span style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}>{rec.approx}</span>
+              </div>
+              <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5 }}>
+                {rec.reason}
+              </div>
+              {rec.lowRam && (
+                <div style={{ fontFamily: T.sans, fontSize: 11.5, color: T.amber, marginTop: 2 }}>
+                  ⚠ Limited memory — responses may be slow. A smaller model may feel better.
+                </div>
+              )}
             </div>
+            {/* Embedding model opt-in */}
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={alsoEmbed}
+                onChange={(e) => setAlsoEmbed(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5 }}>
+                Also download <code style={{ fontFamily: T.mono, color: T.fg }}>nomic-embed-text</code>{" "}
+                <span style={{ color: T.fg3 }}>(274 MB)</span> — needed for attaching folders and searching files.
+              </span>
+            </label>
+            {/* Manual / terminal escape hatch */}
+            <div>
+              <span
+                onClick={() => setShowTerminal((v) => !v)}
+                style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3, cursor: "pointer", textDecoration: "underline" }}
+              >
+                {showTerminal ? "Hide terminal option" : "I'll use the terminal instead"}
+              </span>
+              {showTerminal && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    background: T.bg2,
+                    border: `1px solid ${T.border}`,
+                    borderRadius: 6,
+                    padding: "8px 12px",
+                    fontFamily: T.mono,
+                    fontSize: 12,
+                    color: T.amber,
+                  }}
+                >
+                  ollama pull {rec.model}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+        {phase === "pulling" && (
+          <>
+            <div style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2, lineHeight: 1.6 }}>
+              {alsoEmbed
+                ? `Downloading ${pullStep === "embed" ? "the embedding model" : "your model"} — step ${pullStep === "embed" ? "2" : "1"} of 2`
+                : "Downloading your model…"}
+            </div>
+            {(() => {
+              // Read live progress for whichever model is currently pulling.
+              const target = pullStep === "embed" ? "nomic-embed-text" : (rec ? rec.model : null);
+              const prog = target ? ekGetPull(target) : null;
+              const pct = prog && prog.pct !== null ? prog.pct : null;
+              return (
+                <div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500, flex: 1 }}>
+                      {target || "…"}
+                    </span>
+                    <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg2 }}>
+                      {pct !== null
+                        ? `${pct}% · ${formatBytes(prog.completedBytes)} / ${formatBytes(prog.totalBytes)}`
+                        : (prog && prog.statusLine) || "starting…"}
+                    </span>
+                  </div>
+                  <div style={{ height: 4, borderRadius: 2, background: T.bg3, overflow: "hidden" }}>
+                    <div
+                      style={{
+                        height: "100%",
+                        width: pct !== null ? `${pct}%` : "30%",
+                        background: T.amber,
+                        borderRadius: 2,
+                        transition: "width 200ms linear",
+                        animation: pct === null ? "blink 1.1s steps(2) infinite" : "none",
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
           </>
         )}
         {phase === "starting" && (
@@ -1102,30 +1305,44 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
               </button>
             </>
           )}
-          {phase === "no-model" && (
+          {phase === "recommend" && (
             <>
               <button
                 onClick={onDismiss}
                 style={{
-                  padding: "7px 16px",
+                  padding: "7px 14px",
+                  borderRadius: 6,
+                  border: `1px solid ${T.border}`,
+                  background: "transparent",
+                  color: T.fg3,
+                  fontFamily: T.sans,
+                  fontSize: 12.5,
+                  cursor: "pointer",
+                }}
+              >
+                Skip for now
+              </button>
+              <button
+                onClick={() => {
+                  // Browse/pick a different model in the full manager.
+                  onDismiss();
+                  window.ekOpenModelManager?.();
+                }}
+                style={{
+                  padding: "7px 14px",
                   borderRadius: 6,
                   border: `1px solid ${T.border}`,
                   background: "transparent",
                   color: T.fg2,
                   fontFamily: T.sans,
-                  fontSize: 13,
+                  fontSize: 12.5,
                   cursor: "pointer",
                 }}
               >
-                Continue anyway
+                Choose a different model
               </button>
               <button
-                onClick={() => {
-                  // Hand off to the in-app model manager; dismiss the gate
-                  // so the two modals don't stack.
-                  onDismiss();
-                  window.ekOpenModelManager?.();
-                }}
+                onClick={downloadAndSetup}
                 style={{
                   padding: "7px 16px",
                   borderRadius: 6,
@@ -1138,9 +1355,31 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
                   cursor: "pointer",
                 }}
               >
-                Download a model…
+                Download and set up
               </button>
             </>
+          )}
+          {phase === "pulling" && (
+            <button
+              onClick={() => {
+                // Cancel whichever pull is live, then return to the card.
+                if (rec) ekCancelPull(rec.model);
+                ekCancelPull("nomic-embed-text");
+                setPhase("recommend");
+              }}
+              style={{
+                padding: "7px 16px",
+                borderRadius: 6,
+                border: `1px solid ${T.border}`,
+                background: "transparent",
+                color: T.fg2,
+                fontFamily: T.sans,
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
           )}
         </div>
       </div>
