@@ -59,6 +59,16 @@
     ollama_tags: () => ({ models: [] }),
     ollama_ps: () => ({ models: [] }),
     ollama_generate: () => undefined,
+    // Model manager (in-app pull/delete). The default ollama_pull resolves
+    // immediately without delivering progress chunks — tests that exercise
+    // the progress path override it and drive the Channel via
+    // `args.onProgress.__deliver({...})` (see Channel below).
+    ollama_pull: () => undefined,
+    ollama_pull_cancel: () => undefined,
+    ollama_delete: () => undefined,
+    // Capability probe (vision / tools / thinking). Default to a plain
+    // model with no special capabilities; tests that care override it.
+    model_capabilities: () => ({ vision: false, tools: false, thinking: false }),
 
     // chat store
     db_load_chats: () => [],

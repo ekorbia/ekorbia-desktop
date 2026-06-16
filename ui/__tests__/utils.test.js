@@ -17,6 +17,9 @@ const {
   tryParseJson,
   genId,
   defaultIntervalForKind,
+  formatBytes,
+  accumulatePullProgress,
+  applyThinkPref,
   ekFilesGroupByPath,
   bucketChatsByDate,
   instantiateSpacePinnedAttachments,
@@ -671,4 +674,117 @@ test("instantiateSpacePinnedAttachments: silently drops entries with no kind or 
     { cmd: "attachment_add_files", args: { chatId: "c1", paths: ["/good.md"] } },
     { cmd: "attachment_add_folder", args: { chatId: "c1", path: "/research" } },
   ]);
+});
+
+// ── formatBytes ──────────────────────────────────────────────────────────
+
+test("formatBytes: zero / null / undefined return empty string", () => {
+  assert.equal(formatBytes(0), "");
+  assert.equal(formatBytes(null), "");
+  assert.equal(formatBytes(undefined), "");
+});
+
+test("formatBytes: sub-GB renders whole megabytes", () => {
+  assert.equal(formatBytes(274_000_000), "274 MB");
+  assert.equal(formatBytes(999_999_999), "1000 MB");
+});
+
+test("formatBytes: GB and above renders one decimal", () => {
+  // Decimal units on purpose — matches `ollama list` / ollama.com.
+  assert.equal(formatBytes(1_000_000_000), "1.0 GB");
+  assert.equal(formatBytes(9_600_000_000), "9.6 GB");
+  assert.equal(formatBytes(18_000_000_000), "18.0 GB");
+});
+
+// ── accumulatePullProgress ───────────────────────────────────────────────
+
+test("accumulatePullProgress: null state initialises cleanly", () => {
+  const s = accumulatePullProgress(null, null);
+  assert.equal(s.pct, null); // indeterminate until a layer reports size
+  assert.equal(s.done, false);
+  assert.equal(s.error, null);
+  assert.equal(s.totalBytes, 0);
+});
+
+test("accumulatePullProgress: sums per-digest layer totals", () => {
+  // Ollama interleaves layers — totals must SUM across digests, not track
+  // whichever layer reported last (that's the jumping-progress-bar bug).
+  let s = accumulatePullProgress(null, {
+    status: "pulling aaa", digest: "aaa", total: 1000, completed: 200,
+  });
+  s = accumulatePullProgress(s, {
+    status: "pulling bbb", digest: "bbb", total: 3000, completed: 0,
+  });
+  assert.equal(s.totalBytes, 4000);
+  assert.equal(s.completedBytes, 200);
+  assert.equal(s.pct, 5);
+  s = accumulatePullProgress(s, { status: "pulling bbb", digest: "bbb", total: 3000, completed: 3000 });
+  s = accumulatePullProgress(s, { status: "pulling aaa", digest: "aaa", total: 1000, completed: 1000 });
+  assert.equal(s.pct, 100);
+});
+
+test("accumulatePullProgress: bare status lines don't regress bytes", () => {
+  let s = accumulatePullProgress(null, {
+    status: "pulling aaa", digest: "aaa", total: 1000, completed: 600,
+  });
+  // Phase-transition lines carry no digest/total — byte counts must hold.
+  s = accumulatePullProgress(s, { status: "verifying sha256 digest" });
+  assert.equal(s.completedBytes, 600);
+  assert.equal(s.statusLine, "verifying sha256 digest");
+  // A layer line with a missing/zero completed must not regress either.
+  s = accumulatePullProgress(s, { status: "pulling aaa", digest: "aaa", total: 1000 });
+  assert.equal(s.completedBytes, 600);
+});
+
+test("accumulatePullProgress: success line flips done", () => {
+  let s = accumulatePullProgress(null, { status: "pulling manifest" });
+  assert.equal(s.done, false);
+  s = accumulatePullProgress(s, { status: "success" });
+  assert.equal(s.done, true);
+});
+
+test("accumulatePullProgress: in-band error is captured, not thrown", () => {
+  // /api/pull reports a bad model name as HTTP 200 + {"error": "..."}.
+  let s = accumulatePullProgress(null, { error: "pull model manifest: file does not exist" });
+  assert.match(s.error, /file does not exist/);
+  assert.equal(s.done, false);
+});
+
+test("accumulatePullProgress: does not mutate the previous state", () => {
+  const a = accumulatePullProgress(null, {
+    status: "pulling aaa", digest: "aaa", total: 1000, completed: 100,
+  });
+  const before = JSON.stringify(a);
+  accumulatePullProgress(a, { digest: "aaa", status: "pulling aaa", total: 1000, completed: 900 });
+  assert.equal(JSON.stringify(a), before);
+});
+
+// ── applyThinkPref ───────────────────────────────────────────────────────
+
+test("applyThinkPref: thinking-capable model gets think:false", () => {
+  const body = applyThinkPref({ model: "qwen3.5:2b", stream: true }, true);
+  assert.equal(body.think, false);
+});
+
+test("applyThinkPref: non-thinking model leaves body untouched (no 400)", () => {
+  // Sending `think` to a non-thinking model is a 400 in Ollama — the field
+  // must be ABSENT, not false.
+  const body = applyThinkPref({ model: "gemma4:e4b", stream: true }, false);
+  assert.equal("think" in body, false);
+});
+
+test("applyThinkPref: undefined capability is treated as non-thinking", () => {
+  // The capability map may not be populated yet (probe in flight) — fail
+  // safe by NOT sending the field rather than risk a 400.
+  const body = applyThinkPref({ model: "x", stream: true }, undefined);
+  assert.equal("think" in body, false);
+});
+
+test("applyThinkPref: preserves other body fields and returns same object", () => {
+  const input = { model: "qwen3.5:2b", messages: [{ role: "user", content: "hi" }], stream: true };
+  const out = applyThinkPref(input, true);
+  assert.equal(out, input); // mutate-and-return
+  assert.equal(out.model, "qwen3.5:2b");
+  assert.equal(out.stream, true);
+  assert.deepEqual(out.messages, [{ role: "user", content: "hi" }]);
 });

@@ -380,6 +380,92 @@ function defaultIntervalForKind(kind) {
   return 30;                          // folder
 }
 
+// ── Model manager helpers (model-manager.jsx, overlays.jsx, overlay.jsx) ───
+
+// Human-readable size for model bytes. Decimal units to match what
+// `ollama list` and ollama.com display (a 9.6 GB model should read
+// "9.6 GB" here too, not "8.9 GiB"). Formerly `fmt_size` in overlays.jsx —
+// moved here for node:test coverage; do NOT re-declare it in a JSX file
+// (later-loaded scripts would silently shadow this global).
+function formatBytes(bytes) {
+  if (!bytes) return "";
+  const gb = bytes / 1e9;
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / 1e6).toFixed(0)} MB`;
+}
+
+// Fold one /api/pull NDJSON chunk into accumulated download-progress state.
+//
+// Ollama reports per-LAYER progress: each `{"status":"pulling <digest>",
+// "digest":"…","total":N,"completed":M}` line describes ONE blob of the
+// model, and the stream interleaves layers. Tracking a single
+// total/completed pair would make the progress bar jump backwards every
+// time a new layer starts reporting — so we keep a digest→{total,completed}
+// map and sum across it.
+//
+// Pure + immutable: returns a fresh state object, never mutates the input —
+// safe for React's setState(prev => accumulatePullProgress(prev, chunk)).
+//
+//   state — previous return value, or null/undefined to start fresh
+//   chunk — one parsed NDJSON object: {status?, digest?, total?,
+//           completed?, error?}
+//
+// Returns { layers, statusLine, totalBytes, completedBytes, pct, done,
+// error }. `pct` is null until the first layer reports a size (render an
+// indeterminate bar until then). `done` flips on the final
+// `{"status":"success"}` line — the UI must treat a stream that ends
+// WITHOUT done=true as cancelled/incomplete, not as success. `error`
+// carries Ollama's in-band error string (HTTP 200 + an {"error": …} line
+// is how /api/pull reports a bad model name).
+function accumulatePullProgress(state, chunk) {
+  const prev = state || { layers: {}, statusLine: "", done: false, error: null };
+  const layers = Object.assign({}, prev.layers);
+  let statusLine = prev.statusLine;
+  let error = prev.error;
+  let done = prev.done;
+
+  if (chunk && typeof chunk === "object") {
+    if (chunk.error) error = String(chunk.error);
+    if (typeof chunk.status === "string" && chunk.status) statusLine = chunk.status;
+    if (chunk.digest && typeof chunk.total === "number") {
+      const existing = layers[chunk.digest] || { total: 0, completed: 0 };
+      layers[chunk.digest] = {
+        total: chunk.total,
+        // `completed` is absent on a layer's first line and must never
+        // regress on later ones.
+        completed: Math.max(existing.completed, chunk.completed || 0),
+      };
+    }
+    if (chunk.status === "success") done = true;
+  }
+
+  let totalBytes = 0;
+  let completedBytes = 0;
+  for (const k in layers) {
+    totalBytes += layers[k].total;
+    completedBytes += layers[k].completed;
+  }
+  const pct =
+    totalBytes > 0 ? Math.min(100, Math.round((completedBytes / totalBytes) * 100)) : null;
+  return { layers, statusLine, totalBytes, completedBytes, pct, done, error };
+}
+
+// Apply the thinking preference to an Ollama /api/chat request body.
+//
+// Reasoning models (qwen3.x, deepseek-r1, gpt-oss, …) auto-enable thinking
+// in Ollama unless the request sets `think: false`, which makes chat sit
+// blank while a long chain-of-thought streams into a field we don't render.
+// We force it off for snappy replies.
+//
+// CRITICAL invariant: only set the field when the model is thinking-capable.
+// Sending `think` (even false) to a NON-thinking model is a 400
+// "does not support thinking" error in Ollama — so a non-capable model
+// must leave the body untouched, NOT get `think: false`. Mutates and
+// returns `body` for call-site convenience.
+function applyThinkPref(body, thinkingCapable) {
+  if (thinkingCapable) body.think = false;
+  return body;
+}
+
 // ── Sidebar chat date-bucketing (main.jsx + shell.jsx) ─────────────────────
 //
 // Group chats into Today / Yesterday / Last 7 days / Last 30 days / Older.
@@ -587,6 +673,9 @@ if (typeof window !== "undefined") {
   window.tryParseJson = tryParseJson;
   window.genId = genId;
   window.defaultIntervalForKind = defaultIntervalForKind;
+  window.formatBytes = formatBytes;
+  window.accumulatePullProgress = accumulatePullProgress;
+  window.applyThinkPref = applyThinkPref;
   window.ekFilesGroupByPath = ekFilesGroupByPath;
   window.bucketChatsByDate = bucketChatsByDate;
   window.getTauriRoot = getTauriRoot;
@@ -684,6 +773,9 @@ if (typeof module !== "undefined" && module.exports) {
     tryParseJson,
     genId,
     defaultIntervalForKind,
+    formatBytes,
+    accumulatePullProgress,
+    applyThinkPref,
     ekFilesGroupByPath,
     bucketChatsByDate,
     getTauriRoot,

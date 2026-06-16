@@ -30,6 +30,13 @@ function QuickQuery() {
   const [streaming, setStreaming] = qS(false);
   const inputRef = qR(null);
   const abortRef = qR(null);
+  // Per-model "is this a reasoning model?" cache. Reasoning models default
+  // thinking ON in Ollama, which would make the overlay (a quick-lookup
+  // tool where speed matters most) sit blank for seconds. We send
+  // `think: false` for them — but only them, since the flag 400s on
+  // non-thinking models. Rust caches the capability too; this ref just
+  // avoids re-invoking per submit.
+  const thinkCapRef = qR({});
 
   // ── Model selection (persisted) ────────────────────────────────────────────
   // Inlined the localStorage dance instead of reaching for main.jsx's
@@ -380,9 +387,21 @@ function QuickQuery() {
           setResponse(acc);
         }
       };
+      // Gate thinking off for reasoning models (cached per model).
+      let thinkCapable = thinkCapRef.current[modelId];
+      if (thinkCapable === undefined) {
+        try {
+          const caps = await invoke('model_capabilities', { model: modelId });
+          thinkCapable = !!caps?.thinking;
+        } catch (_) {
+          thinkCapable = false;
+        }
+        thinkCapRef.current[modelId] = thinkCapable;
+      }
+      const body = applyThinkPref({ model: modelId, messages, stream: true }, thinkCapable);
       await invoke('ollama_chat_stream', {
         requestId,
-        body: { model: modelId, messages, stream: true },
+        body,
         onChunk: channel,
       });
       ok = true;
@@ -760,7 +779,7 @@ function QuickQuery() {
             const color = modelColor(m.name);
             const size = m.details?.parameter_size || "";
             const quant = m.details?.quantization_level || "";
-            const sizeOnDisk = fmt_size(m.size);
+            const sizeOnDisk = formatBytes(m.size);
             return (
               <div
                 key={m.name}

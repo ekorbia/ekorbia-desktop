@@ -38,6 +38,7 @@
 
 # Reference
 
+- [Managing models](./managing-models.md)
 - [Settings](./settings.md)
 - [Keyboard shortcuts](./keyboard-shortcuts.md)
 - [Themes](./themes.md)

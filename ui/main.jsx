@@ -448,6 +448,11 @@ function App() {
   // (the Rust side double-checks anyway).
   const [modelVisionMap, setModelVisionMap] = useS({});
   const [modelToolsMap, setModelToolsMap] = useS({});
+  // Thinking-capable (reasoning) models — qwen3.x, deepseek-r1, gpt-oss, …
+  // Ollama auto-enables thinking on these, so we send `think: false` to
+  // keep chat snappy. The map gates that flag: sending `think` to a
+  // non-thinking model is a 400 error, so we ONLY set it when true here.
+  const [modelThinkingMap, setModelThinkingMap] = useS({});
   const activeModelHasVision = !!modelVisionMap[modelId];
   const activeModelHasTools = !!modelToolsMap[modelId];
 
@@ -816,11 +821,16 @@ function App() {
   // records *successful* lookups. Rust still gates the actual usage.
   const probeModelCapabilities = async (model) => {
     if (!model) return;
-    if (modelVisionMap[model] !== undefined && modelToolsMap[model] !== undefined) return;
+    if (
+      modelVisionMap[model] !== undefined &&
+      modelToolsMap[model] !== undefined &&
+      modelThinkingMap[model] !== undefined
+    ) return;
     try {
       const caps = await invoke('model_capabilities', { model });
       setModelVisionMap((m) => ({ ...m, [model]: !!caps?.vision }));
       setModelToolsMap((m) => ({ ...m, [model]: !!caps?.tools }));
+      setModelThinkingMap((m) => ({ ...m, [model]: !!caps?.thinking }));
     } catch (e) {
       // Silent — badges just won't show. Rust still gates encoding/tooling.
     }
@@ -1156,6 +1166,21 @@ function App() {
       // reload (dev) or future code installs a replacement.
       if (window.ekOpenOnboarding === opener) {
         delete window.ekOpenOnboarding;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Expose window.ekOpenModelManager so any surface (composer ModelPicker
+  // footer/empty-state, OllamaGate's no-model phase, Settings) can open
+  // the model download/delete modal without lifting state up to App.
+  // Same register/cleanup pattern as window.ekOpenOnboarding above.
+  useE(() => {
+    const opener = () => setModelManagerOpen(true);
+    window.ekOpenModelManager = opener;
+    return () => {
+      if (window.ekOpenModelManager === opener) {
+        delete window.ekOpenModelManager;
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1635,6 +1660,12 @@ function App() {
         if (includeTools && toolSchemasRef.current?.length) {
           body.tools = toolSchemasRef.current;
         }
+        // Reasoning models default thinking ON in Ollama, which streams a
+        // long chain-of-thought into a `thinking` field we don't render —
+        // so the chat looks frozen for seconds before the answer. Force it
+        // off for snappy replies (helper no-ops for non-thinking models;
+        // sending `think` to them is a 400).
+        applyThinkPref(body, modelThinkingMap[modelId]);
 
         let turnContent = '';
         let turnToolCalls = [];
@@ -1977,9 +2008,12 @@ function App() {
         }
       };
 
+      // Snappy compare columns too — force thinking off for reasoning
+      // models (helper gates it; `think` on a non-thinking model is a 400).
+      const body = applyThinkPref({ model, messages, stream: true }, modelThinkingMap[model]);
       await invoke('ollama_chat_stream', {
         requestId: asstId,
-        body: { model, messages, stream: true },
+        body,
         onChunk: channel,
       });
       ok = true;
@@ -3593,6 +3627,10 @@ function App() {
 
   const [ollamaModalOpen, setOllamaModalOpen] = useS(true);
   const [modelWarming, setModelWarming] = useS(false);
+  // In-app model download/delete modal — opened via
+  // window.ekOpenModelManager() (registered in the effect near the
+  // onboarding opener; see model-manager.jsx for the component).
+  const [modelManagerOpen, setModelManagerOpen] = useS(false);
   const [watchModalOpen, setWatchModalOpen] = useS(false);
   // null = create mode; watch object = edit mode. Cleared after close so a
   // subsequent "+ Configure" click reliably lands in create mode.
@@ -3650,6 +3688,14 @@ function App() {
         modelId={model.id}
         onReady={() => { setOllamaModalOpen(false); warmModel(model.id); }}
         onDismiss={() => setOllamaModalOpen(false)}
+      />
+      {/* In-app model download/delete. Mounted unconditionally (early-
+          returns on !open); in-flight pulls live in module scope inside
+          model-manager.jsx so they survive this modal closing. */}
+      <ModelManagerModal
+        open={modelManagerOpen}
+        onClose={() => setModelManagerOpen(false)}
+        activeModel={model.id}
       />
       {/* Toast host mounts once and exposes window.ekToast for global use.
           Lives high in the tree so toasts overlay everything else. */}

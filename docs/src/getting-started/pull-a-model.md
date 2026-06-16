@@ -17,13 +17,19 @@ If you're not sure, **`llama3`** is a solid all-rounder that fits comfortably on
 
 ## Pull a chat model
 
-Open your terminal and run:
+The easiest way is inside Ekorbia itself: open **Settings → Models** (or
+click the model picker in the bottom-right of the composer and choose
+**Manage models…**), type a model name, and click **Pull**. A progress bar
+tracks the download, and the model appears in the picker the moment it's
+ready. See [Managing models](../managing-models.md) for the full tour.
+
+Prefer the terminal? The classic way works exactly the same:
 
 ```bash
 ollama pull llama3
 ```
 
-The first pull will download several gigabytes — keep the terminal open and wait. Subsequent pulls of other models reuse shared layers and are usually faster.
+The first pull will download several gigabytes. Subsequent pulls of other models reuse shared layers and are usually faster.
 
 You can pull as many models as you want; they all live side-by-side. Switch between them inside Ekorbia using the model picker in the bottom-right of the composer (covered in [The chat window](../chat/composer.md)).
 

@@ -949,6 +949,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
         >
           {[
             { id: "general", label: "General" },
+            { id: "models", label: "Models" },
             { id: "prompts", label: "Prompts" },
             { id: "memory", label: "Memory" },
             { id: "attachments", label: "Attachments" },
@@ -1267,6 +1268,20 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               </div>
               <MemorySettings />
             </>
+          )}
+
+          {/* ── Models tab ───────────────────────────────────────── */}
+          {activeTab === "models" && (
+            // ModelManagerPanel lives in model-manager.jsx (shared with
+            // the ModelManagerModal opened from the composer picker).
+            // The active model is read straight from localStorage rather
+            // than prop-drilled through SettingsModal — same key + fallback
+            // as readPersistedComposerModel in main.jsx.
+            <ModelManagerPanel
+              activeModel={
+                localStorage.getItem("ekorbia.main.model") || "gemma4:latest"
+              }
+            />
           )}
 
           {/* ── Attachments tab ──────────────────────────────────── */}

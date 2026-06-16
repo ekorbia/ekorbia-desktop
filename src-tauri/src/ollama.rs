@@ -75,12 +75,24 @@ static MODEL_VISION_CACHE: std::sync::OnceLock<
 static MODEL_TOOLS_CACHE: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, bool>>,
 > = std::sync::OnceLock::new();
+// "thinking" = reasoning models (qwen3.x, deepseek-r1/v3.1, gpt-oss, …).
+// Ollama auto-enables thinking on these UNLESS the request sets
+// `think: false`, so we detect the capability to (a) badge it in the UI
+// and (b) default thinking OFF for snappy replies. CRITICAL: sending
+// `think` (even false) to a NON-thinking model is a 400 error, so this
+// flag must gate every place we set the field.
+static MODEL_THINKING_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, bool>>,
+> = std::sync::OnceLock::new();
 
 fn vision_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, bool>> {
     MODEL_VISION_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 fn tools_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, bool>> {
     MODEL_TOOLS_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+fn thinking_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, bool>> {
+    MODEL_THINKING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Generic capability check against /api/show. Reads the `capabilities`
@@ -129,18 +141,37 @@ pub(crate) async fn model_has_tools(model: &str) -> Result<bool, String> {
     Ok(has)
 }
 
+pub(crate) async fn model_has_thinking(model: &str) -> Result<bool, String> {
+    if let Ok(cache) = thinking_cache().lock() {
+        if let Some(v) = cache.get(model) {
+            return Ok(*v);
+        }
+    }
+    let has = probe_capability(model, "thinking").await?;
+    if let Ok(mut cache) = thinking_cache().lock() {
+        cache.insert(model.to_string(), has);
+    }
+    Ok(has)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ModelCapabilities {
     vision: bool,
     tools: bool,
+    thinking: bool,
 }
 
 #[tauri::command]
 pub(crate) async fn model_capabilities(model: String) -> Result<ModelCapabilities, String> {
     let vision = model_has_vision(&model).await.unwrap_or(false);
     let tools = model_has_tools(&model).await.unwrap_or(false);
-    Ok(ModelCapabilities { vision, tools })
+    let thinking = model_has_thinking(&model).await.unwrap_or(false);
+    Ok(ModelCapabilities {
+        vision,
+        tools,
+        thinking,
+    })
 }
 
 // ── Ollama chat + embed HTTP ────────────────────────────────────────────────
@@ -150,7 +181,7 @@ pub(crate) async fn model_capabilities(model: String) -> Result<ModelCapabilitie
 /// lets us pass an explicit `system` role for the user-selected prompt and
 /// matches what the main composer does.
 pub(crate) async fn ollama_chat(model: &str, system: &str, user: &str) -> Result<String, String> {
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "messages": [
             { "role": "system", "content": system },
@@ -158,6 +189,14 @@ pub(crate) async fn ollama_chat(model: &str, system: &str, user: &str) -> Result
         ],
         "stream": false,
     });
+    // Reasoning models (qwen3.x, deepseek-r1, …) auto-enable thinking,
+    // which would bloat a watch summary with a long chain-of-thought and
+    // slow each poll. Force it off for these — but ONLY for them, since
+    // sending `think` to a non-thinking model is a 400. Capability probe
+    // failures fall through to the default (thinking left as-is).
+    if model_has_thinking(model).await.unwrap_or(false) {
+        body["think"] = serde_json::Value::Bool(false);
+    }
     let resp = ollama_client()
         .post(ollama_url("/api/chat"))
         .json(&body)
@@ -532,6 +571,142 @@ pub(crate) async fn ollama_chat_stream(
     Ok(())
 }
 
+// ── Model pull / delete (in-app model manager) ─────────────────────────────
+//
+// `ollama_pull` streams /api/pull's NDJSON progress to the UI over a Tauri
+// Channel — the same shape as `ollama_chat_stream` above, with two
+// deliberate differences:
+//
+//   • Timeout: the shared client's 120s default is a TOTAL request timeout
+//     in reqwest — it covers the entire streamed body, not just the first
+//     byte. A multi-GB pull takes far longer, so we override per-request
+//     to 24h (reqwest takes min(client, request), so the longer value
+//     must be set here).
+//   • Cancel latency: chat checks its cancel flag between chunks, which is
+//     fine when tokens arrive sub-second. A stalled download could leave a
+//     cancel unobserved for minutes, so each chunk read is wrapped in a
+//     500ms tokio::time::timeout — on Elapsed we re-check the flag and
+//     keep waiting instead of erroring.
+//
+// Cancellation shares the chat registry. The UI namespaces pull request
+// ids as `pull:<model>:<nonce>` so they can never collide with chat
+// message ids (the RAII Drop removes entries by id — a collision would
+// let one stream's cleanup orphan the other's flag).
+//
+// Progress chunk shapes the UI consumes (see accumulatePullProgress in
+// ui/utils.js): `{"status":"pulling <digest>","digest":"…","total":N,
+// "completed":N}` per layer, bare `{"status":"…"}` lines between phases,
+// `{"status":"success"}` last, or `{"error":"…"}` on failure (HTTP 200).
+
+/// Body for POST /api/pull. `model` is the documented key on current
+/// Ollama; older builds used `name`. Unknown fields are ignored, so
+/// sending both works everywhere without a version probe.
+fn pull_request_body(model: &str) -> serde_json::Value {
+    serde_json::json!({ "model": model, "name": model, "stream": true })
+}
+
+#[tauri::command]
+pub(crate) async fn ollama_pull(
+    request_id: String,
+    model: String,
+    on_progress: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<(), String> {
+    let token = register_chat_cancel(&request_id);
+    let cancel = token.flag.clone();
+
+    let mut resp = ollama_client()
+        .post(ollama_url("/api/pull"))
+        // Total-request timeout override — see module comment above.
+        .timeout(Duration::from_secs(24 * 60 * 60))
+        .json(&pull_request_body(&model))
+        .send()
+        .await
+        .map_err(|e| format!("Ollama /api/pull request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Ollama /api/pull returned {}", resp.status()));
+    }
+
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        // Bounded wait so a stalled download still observes cancel quickly.
+        let next = match tokio::time::timeout(Duration::from_millis(500), resp.chunk()).await {
+            Err(_elapsed) => continue, // no bytes yet — re-check cancel above
+            Ok(read) => read.map_err(|e| format!("Ollama pull stream read failed: {e}"))?,
+        };
+        let bytes = match next {
+            Some(b) => b,
+            None => break, // end of stream
+        };
+        buf.extend_from_slice(&bytes);
+        while let Some(nl_pos) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=nl_pos).collect();
+            let body = if line.last() == Some(&b'\n') {
+                &line[..line.len() - 1]
+            } else {
+                &line[..]
+            };
+            let s = match std::str::from_utf8(body) {
+                Ok(s) => s.trim(),
+                Err(_) => continue,
+            };
+            if s.is_empty() {
+                continue;
+            }
+            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(s) {
+                // Channel send failure = JS handle dropped. Graceful cancel,
+                // same contract as the chat stream.
+                if on_progress.send(obj).is_err() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    // Flush a final partial line, mirroring ollama_chat_stream.
+    if !buf.is_empty() {
+        if let Ok(s) = std::str::from_utf8(&buf) {
+            let s = s.trim();
+            if !s.is_empty() {
+                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(s) {
+                    let _ = on_progress.send(obj);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Cancel a running `ollama_pull`. Shares the chat-cancel registry — pull
+/// ids are namespaced (`pull:<model>:<nonce>`) by the UI so they can't
+/// collide with chat message ids. No-op for unknown ids.
+#[tauri::command]
+pub(crate) fn ollama_pull_cancel(request_id: String) {
+    ollama_chat_stream_cancel(request_id);
+}
+
+/// Remove a pulled model from Ollama's local store via DELETE /api/delete.
+/// Same dual-key body hedge as `pull_request_body`.
+#[tauri::command]
+pub(crate) async fn ollama_delete(model: String) -> Result<(), String> {
+    let resp = ollama_client()
+        .delete(ollama_url("/api/delete"))
+        .json(&serde_json::json!({ "model": &model, "name": &model }))
+        .send()
+        .await
+        .map_err(|e| format!("Ollama /api/delete request failed: {e}"))?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(format!("Model `{model}` is not pulled, nothing to delete"));
+    }
+    if !resp.status().is_success() {
+        return Err(format!("Ollama /api/delete returned {}", resp.status()));
+    }
+    Ok(())
+}
+
 // ── Process startup ────────────────────────────────────────────────────────
 
 /// Quick sync check: is *something* listening on Ollama's port?
@@ -745,5 +920,39 @@ mod tests {
         // No panic, no side effect we can observe (since there's no
         // registered entry). Just call it.
         ollama_chat_stream_cancel("never-registered".to_string());
+    }
+
+    /// /api/pull body must carry BOTH `model` (current Ollama) and `name`
+    /// (older builds) plus `stream: true`. Sending both keys is the
+    /// version-compatibility hedge — if someone "cleans up" the duplicate
+    /// key, old Ollama installs silently stop pulling.
+    #[test]
+    fn pull_request_body_carries_both_keys_and_stream() {
+        let body = pull_request_body("gemma4:e4b");
+        assert_eq!(body["model"], "gemma4:e4b");
+        assert_eq!(body["name"], "gemma4:e4b");
+        assert_eq!(body["stream"], true);
+    }
+
+    /// Pull ids share the chat-cancel registry but are namespaced
+    /// (`pull:<model>:<nonce>`), so a pull cancel must not touch a chat
+    /// stream's flag and vice versa.
+    #[test]
+    fn pull_and_chat_cancel_ids_are_independent() {
+        let chat = register_chat_cancel("msg-abc");
+        let pull = register_chat_cancel("pull:gemma4:e4b:x1");
+
+        ollama_pull_cancel("pull:gemma4:e4b:x1".to_string());
+        assert!(pull.flag.load(Ordering::Relaxed), "pull flag should flip");
+        assert!(
+            !chat.flag.load(Ordering::Relaxed),
+            "chat flag must be untouched by a pull cancel"
+        );
+
+        drop(pull);
+        // Dropping the pull token must not remove the chat entry.
+        let m = chat_cancel_registry().lock().unwrap();
+        assert!(m.contains_key("msg-abc"));
+        assert!(!m.contains_key("pull:gemma4:e4b:x1"));
     }
 }

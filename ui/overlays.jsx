@@ -1,7 +1,8 @@
 // overlays.jsx -- Floating overlays:
-//   MODEL_COLORS + modelColor + fmt_size, ModelPicker (composer dropdown),
+//   MODEL_COLORS + modelColor, ModelPicker (composer dropdown),
 //   CommandPalette (Cmd+K), OllamaGate (warm-up modal).
-// Depends on: tokens, atoms, icons.
+// Depends on: tokens, atoms, icons. Byte formatting comes from
+// utils.js `formatBytes` (formerly a local `fmt_size` here).
 
 const MODEL_COLORS = [
   "#d48a50",
@@ -18,12 +19,6 @@ function modelColor(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   return MODEL_COLORS[h % MODEL_COLORS.length];
-}
-
-function fmt_size(bytes) {
-  if (!bytes) return "";
-  const gb = bytes / 1e9;
-  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / 1e6).toFixed(0)} MB`;
 }
 
 function ModelPicker({ active, onPick, onClose }) {
@@ -122,17 +117,29 @@ function ModelPicker({ active, onPick, onClose }) {
       )}
 
       {models && models.length === 0 && !error && (
-        <div
-          style={{
-            padding: "10px",
-            fontFamily: T.mono,
-            fontSize: 11,
-            color: T.fg3,
-          }}
-        >
-          No models pulled yet. Run{" "}
-          <span style={{ color: T.amber }}>ollama pull &lt;model&gt;</span> to
-          add one.
+        <div style={{ padding: "10px" }}>
+          <div style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3, marginBottom: 8 }}>
+            No models pulled yet.
+          </div>
+          <button
+            onClick={() => {
+              window.ekOpenModelManager?.();
+              onClose();
+            }}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 6,
+              border: "none",
+              background: T.amber,
+              color: "#1a1008",
+              fontFamily: T.sans,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Download a model…
+          </button>
         </div>
       )}
 
@@ -141,7 +148,7 @@ function ModelPicker({ active, onPick, onClose }) {
         const color = modelColor(m.name);
         const size = m.details?.parameter_size || "";
         const quant = m.details?.quantization_level || "";
-        const sizeOnDisk = fmt_size(m.size);
+        const sizeOnDisk = formatBytes(m.size);
         return (
           <div
             key={m.name}
@@ -233,6 +240,29 @@ function ModelPicker({ active, onPick, onClose }) {
           </div>
         );
       })}
+
+      {models && models.length > 0 && (
+        <div
+          onClick={() => {
+            window.ekOpenModelManager?.();
+            onClose();
+          }}
+          style={{
+            padding: "7px 10px",
+            marginTop: 4,
+            borderTop: `1px solid ${T.border}`,
+            borderRadius: 4,
+            cursor: "pointer",
+            fontFamily: T.sans,
+            fontSize: 12,
+            color: T.fg2,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = T.bg3)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          Manage models…
+        </div>
+      )}
     </div>
   );
 }
@@ -396,7 +426,7 @@ function CompareModelPickerModal({ open, onClose, onConfirm }) {
             const isChecked = selected.has(m.name);
             const color = modelColor(m.name);
             const size = m.details?.parameter_size || "";
-            const sizeOnDisk = fmt_size(m.size);
+            const sizeOnDisk = formatBytes(m.size);
             return (
               <label
                 key={m.name}
@@ -1073,21 +1103,44 @@ function OllamaGate({ open, modelId, onReady, onDismiss }) {
             </>
           )}
           {phase === "no-model" && (
-            <button
-              onClick={onDismiss}
-              style={{
-                padding: "7px 16px",
-                borderRadius: 6,
-                border: `1px solid ${T.border}`,
-                background: "transparent",
-                color: T.fg2,
-                fontFamily: T.sans,
-                fontSize: 13,
-                cursor: "pointer",
-              }}
-            >
-              Continue anyway
-            </button>
+            <>
+              <button
+                onClick={onDismiss}
+                style={{
+                  padding: "7px 16px",
+                  borderRadius: 6,
+                  border: `1px solid ${T.border}`,
+                  background: "transparent",
+                  color: T.fg2,
+                  fontFamily: T.sans,
+                  fontSize: 13,
+                  cursor: "pointer",
+                }}
+              >
+                Continue anyway
+              </button>
+              <button
+                onClick={() => {
+                  // Hand off to the in-app model manager; dismiss the gate
+                  // so the two modals don't stack.
+                  onDismiss();
+                  window.ekOpenModelManager?.();
+                }}
+                style={{
+                  padding: "7px 16px",
+                  borderRadius: 6,
+                  border: "none",
+                  background: T.amber,
+                  color: "#1a1008",
+                  fontFamily: T.sans,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Download a model…
+              </button>
+            </>
           )}
         </div>
       </div>

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **In-app model manager — download and delete models without a
+  terminal.** A new **Settings → Models** tab (also reachable via
+  **Manage models…** in the composer's model picker, a **Download a
+  model…** button when no models are installed, and from the startup
+  "Model not found" dialog) lists installed models with their on-disk
+  sizes, deletes them with a confirmation, and pulls new ones with a
+  live progress bar.
+
 ### Changed
 
 - **Replaced chat groups with Spaces.** A Space is a named workspace
@@ -26,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   react.dev/errors). A new Playwright spec (`offline-boot.spec.js`)
   boots the UI with all non-localhost requests blocked and fails if
   any external request is even attempted.
+- **Thinking mode set to false.** Ekorbia now detects thinking-capable
+- models via Ollama's `/api/show` capability probe and sends 
+- `think: false` by default. Without this, reasoning models default
+- thinking ON in Ollama and stream a long hidden chain-of-thought 
+- before answering, so the UI sat blank for seconds.
 
 ## [0.3.0] - 2026-06-03
 
