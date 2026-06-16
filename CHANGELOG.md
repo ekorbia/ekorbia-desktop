@@ -5,26 +5,39 @@ All notable changes to Ekorbia are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-06-16
+
+A "works without a terminal" release: guided first-run, in-app model
+management, watch recipes, and a fully-offline UI. macOS remains the
+primary platform.
 
 ### Added
 
-- **Watch recipes.** Creating a watch now starts from one-click
-- **recipes** — Summarise new downloads, Watch a price, Watch job 
-- listings, Follow a blog, or Custom — that pre-fill the form
-- (kind, prompt, cadence).
 - **Guided first-run setup.** Launch with no model installed and Ekorbia
   detects your machine's memory, recommends a right-sized Gemma 4
   (`e2b` for ≤8 GB up to `31b` for 64 GB+), and downloads it — plus the
   `nomic-embed-text` embedding model if you want folder search — in-app
-  with a progress bar.
+  with a progress bar. No terminal required.
 - **In-app model manager — download and delete models without a
   terminal.** A new **Settings → Models** tab (also reachable via
   **Manage models…** in the composer's model picker, a **Download a
   model…** button when no models are installed, and from the startup
   "Model not found" dialog) lists installed models with their on-disk
   sizes, deletes them with a confirmation, and pulls new ones with a
-  live progress bar.
+  live, cancellable progress bar.
+- **Watch recipes, a Today digest, and a Downloads watch.** Creating a
+  watch now starts from one-click recipes — Summarise new downloads,
+  Watch a price, Watch job listings, Follow a blog, or Custom — that
+  pre-fill the form (kind, prompt, cadence, and a model picker that
+  defaults to a model you actually have pulled). The Watches panel gained
+  an **All / Today** toggle and a **Chat about today** button that opens a
+  chat seeded with the last 24 hours of summaries. Folder watches can skip
+  files already present, so pointing one at a busy folder like Downloads
+  doesn't summarise the whole backlog at once.
+- **Faster replies from reasoning models.** Ekorbia detects
+  thinking-capable models (qwen3.x, deepseek-r1, gpt-oss, …) via Ollama's
+  `/api/show` probe and sends `think: false` by default, so they answer
+  right away instead of streaming a long hidden chain-of-thought first.
 
 ### Changed
 
@@ -45,11 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   react.dev/errors). A new Playwright spec (`offline-boot.spec.js`)
   boots the UI with all non-localhost requests blocked and fails if
   any external request is even attempted.
-- **Thinking mode set to false.** Ekorbia now detects thinking-capable
-- models via Ollama's `/api/show` capability probe and sends 
-- `think: false` by default. Without this, reasoning models default
-- thinking ON in Ollama and stream a long hidden chain-of-thought 
-- before answering, so the UI sat blank for seconds.
 
 ## [0.3.0] - 2026-06-03
 
@@ -296,6 +304,7 @@ First public release. Local-first AI desktop built on Tauri 2 + Ollama.
   Ekorbia-tinted), built via `./scripts/build-docs.sh` and uploaded
   manually to ekorbia.com.
 
-[Unreleased]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.2.0...HEAD
+[0.4.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ekorbia/ekorbia-desktop/releases/tag/v0.1.0

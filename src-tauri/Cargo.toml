@@ -8,7 +8,7 @@ name = "ekorbia"
 # name — all human-facing places where it actually helps. Bundle
 # filenames will read "Ekorbia_0.3.0_*"; the release page distinguishes
 # RCs via the prerelease flag.
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Local AI desktop IPE (Integrated Productivity Environment) powered by Ollama"
 license = "MIT"
