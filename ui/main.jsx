@@ -3522,6 +3522,45 @@ function App() {
     setComposerSeedKey(k => k + 1);
   };
 
+  // "Chat about today" from the Watches panel. Mirrors chatWithNotes but the
+  // digest text is already in hand (built client-side from the day's events),
+  // so there's no notes-file read.
+  const chatAboutToday = (digestText) => {
+    if (!digestText || !digestText.trim()) {
+      window.ekToast?.({
+        kind: 'info',
+        title: 'Nothing summarised today yet',
+        body: 'Once your watches process something today, this opens a chat about it.',
+      });
+      return;
+    }
+    const virtualPrompt = {
+      id: `today-${Date.now().toString(36)}`,
+      name: "Today's watches",
+      tags: ['watch'],
+      favorite: null,
+      body:
+        `You have access to the following digest — summaries your watches ` +
+        `produced in the last 24 hours. Use them as reference material when ` +
+        `answering. If asked something not covered, say so plainly.\n\n` +
+        `=== TODAY'S SUMMARIES START ===\n${digestText}\n=== TODAY'S SUMMARIES END ===`,
+      updated: 'now',
+      _virtual: true,
+    };
+    const chatId = genId();
+    const title = "Chat: Today's watches";
+    setPrompts(ps => [virtualPrompt, ...ps]);
+    setTabs(ts => [...ts, { id: chatId, title, model: modelId }]);
+    setChats(cs => ({
+      ...cs,
+      [chatId]: { id: chatId, title, messages: [], loaded: true },
+    }));
+    setAttachedPromptsByChat(m => ({ ...m, [chatId]: [virtualPrompt.id] }));
+    setActiveTab(chatId);
+    setComposerSeedText("What happened across my watches today?");
+    setComposerSeedKey(k => k + 1);
+  };
+
   // Update an existing prompt. Two paths:
   //   • Favorite-only change → prompts_meta_set (SQLite write, no file touch).
   //   • Anything else → prompts_save (rewrites the .md file). Favorite is
@@ -3635,6 +3674,10 @@ function App() {
   // null = create mode; watch object = edit mode. Cleared after close so a
   // subsequent "+ Configure" click reliably lands in create mode.
   const [editingWatch, setEditingWatch] = useS(null);
+  // Recipe picker ("+ Configure" → choose a recipe → pre-filled WatchModal).
+  // `watchTemplate` is the chosen recipe (or null for a blank/custom watch).
+  const [recipePickerOpen, setRecipePickerOpen] = useS(false);
+  const [watchTemplate, setWatchTemplate] = useS(null);
   // Multi-model "compare" creation modal (Phase 2). When open, user picks
   // 2 or 3 models; confirmation creates a new tab with tabType='multi-
   // pending'. Closed state means the modal is not mounted at all (see
@@ -3748,13 +3791,17 @@ function App() {
       <WatchModal
         open={watchModalOpen}
         editing={editingWatch}
+        template={watchTemplate}
+        defaultModel={model.id}
         onClose={() => {
           setWatchModalOpen(false);
           setEditingWatch(null);
+          setWatchTemplate(null);
         }}
         onCreated={() => {
           setWatchModalOpen(false);
           setEditingWatch(null);
+          setWatchTemplate(null);
           // Bump the panel's refresh key — picks up the new/edited row
           // without any direct coupling between modal and panel state.
           setWatchPanelRefreshKey((k) => k + 1);
@@ -3762,6 +3809,18 @@ function App() {
         prompts={prompts}
         notifPermission={notifPermission}
         refreshNotifPermission={refreshNotifPermission}
+      />
+      {/* Recipe picker — opened by "+ Configure". Choosing a recipe sets it
+          as the WatchModal template and opens the pre-filled form. */}
+      <RecipePickerModal
+        open={recipePickerOpen}
+        onClose={() => setRecipePickerOpen(false)}
+        onPick={(recipe) => {
+          setRecipePickerOpen(false);
+          setEditingWatch(null);
+          setWatchTemplate(recipe && recipe.custom ? null : recipe);
+          setWatchModalOpen(true);
+        }}
       />
       <CompareModelPickerModal
         open={compareModalOpen}
@@ -4077,11 +4136,19 @@ function App() {
                     width={rightPanelWidth}
                     prompts={prompts}
                     onConfigure={() => {
+                      // "+ Configure" now opens the recipe picker first; the
+                      // chosen recipe pre-fills the WatchModal.
+                      setRecipePickerOpen(true);
+                    }}
+                    onPickRecipe={(recipe) => {
                       setEditingWatch(null);
+                      setWatchTemplate(recipe && recipe.custom ? null : recipe);
                       setWatchModalOpen(true);
                     }}
+                    onChatAboutToday={chatAboutToday}
                     onEdit={(w) => {
                       setEditingWatch(w);
+                      setWatchTemplate(null);
                       setWatchModalOpen(true);
                     }}
                     onChatWithNotes={chatWithNotes}

@@ -84,6 +84,11 @@
     // watch
     watch_list: () => [],
     watch_events_list: () => [],
+    watch_create: () => undefined,
+    watch_default_paths: () => ({
+      downloadsDir: "/Users/test/Downloads",
+      defaultNotesDir: "/Users/test/Documents/Ekorbia/watches",
+    }),
 
     // attachments
     attachment_list: () => [],

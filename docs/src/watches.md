@@ -6,6 +6,22 @@ Open the **Watches** tab in the right sidebar to see your watches. Click **+ Con
 
 <!-- TODO: screenshot of the Watches panel with multiple watches running -->
 
+## Recipes — the quick way to start
+
+You don't have to know what "diff mode" or a CSS selector is to set up a watch. Click **+ Configure** (or use the cards shown when you have no watches yet) and pick a **recipe**:
+
+- **Summarise new downloads** — watches your Downloads folder and summarizes PDFs, text, and Markdown as they arrive. It skips everything already there, so you don't get flooded with summaries of old files.
+- **Watch a price** — tracks a product page and tells you when the price or stock changes.
+- **Watch job listings** — follows a careers page and summarizes new postings.
+- **Follow a blog or feed** — summarizes new posts from any RSS/Atom feed.
+- **Custom watch** — start from a blank form.
+
+A recipe just **pre-fills the watch form** — the right kind, a sensible summarization prompt, the polling cadence, and (for Downloads) the folder and a "skip existing files" cutoff. Review it, tweak anything you like, and click **Create**.
+
+## Today digest
+
+Above the activity feed, switch between **All** and **Today**. **Today** shows only the last 24 hours of activity. When there's something to talk about, a **Chat about today** button appears — click it to open a new chat seeded with the day's summaries, so you can ask "what changed across my watches today?" in one place.
+
 ## The three kinds of watch
 
 | Kind | Polls | What it summarizes |

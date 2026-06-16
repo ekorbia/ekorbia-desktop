@@ -93,6 +93,18 @@ pub(crate) async fn process_file(
     .await
 }
 
+/// Decide whether a file should be processed given its mtime and the
+/// watch's optional `ignore_before` cutoff. A file at or after the cutoff
+/// processes; an older one skips. No cutoff, or an unreadable mtime, → process
+/// (fail open). Pulled out as a pure fn so the cutoff logic is unit-testable
+/// without an AppHandle / real directory.
+fn passes_ignore_before(mtime_secs: Option<i64>, ignore_before: Option<i64>) -> bool {
+    match (ignore_before, mtime_secs) {
+        (Some(cutoff), Some(m)) => m >= cutoff,
+        _ => true,
+    }
+}
+
 pub(crate) async fn run_folder_watch(app: &tauri::AppHandle, watch: &Watch, cancel: &AtomicBool) {
     if watch.folder_path.is_empty() {
         log_warn!("watch '{}': folder kind has empty folder_path", watch.name);
@@ -143,6 +155,19 @@ pub(crate) async fn run_folder_watch(app: &tauri::AppHandle, watch: &Watch, canc
         if !supported {
             continue;
         }
+        // Skip files that predate the watch's ignore_before cutoff — keeps a
+        // brand-new folder watch (e.g. the Downloads recipe) from summarising
+        // the entire pre-existing backlog on its first scan. Fail OPEN: if we
+        // can't read the mtime, process the file rather than silently drop it.
+        let mtime_secs = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+        if !passes_ignore_before(mtime_secs, watch.ignore_before) {
+            continue;
+        }
         let path_str = path.to_string_lossy().to_string();
         match already_processed(app, &watch.id, &path_str) {
             Ok(true) => continue,
@@ -159,4 +184,29 @@ pub(crate) async fn run_folder_watch(app: &tauri::AppHandle, watch: &Watch, canc
         }
     }
     flush_notify_batch(app, watch, &notify_batch);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::passes_ignore_before;
+
+    #[test]
+    fn no_cutoff_processes_everything() {
+        assert!(passes_ignore_before(Some(100), None));
+        assert!(passes_ignore_before(None, None));
+    }
+
+    #[test]
+    fn unreadable_mtime_fails_open() {
+        // Better to over-summarise one file than silently skip it.
+        assert!(passes_ignore_before(None, Some(1000)));
+    }
+
+    #[test]
+    fn skips_files_older_than_cutoff_keeps_newer() {
+        let cutoff = Some(1000);
+        assert!(!passes_ignore_before(Some(999), cutoff)); // pre-existing → skip
+        assert!(passes_ignore_before(Some(1000), cutoff)); // exactly at cutoff → keep
+        assert!(passes_ignore_before(Some(1001), cutoff)); // arrived after → keep
+    }
 }

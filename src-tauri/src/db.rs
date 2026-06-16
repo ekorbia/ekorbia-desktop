@@ -330,7 +330,12 @@ CREATE TABLE IF NOT EXISTS watches (
     last_notified_status TEXT,
     -- Pipeline-owned: unix timestamp of last notification. Reserved for
     -- future rate-limiting / coalescing across cycles (v2).
-    last_notified_at INTEGER NOT NULL DEFAULT 0
+    last_notified_at INTEGER NOT NULL DEFAULT 0,
+    -- Folder kind: files with mtime below this unix-secs cutoff are skipped
+    -- on scan. Set to the creation time by the Downloads recipe (and the
+    -- form skip-existing-files option) so a brand-new folder watch does not
+    -- summarise the entire pre-existing backlog. NULL = process everything.
+    ignore_before INTEGER
 );
 
 -- One row per processed file. Doubles as the already-seen memo: the
@@ -544,6 +549,20 @@ pub(crate) fn apply_migrations(conn: &Connection) -> Result<(), String> {
     // CLAUDE.md for the user-facing model.
     add_locked_to_space_prompts(conn)?;
     drop_spaces_system_prompt(conn)?;
+
+    // Folder watches: skip files whose mtime predates this unix-secs cutoff.
+    // Set to the creation time by the Downloads recipe (and the form's
+    // skip-existing-files option) so a brand-new folder watch over a busy
+    // directory like ~/Downloads doesn't summarise the entire pre-existing
+    // backlog on its first scan. NULL = legacy process-everything.
+    //
+    // Guarded by table_exists because legacy unit-test fixtures build a
+    // minimal DB without a `watches` table; real installs always have it
+    // (SCHEMA's CREATE TABLE IF NOT EXISTS runs before this). Mirrors the
+    // add_locked_to_space_prompts guard.
+    if table_exists(conn, "watches")? {
+        add_column_if_missing(conn, "watches", "ignore_before", "INTEGER")?;
+    }
 
     Ok(())
 }

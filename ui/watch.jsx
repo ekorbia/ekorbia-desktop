@@ -66,6 +66,157 @@ function WatchField({
   );
 }
 
+// ─── Watch recipes ──────────────────────────────────────────────────────────
+// One-click starting points that pre-fill the watch form so a consumer
+// doesn't have to know what "diff mode" or a CSS selector is. Picking a
+// recipe opens the normal WatchModal pre-filled (kind, prompt, cadence,
+// and — for Downloads — the resolved folder + a "skip existing files"
+// cutoff); the user reviews and clicks Create. `promptSlug` references a
+// built-in prompt (seeded on first launch); if the user deleted it the
+// pipeline falls back to the default summary instruction.
+const WATCH_RECIPES = [
+  {
+    id: "downloads",
+    icon: "📁",
+    title: "Summarise new downloads",
+    blurb: "Summarise PDFs, text, and Markdown as they land in your Downloads folder.",
+    kind: "folder",
+    promptSlug: "summarize",
+    useDownloadsDir: true,
+    skipExisting: true,
+    notesFileName: "downloads-summaries.md",
+    name: "Downloads",
+  },
+  {
+    id: "price",
+    icon: "🏷️",
+    title: "Watch a price",
+    blurb: "Track a product page and get told when the price or stock changes.",
+    kind: "url",
+    promptSlug: "price-watcher",
+    urlDiffMode: "diff",
+    namePlaceholder: "e.g. Widget price",
+    sourcePlaceholder: "https://store.example.com/product",
+  },
+  {
+    id: "jobs",
+    icon: "💼",
+    title: "Watch job listings",
+    blurb: "Follow a careers page and summarise new postings as they appear.",
+    kind: "url",
+    promptSlug: "careers-watcher",
+    urlDiffMode: "diff",
+    namePlaceholder: "e.g. Acme careers",
+    sourcePlaceholder: "https://acme.com/careers",
+  },
+  {
+    id: "blog",
+    icon: "📡",
+    title: "Follow a blog or feed",
+    blurb: "Summarise new posts from any RSS or Atom feed.",
+    kind: "rss",
+    promptSlug: "summarize",
+    namePlaceholder: "e.g. A blog you follow",
+    sourcePlaceholder: "https://example.com/feed.xml",
+  },
+  {
+    id: "custom",
+    icon: "⚙️",
+    title: "Custom watch",
+    blurb: "Start from scratch — folder, feed, or web page.",
+    custom: true,
+  },
+];
+
+// Grid of recipe cards. `onPick(recipe)` fires on click. Used both inside
+// RecipePickerModal (the "+ Configure" flow) and as the WatchPanel empty
+// state, so a first-time user sees concrete options rather than a blank.
+function RecipeGallery({ onPick }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+      {WATCH_RECIPES.map((r) => (
+        <button
+          key={r.id}
+          data-recipe={r.id}
+          onClick={() => onPick(r)}
+          style={{
+            textAlign: "left",
+            background: T.bg2,
+            border: `1px solid ${T.border}`,
+            borderRadius: 8,
+            padding: "10px 12px",
+            cursor: "pointer",
+            display: "flex",
+            flexDirection: "column",
+            gap: 3,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.borderColor = T.borderStrong)}
+          onMouseLeave={(e) => (e.currentTarget.style.borderColor = T.border)}
+        >
+          <span style={{ fontSize: 16 }}>{r.icon}</span>
+          <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.fg }}>
+            {r.title}
+          </span>
+          <span style={{ fontFamily: T.sans, fontSize: 11, color: T.fg2, lineHeight: 1.4 }}>
+            {r.blurb}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Modal shown by "+ Configure": pick a recipe (or Custom) to open the
+// pre-filled WatchModal.
+function RecipePickerModal({ open, onClose, onPick }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); onClose?.(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div
+      onClick={() => onClose?.()}
+      style={{
+        position: "fixed", inset: 0, zIndex: 9999,
+        background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Choose a watch type"
+        style={{
+          width: 460, maxWidth: "90vw", background: T.bg1,
+          border: `1px solid ${T.borderStrong}`, borderRadius: 10,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.5)", padding: "16px 18px 18px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontFamily: T.serif, fontSize: 17, color: T.fg, flex: 1 }}>
+            What do you want to watch?
+          </div>
+          <button
+            onClick={() => onClose?.()}
+            aria-label="Close"
+            style={{ border: "none", background: "transparent", color: T.fg3, fontSize: 16, cursor: "pointer" }}
+          >
+            ✕
+          </button>
+        </div>
+        <RecipeGallery onPick={onPick} />
+      </div>
+    </div>
+  );
+}
+
 // ─── Watch Panel (sidebar) ──────────────────────────────────────────────────
 // Ambient background work. The user configures folder→notes pipelines via
 // WatchModal (form-only); this panel is the read/monitor side:
@@ -89,6 +240,12 @@ function WatchPanel({
   // Invoked when the user clicks the chat icon on a watch row — main.jsx
   // reads the notes file and opens a new chat with the contents as context.
   onChatWithNotes,
+  // Invoked from the empty-state recipe gallery with the chosen recipe —
+  // main.jsx sets it as the WatchModal template and opens the form.
+  onPickRecipe,
+  // Invoked with the markdown digest text when the user clicks "Chat about
+  // today" — main.jsx opens a new chat seeded with it.
+  onChatAboutToday,
   refreshKey = 0,
   // `{ watchId, key }` — bumped when an OS notification fired recently
   // and the user just focused the app. We apply it as the activity-feed
@@ -98,6 +255,9 @@ function WatchPanel({
   focusFilter,
 }) {
   const [watches, setWatches] = useState([]);
+  // Activity-feed scope: 'all' (everything, recent-first) or 'today' (the
+  // last 24h, for a daily digest + "Chat about today").
+  const [todayMode, setTodayMode] = useState(false);
   const [events, setEvents] = useState([]);
   // null = show all; otherwise filter to just this watch's events
   const [selectedWatchId, setSelectedWatchId] = useState(null);
@@ -120,11 +280,17 @@ function WatchPanel({
   const reload = async () => {
     if (!invoke) return;
     try {
+      // Today mode bounds the feed to the last 24h (via the Rust `since`
+      // filter) and lifts the cap so a busy day isn't truncated. All mode
+      // keeps the recent-100 view.
+      const since = todayMode ? Math.floor(Date.now() / 1000) - 86400 : null;
       const [ws, es] = await Promise.all([
         invoke("watch_list"),
-        // Bump the limit vs the old modal (25→100) since the panel has
-        // more vertical room for activity history.
-        invoke("watch_events_list", { watchId: null, limit: 100 }),
+        invoke("watch_events_list", {
+          watchId: null,
+          limit: todayMode ? 500 : 100,
+          since,
+        }),
       ]);
       setWatches(ws || []);
       setEvents(es || []);
@@ -133,11 +299,11 @@ function WatchPanel({
     }
   };
 
-  // Reload on mount and whenever the parent bumps refreshKey (which happens
-  // after WatchModal creates a new watch, so the panel sees it appear).
+  // Reload on mount, when the parent bumps refreshKey (after a watch is
+  // created), and when the All/Today scope changes (re-queries with `since`).
   useEffect(() => {
     reload();
-  }, [refreshKey]);
+  }, [refreshKey, todayMode]);
 
   // Notification click-through: parent bumps focusFilter.key (key 0 is
   // the initial state — ignore that) when the user just clicked an OS
@@ -195,8 +361,17 @@ function WatchPanel({
     setBusy(true);
     try {
       await invoke("watch_run_once");
+      // watch_run_once doesn't report a count, so give generic confirmation
+      // and set the right expectation: folder watches with "skip existing"
+      // on (e.g. the Downloads recipe) only summarise files added AFTER
+      // setup, so an immediate run over an unchanged folder is a no-op.
+      window.ekToast?.({
+        kind: "info",
+        title: "Watches checked",
+        body: "Anything new appears in the activity feed. Folder watches set to “skip existing files” only summarise files added after setup.",
+      });
     } catch (e) {
-      console.error(e);
+      window.ekToast?.({ kind: "error", title: "Run failed", body: String(e) });
     } finally {
       setBusy(false);
     }
@@ -246,13 +421,68 @@ function WatchPanel({
           borderBottom: `1px solid ${T.border}`,
         }}
       >
+        {/* All / Today scope toggle. Today bounds the feed to the last 24h
+            and unlocks "Chat about today". */}
+        <div
+          style={{
+            display: "flex",
+            border: `1px solid ${T.border}`,
+            borderRadius: 4,
+            overflow: "hidden",
+          }}
+        >
+          {[
+            ["all", "All"],
+            ["today", "Today"],
+          ].map(([mode, label]) => {
+            const active = todayMode === (mode === "today");
+            return (
+              <button
+                key={mode}
+                onClick={() => setTodayMode(mode === "today")}
+                style={{
+                  padding: "2px 7px",
+                  border: "none",
+                  background: active ? T.bg3 : "transparent",
+                  color: active ? T.fg : T.fg3,
+                  fontFamily: T.mono,
+                  fontSize: 10,
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
         <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
-          {visibleEvents.length} event{visibleEvents.length === 1 ? "" : "s"}
+          {visibleEvents.length}
           {selectedWatchId && (
             <span style={{ color: T.amber, marginLeft: 6 }}>· filtered</span>
           )}
         </span>
         <span style={{ flex: 1 }} />
+        {todayMode &&
+          visibleEvents.some((e) => e.status === "done" && e.summary) && (
+            <button
+              onClick={() =>
+                onChatAboutToday?.(buildTodayDigest(visibleEvents, watches).text)
+              }
+              title="Open a chat seeded with today's summaries"
+              style={{
+                background: "transparent",
+                border: `1px solid ${T.border}`,
+                borderRadius: 4,
+                padding: "2px 8px",
+                color: T.amber,
+                fontFamily: T.mono,
+                fontSize: 10.5,
+                cursor: "pointer",
+              }}
+            >
+              Chat about today
+            </button>
+          )}
         <button
           onClick={runNow}
           disabled={busy || watches.filter((w) => w.enabled).length === 0}
@@ -293,16 +523,24 @@ function WatchPanel({
       {watches.length === 0 ? (
         <div
           style={{
-            padding: "14px 14px",
-            fontFamily: T.mono,
-            fontSize: 11,
-            color: T.fg3,
-            fontStyle: "italic",
+            padding: "14px",
             borderBottom: `1px solid ${T.border}`,
+            overflowY: "auto",
           }}
         >
-          No watches yet. Click{" "}
-          <span style={{ color: T.fg2 }}>+ Configure</span> to add one.
+          <div
+            style={{
+              fontFamily: T.sans,
+              fontSize: 12,
+              color: T.fg2,
+              lineHeight: 1.5,
+              marginBottom: 10,
+            }}
+          >
+            Watches do ambient work in the background — summarising new files,
+            feeds, or web pages into a notes file. Pick a starting point:
+          </div>
+          <RecipeGallery onPick={(r) => onPickRecipe?.(r)} />
         </div>
       ) : (
         <div
@@ -879,6 +1117,15 @@ function WatchModal({
   onCreated,
   prompts,
   editing,
+  // A recipe template (WATCH_RECIPES entry) to pre-fill a NEW watch from.
+  // `editing` takes precedence; null/custom template = blank form. The
+  // open-effect resolves default paths (Downloads, notes dir) and applies
+  // recipeToFormDefaults.
+  template = null,
+  // The model a NEW watch defaults to — the user's current composer model,
+  // which they're guaranteed to have pulled. Falls back to gemma4:latest
+  // only if the caller passes nothing.
+  defaultModel = "gemma4:latest",
   // Tri-state: 'granted' / 'default' / null (still checking). When notify
   // is toggled on and this isn't 'granted', we show an inline explainer
   // strip with a "Request permission" button instead of letting the OS
@@ -899,11 +1146,18 @@ function WatchModal({
     urlDiffMode: "snapshot",
     intervalSecs: 30,
     notesPath: "",
-    model: "gemma4:latest",
+    model: defaultModel,
     promptId: null,
     notify: false,
+    // Folder kind: unix-secs cutoff; files older than this are skipped on
+    // scan. null = process everything. Set by the "skip existing files"
+    // checkbox and the Downloads recipe.
+    ignoreBefore: null,
   });
   const [busy, setBusy] = useState(false);
+  // Model-picker popover (mirrors the composer's). Open state lives here so
+  // typing/clicking elsewhere in the form doesn't unmount it.
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   // Separate busy flag for the "and run" variant so the two buttons can
   // show independent spinner states (the save-only button stays clickable
   // while a save+run round-trip is in progress, and vice versa — though
@@ -977,9 +1231,10 @@ function WatchModal({
       urlDiffMode: "snapshot",
       intervalSecs: defaultIntervalForKind("folder"),
       notesPath: "",
-      model: "gemma4:latest",
+      model: defaultModel,
       promptId: null,
       notify: false,
+      ignoreBefore: null,
     });
 
   // Each time the modal opens, either pre-fill from the watch being edited
@@ -987,6 +1242,10 @@ function WatchModal({
   // cancel/abandon would bleed into the next session.
   useEffect(() => {
     if (!open) return;
+    setPromptPickerOpen(false);
+    setPromptSearch("");
+    setTestResult(null);
+    setModelPickerOpen(false);
     if (editing) {
       setForm({
         name: editing.name || "",
@@ -999,9 +1258,10 @@ function WatchModal({
           editing.intervalSecs ||
           defaultIntervalForKind(editing.kind || "folder"),
         notesPath: editing.notesPath || "",
-        model: editing.model || "gemma4:latest",
+        model: editing.model || defaultModel,
         promptId: editing.promptId || null,
         notify: !!editing.notify,
+        ignoreBefore: editing.ignoreBefore ?? null,
       });
       // Open Advanced automatically if the watch has URL-specific tweaks
       // set — otherwise an existing CSS selector / diff-mode setting would
@@ -1011,14 +1271,31 @@ function WatchModal({
         (!!editing.urlSelector ||
           (editing.urlDiffMode && editing.urlDiffMode !== "snapshot"));
       setAdvancedOpen(!!hasUrlTweaks);
-    } else {
+      return;
+    }
+    if (template && !template.custom) {
+      // Recipe pre-fill. Resolve default paths (Downloads, notes dir) then
+      // map the recipe → form via the pure helper. Async, but the form
+      // shows its blank defaults for the brief moment before paths resolve.
       resetForm();
       setAdvancedOpen(false);
+      (async () => {
+        let paths = {};
+        try {
+          if (invoke) paths = await invoke("watch_default_paths");
+        } catch (_) { /* fall back to blank paths — user picks manually */ }
+        const defaults = recipeToFormDefaults(
+          template,
+          paths,
+          Math.floor(Date.now() / 1000),
+        );
+        if (defaults) setForm({ model: defaultModel, ...defaults });
+      })();
+      return;
     }
-    setPromptPickerOpen(false);
-    setPromptSearch("");
-    setTestResult(null);
-  }, [open, editing]);
+    resetForm();
+    setAdvancedOpen(false);
+  }, [open, editing, template]);
 
   // Validate the source field per kind: folder kinds need a folderPath,
   // RSS/URL need a sourceUrl. Notes file and name are always required.
@@ -1104,7 +1381,7 @@ function WatchModal({
           // NULL column stays happy and the Rust side reads source_url.
           folderPath: form.kind === "folder" ? form.folderPath.trim() : "",
           notesPath: form.notesPath.trim(),
-          model: form.model.trim() || "gemma4:latest",
+          model: form.model.trim() || defaultModel,
           promptId: form.promptId || null,
           // `enabled` is in the upsert SET clause on the Rust side, so we
           // must echo the current value when editing — otherwise saving a
@@ -1131,6 +1408,10 @@ function WatchModal({
           // v1 notifications: per-watch opt-in for OS notifications.
           // Rust requests permission lazily on first fire if needed.
           notify: !!form.notify,
+          // Folder kind: skip-existing cutoff. Only meaningful for folders;
+          // sent for all kinds (harmless on rss/url). Rust COALESCEs a null
+          // on edit so an existing cutoff is never wiped by a form re-save.
+          ignoreBefore: form.kind === "folder" ? (form.ignoreBefore ?? null) : null,
         },
       });
       // Fire-and-forget the immediate run — don't await. The Rust side
@@ -1323,6 +1604,33 @@ function WatchModal({
               onBrowse={pickFolder}
               browseLabel="Choose…"
             />
+          )}
+          {form.kind === "folder" && (
+            <label
+              style={{
+                display: "flex", alignItems: "flex-start", gap: 8,
+                margin: "2px 0 2px", cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={form.ignoreBefore != null}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    ignoreBefore: e.target.checked ? Math.floor(Date.now() / 1000) : null,
+                  })
+                }
+                style={{ marginTop: 2 }}
+              />
+              <span style={{ fontFamily: T.sans, fontSize: 11.5, color: T.fg2, lineHeight: 1.4 }}>
+                Skip files already in the folder
+                <span style={{ color: T.fg3 }}>
+                  {" "}— only summarise files that arrive from now on. Recommended for busy
+                  folders like Downloads.
+                </span>
+              </span>
+            </label>
           )}
           {form.kind === "rss" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1691,12 +1999,58 @@ function WatchModal({
             </div>
           )}
 
-          <WatchField
-            label="Model"
-            value={form.model}
-            onChange={(v) => setForm({ ...form, model: v })}
-            placeholder="gemma4:latest"
-          />
+          {/* Model picker — same popover as the composer, so the user picks
+              from models they actually have pulled rather than typing a name
+              that may not exist. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span
+              style={{
+                fontFamily: T.mono,
+                fontSize: 10,
+                color: T.fg3,
+                textTransform: "uppercase",
+                letterSpacing: 0.6,
+              }}
+            >
+              Model
+            </span>
+            <div style={{ position: "relative" }} data-watch-model>
+              <button
+                type="button"
+                onClick={() => setModelPickerOpen((v) => !v)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  width: "100%",
+                  padding: "7px 10px",
+                  borderRadius: 6,
+                  background: modelPickerOpen ? T.bg3 : T.bg2,
+                  border: `1px solid ${modelPickerOpen ? T.borderStrong : T.border}`,
+                  color: T.fg,
+                  cursor: "pointer",
+                  fontFamily: T.mono,
+                  fontSize: 12,
+                }}
+              >
+                <ModelDot color={modelColor(form.model || "?")} size={7} />
+                <span style={{ flex: 1, textAlign: "left" }}>
+                  {form.model || "Choose a model…"}
+                </span>
+                <span style={{ opacity: 0.5, fontSize: 9 }}>▾</span>
+              </button>
+              {modelPickerOpen && (
+                <ModelPicker
+                  active={form.model}
+                  onPick={(id) => {
+                    setForm((f) => ({ ...f, model: id }));
+                    setModelPickerOpen(false);
+                  }}
+                  onClose={() => setModelPickerOpen(false)}
+                />
+              )}
+            </div>
+          </div>
 
           {/* ── Prompt picker ──────────────────────────────────────── */}
           {/* Links this watch to a prompt in the library. Rust loads */}

@@ -197,6 +197,7 @@ pub fn run() {
             watch::commands::watch_run_one,
             watch::commands::watch_test_source,
             watch::commands::watch_notes_read,
+            watch::commands::watch_default_paths,
             files::commands::chat_set_output_dir,
             files::commands::chat_output_dir,
             files::commands::chat_files_list,

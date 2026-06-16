@@ -72,8 +72,9 @@ pub(crate) fn watch_create(state: tauri::State<'_, DbState>, watch: Watch) -> Re
     db.execute(
         "INSERT INTO watches \
          (id, name, folder_path, notes_path, model, prompt_id, enabled, created_at, \
-          kind, source_url, interval_secs, last_polled_at, url_selector, url_diff_mode, notify) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) \
+          kind, source_url, interval_secs, last_polled_at, url_selector, url_diff_mode, notify, \
+          ignore_before) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
          ON CONFLICT(id) DO UPDATE SET \
             name = excluded.name, \
             folder_path = excluded.folder_path, \
@@ -86,7 +87,13 @@ pub(crate) fn watch_create(state: tauri::State<'_, DbState>, watch: Watch) -> Re
             interval_secs = excluded.interval_secs, \
             url_selector = excluded.url_selector, \
             url_diff_mode = excluded.url_diff_mode, \
-            notify = excluded.notify",
+            notify = excluded.notify, \
+            ignore_before = COALESCE(excluded.ignore_before, ignore_before)",
+        // ignore_before uses COALESCE rather than a plain overwrite: it's
+        // user-set at creation (the Downloads recipe / form sets it) but the
+        // edit form doesn't surface it, so a form-save sends NULL — which
+        // must PRESERVE the existing cutoff, not clear it. Clearing it would
+        // re-expose the whole pre-existing folder on the next scan.
         (
             &watch.id,
             &watch.name,
@@ -103,6 +110,7 @@ pub(crate) fn watch_create(state: tauri::State<'_, DbState>, watch: Watch) -> Re
             &selector,
             &diff_mode,
             i64::from(watch.notify),
+            watch.ignore_before,
         ),
     )
     .map_err(|e| e.to_string())?;
@@ -146,51 +154,100 @@ pub(crate) fn watch_set_enabled(
     Ok(())
 }
 
+/// Build the `watch_events` SELECT with the WHERE clause matching whichever
+/// filters are active, instead of hand-writing all four watch_id×since
+/// combinations. Named params (:wid, :since, :limit) are bound by the caller.
+fn build_events_query(filter_watch: bool, filter_since: bool) -> String {
+    let mut sql = String::from(
+        "SELECT id, watch_id, file_path, status, summary, error, created_at FROM watch_events",
+    );
+    let mut clauses: Vec<&str> = Vec::new();
+    if filter_watch {
+        clauses.push("watch_id = :wid");
+    }
+    if filter_since {
+        clauses.push("created_at >= :since");
+    }
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY created_at DESC LIMIT :limit");
+    sql
+}
+
+/// List watch events, newest first. `watch_id` filters to one watch (None =
+/// all). `since` (unix secs) filters to events at/after that time — used by
+/// the "Today" digest view. Both are optional; a missing `since` (the
+/// pre-digest UI call shape) deserializes to None and returns everything,
+/// so the change is backward compatible.
 #[tauri::command]
 pub(crate) fn watch_events_list(
     state: tauri::State<'_, DbState>,
     watch_id: Option<String>,
     limit: i64,
+    since: Option<i64>,
 ) -> Result<Vec<WatchEvent>, String> {
     let db = state.0.lock().map_err(|e| e.to_string())?;
     let limit = limit.clamp(1, 500);
-    let mut stmt: rusqlite::Statement<'_>;
-    let map_row = |row: &rusqlite::Row<'_>| {
-        Ok(WatchEvent {
-            id: row.get(0)?,
-            watch_id: row.get(1)?,
-            file_path: row.get(2)?,
-            status: row.get(3)?,
-            summary: row.get(4)?,
-            error: row.get(5)?,
-            created_at: row.get(6)?,
+
+    let sql = build_events_query(watch_id.is_some(), since.is_some());
+    let mut stmt = db.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut params: Vec<(&str, &dyn rusqlite::ToSql)> = Vec::new();
+    if let Some(ref wid) = watch_id {
+        params.push((":wid", wid));
+    }
+    if let Some(ref s) = since {
+        params.push((":since", s));
+    }
+    params.push((":limit", &limit));
+
+    let events = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok(WatchEvent {
+                id: row.get(0)?,
+                watch_id: row.get(1)?,
+                file_path: row.get(2)?,
+                status: row.get(3)?,
+                summary: row.get(4)?,
+                error: row.get(5)?,
+                created_at: row.get(6)?,
+            })
         })
-    };
-    let events: Vec<WatchEvent> = if let Some(wid) = watch_id {
-        stmt = db
-            .prepare(
-                "SELECT id, watch_id, file_path, status, summary, error, created_at \
-                 FROM watch_events WHERE watch_id = ?1 \
-                 ORDER BY created_at DESC LIMIT ?2",
-            )
-            .map_err(|e| e.to_string())?;
-        stmt.query_map((&wid, limit), map_row)
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?
-    } else {
-        stmt = db
-            .prepare(
-                "SELECT id, watch_id, file_path, status, summary, error, created_at \
-                 FROM watch_events ORDER BY created_at DESC LIMIT ?1",
-            )
-            .map_err(|e| e.to_string())?;
-        stmt.query_map([limit], map_row)
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?
-    };
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(events)
+}
+
+/// Resolve sensible default paths for the watch-creation form / recipes:
+/// the OS Downloads directory (for the Downloads recipe) and a default
+/// notes directory under the user's Documents. Both may be absent only on
+/// the most unusual setups; the UI falls back to letting the user pick.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WatchDefaultPaths {
+    downloads_dir: Option<String>,
+    default_notes_dir: String,
+}
+
+#[tauri::command]
+pub(crate) fn watch_default_paths() -> WatchDefaultPaths {
+    let downloads_dir = dirs::download_dir().map(|p| p.to_string_lossy().to_string());
+    // Mirror memory.rs's resolution chain: Documents, else home, else "".
+    let base = dirs::document_dir().or_else(dirs::home_dir);
+    let default_notes_dir = base
+        .map(|p| {
+            p.join("Ekorbia")
+                .join("watches")
+                .to_string_lossy()
+                .to_string()
+        })
+        .unwrap_or_default();
+    WatchDefaultPaths {
+        downloads_dir,
+        default_notes_dir,
+    }
 }
 
 /// Kick off an immediate one-shot scan of all enabled watches, ignoring
@@ -304,4 +361,123 @@ pub(crate) fn watch_notes_read(
         return Ok(String::new());
     }
     std::fs::read_to_string(p).map_err(|e| format!("Notes read failed: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::SCHEMA;
+    use rusqlite::Connection;
+
+    #[test]
+    fn build_events_query_includes_only_active_filters() {
+        assert!(!build_events_query(false, false).contains("WHERE"));
+        let w = build_events_query(true, false);
+        assert!(w.contains("watch_id = :wid") && !w.contains("created_at >="));
+        let s = build_events_query(false, true);
+        // "watch_id" appears in the SELECT column list either way; assert on
+        // the WHERE-clause fragment instead.
+        assert!(s.contains("created_at >= :since") && !s.contains("watch_id = :wid"));
+        let both = build_events_query(true, true);
+        assert!(both.contains("watch_id = :wid AND created_at >= :since"));
+    }
+
+    /// The `since` filter must actually drop older rows. Exercises the real
+    /// built query against an in-memory DB with the real schema.
+    #[test]
+    fn since_filter_drops_older_events() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO watches (id, name, folder_path, notes_path) VALUES ('w1','W','/tmp','/tmp/n.md')",
+            [],
+        )
+        .unwrap();
+        for (id, ts) in [("old", 1000_i64), ("new", 100_000_i64)] {
+            conn.execute(
+                "INSERT INTO watch_events (id, watch_id, file_path, status, created_at) \
+                 VALUES (?1, 'w1', ?2, 'done', ?3)",
+                (id, format!("/tmp/{id}"), ts),
+            )
+            .unwrap();
+        }
+
+        // since = 50_000 → only the "new" event (ts 100_000) survives.
+        let sql = build_events_query(true, true);
+        let mut stmt = conn.prepare(&sql).unwrap();
+        let ids: Vec<String> = stmt
+            .query_map(
+                &[
+                    (":wid", &"w1" as &dyn rusqlite::ToSql),
+                    (":since", &50_000_i64),
+                    (":limit", &500_i64),
+                ],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(ids, vec!["new".to_string()]);
+
+        // No since → both events.
+        let sql_all = build_events_query(true, false);
+        let mut stmt2 = conn.prepare(&sql_all).unwrap();
+        let count = stmt2
+            .query_map(
+                &[
+                    (":wid", &"w1" as &dyn rusqlite::ToSql),
+                    (":limit", &500_i64),
+                ],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .count();
+        assert_eq!(count, 2);
+    }
+
+    /// ignore_before round-trips through create → list, and a form-save that
+    /// omits it (None) PRESERVES the existing cutoff (COALESCE), rather than
+    /// clearing it and re-exposing the backlog.
+    #[test]
+    fn ignore_before_persists_and_survives_form_resave() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        // Create with a cutoff (as the Downloads recipe would).
+        conn.execute(
+            "INSERT INTO watches (id, name, folder_path, notes_path, ignore_before) \
+             VALUES ('w1','Downloads','/dl','/n.md', 12345)",
+            [],
+        )
+        .unwrap();
+        // Simulate a form re-save that omits ignore_before (NULL) using the
+        // same COALESCE clause watch_create uses.
+        conn.execute(
+            "INSERT INTO watches (id, name, folder_path, notes_path, ignore_before) \
+             VALUES ('w1','Downloads renamed','/dl','/n.md', NULL) \
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, \
+             ignore_before = COALESCE(excluded.ignore_before, ignore_before)",
+            [],
+        )
+        .unwrap();
+        let got: (String, Option<i64>) = conn
+            .query_row(
+                "SELECT name, ignore_before FROM watches WHERE id='w1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(got.0, "Downloads renamed"); // edit applied
+        assert_eq!(got.1, Some(12345)); // cutoff preserved
+    }
+
+    #[test]
+    fn default_paths_resolve_a_notes_dir() {
+        let p = watch_default_paths();
+        // On any normal dev/CI machine a home/Documents dir resolves; tolerate
+        // the (unusual) empty case but verify the shape when present.
+        assert!(p.default_notes_dir.is_empty() || p.default_notes_dir.contains("Ekorbia"));
+        if let Some(d) = p.downloads_dir.as_deref() {
+            assert!(!d.is_empty());
+        }
+    }
 }

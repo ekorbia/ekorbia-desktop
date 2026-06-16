@@ -104,6 +104,14 @@ pub(crate) struct Watch {
     /// (v2). Currently set but not read on the dedup path.
     #[serde(default)]
     pub(crate) last_notified_at: i64,
+    /// Folder kind: skip files whose mtime (unix secs) is below this
+    /// cutoff. Set to "now" by the Downloads recipe so a fresh folder
+    /// watch doesn't summarise pre-existing files. None = process all.
+    /// User-set (not pipeline-owned), but `watch_create` preserves an
+    /// existing value when the form omits it (COALESCE) so editing a
+    /// watch never resurrects the backlog.
+    #[serde(default)]
+    pub(crate) ignore_before: Option<i64>,
 }
 
 pub(crate) fn default_watch_kind() -> String {
@@ -135,7 +143,7 @@ pub(crate) fn default_interval_secs() -> i64 {
 pub(crate) const WATCH_COLUMNS: &str =
     "id, name, folder_path, notes_path, model, prompt_id, enabled, created_at, \
      kind, source_url, interval_secs, last_polled_at, last_content, url_selector, \
-     url_diff_mode, notify, last_notified_status, last_notified_at";
+     url_diff_mode, notify, last_notified_status, last_notified_at, ignore_before";
 
 /// Materialize a `Watch` from a row whose columns match `WATCH_COLUMNS` in
 /// order. Bool columns are stored as INTEGER 0/1 (SQLite has no native bool)
@@ -161,6 +169,7 @@ pub(crate) fn map_watch_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Watch> 
         notify: row.get::<_, i64>(15)? != 0,
         last_notified_status: row.get(16)?,
         last_notified_at: row.get(17)?,
+        ignore_before: row.get(18)?,
     })
 }
 

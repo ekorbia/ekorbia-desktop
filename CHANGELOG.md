@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Watch recipes.** Creating a watch now starts from one-click
+- **recipes** — Summarise new downloads, Watch a price, Watch job 
+- listings, Follow a blog, or Custom — that pre-fill the form
+- (kind, prompt, cadence).
 - **Guided first-run setup.** Launch with no model installed and Ekorbia
   detects your machine's memory, recommends a right-sized Gemma 4
   (`e2b` for ≤8 GB up to `31b` for 64 GB+), and downloads it — plus the

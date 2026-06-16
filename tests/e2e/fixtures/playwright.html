@@ -69,6 +69,8 @@
       "onKeep", "onStopAll", "onStopColumn",
       // OllamaGate (guided first-run) handlers
       "onReady", "onDismiss", "onModelInstalled",
+      // Watch recipes / Today digest handlers
+      "onPick", "onPickRecipe", "onChatAboutToday", "onConfigure",
     ];
     handlerNames.forEach(function (name) {
       if (typeof finalProps[name] !== "function") {

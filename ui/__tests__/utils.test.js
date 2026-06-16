@@ -21,6 +21,8 @@ const {
   accumulatePullProgress,
   applyThinkPref,
   recommendGemmaModel,
+  recipeToFormDefaults,
+  buildTodayDigest,
   ekFilesGroupByPath,
   bucketChatsByDate,
   instantiateSpacePinnedAttachments,
@@ -834,4 +836,81 @@ test("recommendGemmaModel: every result carries a download size + reason", () =>
     assert.match(r.approx, /\d/);
     assert.ok(r.reason && r.reason.length > 0);
   }
+});
+
+// ── recipeToFormDefaults ─────────────────────────────────────────────────
+
+test("recipeToFormDefaults: custom / null recipe returns null", () => {
+  assert.equal(recipeToFormDefaults(null, {}, 100), null);
+  assert.equal(recipeToFormDefaults({ custom: true }, {}, 100), null);
+});
+
+test("recipeToFormDefaults: downloads recipe fills folder + notes + cutoff", () => {
+  const paths = { downloadsDir: "/Users/x/Downloads", defaultNotesDir: "/Users/x/Documents/Ekorbia/watches" };
+  const f = recipeToFormDefaults(
+    { kind: "folder", promptSlug: "summarize", useDownloadsDir: true, skipExisting: true, notesFileName: "downloads-summaries.md", name: "Downloads" },
+    paths, 1700000000,
+  );
+  assert.equal(f.kind, "folder");
+  assert.equal(f.folderPath, "/Users/x/Downloads");
+  assert.equal(f.notesPath, "/Users/x/Documents/Ekorbia/watches/downloads-summaries.md");
+  assert.equal(f.promptId, "summarize");
+  assert.equal(f.ignoreBefore, 1700000000); // skip pre-existing files
+  assert.equal(f.name, "Downloads");
+});
+
+test("recipeToFormDefaults: url recipe carries diff mode, no cutoff", () => {
+  const f = recipeToFormDefaults(
+    { kind: "url", promptSlug: "price-watcher", urlDiffMode: "diff" },
+    { downloadsDir: "/dl", defaultNotesDir: "/n" }, 100,
+  );
+  assert.equal(f.kind, "url");
+  assert.equal(f.urlDiffMode, "diff");
+  assert.equal(f.folderPath, ""); // not a downloads recipe
+  assert.equal(f.ignoreBefore, null); // skipExisting not set
+  assert.equal(f.intervalSecs, 1800); // url default
+});
+
+// ── buildTodayDigest ─────────────────────────────────────────────────────
+
+test("buildTodayDigest: groups done events by watch, builds markdown", () => {
+  const events = [
+    { watchId: "w1", filePath: "/a/report.pdf", status: "done", summary: "Report summary", createdAt: 5 },
+    { watchId: "w1", filePath: "/a/memo.txt", status: "done", summary: "Memo summary", createdAt: 4 },
+    { watchId: "w2", filePath: "/b/feed#1", status: "done", summary: "Post summary", createdAt: 3 },
+  ];
+  const watches = [{ id: "w1", name: "Downloads" }, { id: "w2", name: "Blog" }];
+  const d = buildTodayDigest(events, watches);
+  assert.equal(d.groups.length, 2);
+  assert.equal(d.count, 3);
+  assert.match(d.text, /## Downloads/);
+  assert.match(d.text, /### report\.pdf/);
+  assert.match(d.text, /Report summary/);
+  assert.match(d.text, /## Blog/);
+});
+
+test("buildTodayDigest: error rows counted but excluded from text", () => {
+  const events = [
+    { watchId: "w1", filePath: "/a/ok.pdf", status: "done", summary: "OK", createdAt: 2 },
+    { watchId: "w1", filePath: "/a/bad.pdf", status: "error", error: "boom", createdAt: 1 },
+  ];
+  const d = buildTodayDigest(events, [{ id: "w1", name: "W" }]);
+  assert.equal(d.count, 1); // only the done item
+  assert.equal(d.groups[0].errors, 1);
+  assert.doesNotMatch(d.text, /boom/);
+});
+
+test("buildTodayDigest: empty events yield empty text and no groups", () => {
+  const d = buildTodayDigest([], []);
+  assert.equal(d.text, "");
+  assert.equal(d.groups.length, 0);
+  assert.equal(d.count, 0);
+});
+
+test("buildTodayDigest: unknown watch id falls back to 'Watch' label", () => {
+  const d = buildTodayDigest(
+    [{ watchId: "ghost", filePath: "/x", status: "done", summary: "s", createdAt: 1 }],
+    [],
+  );
+  assert.match(d.text, /## Watch/);
 });

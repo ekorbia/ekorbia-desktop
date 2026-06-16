@@ -512,6 +512,93 @@ function recommendGemmaModel(ramBytes) {
   };
 }
 
+// ── Watch recipes + Today digest (watch.jsx, main.jsx) ─────────────────────
+
+// Turn a watch "recipe" + resolved default paths into a partial WatchModal
+// form object (or null for the "custom" recipe / no recipe). Pure so the
+// prefill mapping is unit-testable; `nowSecs` is passed in rather than read
+// from the clock so tests are deterministic.
+//
+//   recipe — entry from WATCH_RECIPES (watch.jsx): { kind, promptSlug,
+//            urlDiffMode?, useDownloadsDir?, skipExisting?, notesFileName?,
+//            name?, custom? }
+//   paths  — { downloadsDir, defaultNotesDir } from watch_default_paths
+//   nowSecs — unix seconds, used as the ignore_before cutoff when the recipe
+//            opts into skipping pre-existing files
+function recipeToFormDefaults(recipe, paths, nowSecs) {
+  if (!recipe || recipe.custom) return null;
+  const p = paths || {};
+  const kind = recipe.kind || "folder";
+  const notesPath =
+    p.defaultNotesDir && recipe.notesFileName
+      ? `${p.defaultNotesDir}/${recipe.notesFileName}`
+      : "";
+  return {
+    name: recipe.name || "",
+    kind,
+    folderPath: recipe.useDownloadsDir ? p.downloadsDir || "" : "",
+    sourceUrl: "",
+    urlSelector: "",
+    urlDiffMode: recipe.urlDiffMode || "snapshot",
+    intervalSecs: defaultIntervalForKind(kind),
+    notesPath,
+    promptId: recipe.promptSlug || null,
+    notify: false,
+    // Folder recipes that opt into skipping the existing backlog stamp the
+    // cutoff at setup time; everything else leaves it unset (process all).
+    ignoreBefore: recipe.skipExisting ? nowSecs : null,
+  };
+}
+
+// Build a "Today" digest from watch events: group by watch, and produce a
+// markdown `text` blob suitable for injecting into a chat. Error rows are
+// counted (errors) but kept OUT of the chat text (they'd be noise to reason
+// over). `count` is the number of summarised items included in `text`.
+//
+//   events  — [{ watchId, filePath, status, summary, error, createdAt }]
+//   watches — [{ id, name }] used to label groups
+function buildTodayDigest(events, watches) {
+  const nameById = {};
+  (watches || []).forEach((w) => {
+    nameById[w.id] = w.name;
+  });
+  const order = [];
+  const groupsMap = new Map();
+  (events || []).forEach((e) => {
+    if (!groupsMap.has(e.watchId)) {
+      groupsMap.set(e.watchId, {
+        watchId: e.watchId,
+        watchName: nameById[e.watchId] || "Watch",
+        items: [],
+        errors: 0,
+      });
+      order.push(e.watchId);
+    }
+    const g = groupsMap.get(e.watchId);
+    if (e.status === "error") g.errors += 1;
+    g.items.push(e);
+  });
+  const groups = order.map((id) => groupsMap.get(id));
+
+  let text = "";
+  let count = 0;
+  for (const g of groups) {
+    const dones = g.items.filter(
+      (it) => it.status === "done" && it.summary && it.summary.trim(),
+    );
+    if (!dones.length) continue;
+    text += `## ${g.watchName}\n\n`;
+    for (const it of dones) {
+      const label = (it.filePath || "").split("/").pop() || "";
+      text += label
+        ? `### ${label}\n${it.summary.trim()}\n\n`
+        : `${it.summary.trim()}\n\n`;
+      count += 1;
+    }
+  }
+  return { groups, text: text.trim(), count };
+}
+
 // ── Sidebar chat date-bucketing (main.jsx + shell.jsx) ─────────────────────
 //
 // Group chats into Today / Yesterday / Last 7 days / Last 30 days / Older.
@@ -723,6 +810,8 @@ if (typeof window !== "undefined") {
   window.accumulatePullProgress = accumulatePullProgress;
   window.applyThinkPref = applyThinkPref;
   window.recommendGemmaModel = recommendGemmaModel;
+  window.recipeToFormDefaults = recipeToFormDefaults;
+  window.buildTodayDigest = buildTodayDigest;
   window.ekFilesGroupByPath = ekFilesGroupByPath;
   window.bucketChatsByDate = bucketChatsByDate;
   window.getTauriRoot = getTauriRoot;
@@ -824,6 +913,8 @@ if (typeof module !== "undefined" && module.exports) {
     accumulatePullProgress,
     applyThinkPref,
     recommendGemmaModel,
+    recipeToFormDefaults,
+    buildTodayDigest,
     ekFilesGroupByPath,
     bucketChatsByDate,
     getTauriRoot,
