@@ -1,55 +1,15 @@
-# Ekorbia — Local AI Integrated Productivity Environment
+# Ekorbia — Local AI Chat and Productivity Environment
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platform: macOS · Linux · Windows](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey)
 ![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db)
 ![Powered by Ollama](https://img.shields.io/badge/powered%20by-Ollama-black)
 
-A native desktop Integrated Productivity Environment (IPE) for local AI models powered by [Ollama](https://ollama.com). Ekorbia runs entirely on your machine — no cloud, no API keys.
+A native desktop chat and productivity environment for local AI models powered by [Ollama](https://ollama.com). Ekorbia runs entirely on your machine — no cloud, no API keys. It pairs multi-tab local chat with the features that set it apart — background **Watches** over folders, feeds, and web pages, a **Spotlight-style quick-query overlay**, and **ephemeral chats, model comparison mode, prompt library** — all fully offline, with no telemetry and no CDN calls.
 
 <p align="center">
   <img src="docs/screenshots/ekorbia-screenshot-0.1.png" alt="Ekorbia main chat panel" width="800">
 </p>
-
-## Requirements
-
-- **A supported desktop OS:**
-  - **macOS 12 (Monterey) or newer** — full feature set, primary
-    platform.
-  - **Linux** — Ubuntu 22.04+, Fedora 39+, or any distro with a recent
-    WebKitGTK 4.1. The quick-query overlay and one-keystroke screenshot
-    capture are not yet wired up on Linux (see [Platform feature
-    matrix](#platform-feature-matrix) below); everything else works.
-  - **Windows 10 1809+ or Windows 11** — full feature set except the
-    one-keystroke screenshot capture (planned).
-- **[Ollama](https://ollama.com) installed and running** — `ollama serve`
-  on `http://localhost:11434`. The Ekorbia installer does not bundle
-  Ollama; install it separately.
-- **At least one chat model pulled**, e.g.:
-  ```bash
-  ollama pull llama3.2:3b           # small, fast, general-purpose
-  ollama pull gemma3:4b             # vision-capable (sees attached images)
-  ollama pull nomic-embed-text      # for folder RAG / search
-  ```
-- **~8 GB free RAM** for the recommended models. Smaller models will
-  run on less; larger ones need more.
-
-## Platform feature matrix
-
-| Feature | macOS | Linux | Windows |
-|---|:---:|:---:|:---:|
-| Chat (single + compare modes) | ✅ | ✅ | ✅ |
-| Attachments + folder RAG | ✅ | ✅ | ✅ |
-| Watches (folder / RSS / URL) | ✅ | ✅ | ✅ |
-| OS-native notifications | ✅ | ✅ (libnotify) | ✅ (WinToast) |
-| Prompt library | ✅ | ✅ | ✅ |
-| Memory file | ✅ | ✅ | ✅ |
-| Chat-tool file saves | ✅ | ✅ | ✅ |
-| Full-text history search | ✅ | ✅ | ✅ |
-| Quick-query overlay (Spotlight-style) | ✅ | — | ✅ |
-| Screenshot capture (one keystroke) | ✅ | — | — |
-
-A "—" means the feature isn't shipped on that platform yet. Linux overlay support and Linux/Windows screenshot capture are on the roadmap.
 
 ## Install
 
@@ -232,6 +192,49 @@ The bundles land under `src-tauri/target/release/bundle/<format>/`:
 For development with hot-reload, use `cargo tauri dev` from the
 `src-tauri/` directory.
 
+## Requirements
+
+- **A supported desktop OS:**
+  - **macOS 12 (Monterey) or newer** — full feature set, primary
+    platform.
+  - **Linux** — Ubuntu 22.04+, Fedora 39+, or any distro with a recent
+    WebKitGTK 4.1. The quick-query overlay and one-keystroke screenshot
+    capture are not yet wired up on Linux (see [Platform feature
+    matrix](#platform-feature-matrix) below); everything else works.
+  - **Windows 10 1809+ or Windows 11** — full feature set except the
+    one-keystroke screenshot capture (planned).
+- **[Ollama](https://ollama.com) installed and running** — `ollama serve`
+  on `http://localhost:11434`. The Ekorbia installer does not bundle
+  Ollama; install it separately.
+- **At least one chat model** — but you don't have to pull it yourself
+  first. On first launch Ekorbia detects your RAM, recommends a
+  right-sized Gemma 4, and downloads it for you (plus an embedding model
+  for folder RAG). To pre-pull from a terminal instead:
+  ```bash
+  ollama pull gemma4:e4b            # vision-capable, good default
+  ollama pull llama3.2:3b           # small, fast, general-purpose
+  ollama pull nomic-embed-text      # for folder RAG / search
+  ```
+- **~8 GB free RAM** for the recommended models. Smaller models will
+  run on less; larger ones need more.
+
+## Platform feature matrix
+
+| Feature | macOS | Linux | Windows |
+|---|:---:|:---:|:---:|
+| Chat (single + compare modes) | ✅ | ✅ | ✅ |
+| Attachments + folder RAG | ✅ | ✅ | ✅ |
+| Watches (folder / RSS / URL) | ✅ | ✅ | ✅ |
+| OS-native notifications | ✅ | ✅ (libnotify) | ✅ (WinToast) |
+| Prompt library | ✅ | ✅ | ✅ |
+| Memory file | ✅ | ✅ | ✅ |
+| Chat-tool file saves | ✅ | ✅ | ✅ |
+| Full-text history search | ✅ | ✅ | ✅ |
+| Quick-query overlay (Spotlight-style) | ✅ | — | ✅ |
+| Screenshot capture (one keystroke) | ✅ | — | — |
+
+A "—" means the feature isn't shipped on that platform yet. Linux overlay support and Linux/Windows screenshot capture are on the roadmap.
+
 ## Features
 
 - **Multi-tab chat** with independent conversation history per tab
@@ -254,7 +257,7 @@ For development with hot-reload, use `cargo tauri dev` from the
   - Sort by Recent / A→Z / Z→A / Favorite (defaults to A→Z)
   - Resizable list column (left half of the panel)
   - Import prompts from `.md` / `.txt` files
-  - 28 built-in prompts ship with the app: Album Deep Dive, Brainstorm, Cliff Notes, Cloudflare Uptime Watcher, Cover Letter Writer, Devil's Advocate, Email Draft, Explain Simply, Google Cloud Uptime Watcher, How Does It End, Job Posting Watcher, Lateral Thinking Puzzles, Log Triage, Murder Mystery Interrogation, New Listing Watcher, Notes Synthesizer, Personal & Professional Website Builders, Price / Availability Watcher, Rental Watcher, Research Paper Tracker, Resume Coach, Sensitive Doc Q&A, Should I Watch This, Summarize, Text Adventure, Tone Reframer, Translate → Spanish / French / German, Wikipedia Edit Watcher
+  - 31 built-in prompts ship with the app: Album Deep Dive, Brainstorm, Cliff Notes, Cloudflare Uptime Watcher, Cover Letter Writer, Devil's Advocate, Email Draft, Explain Simply, Google Cloud Uptime Watcher, How Does It End, Job Posting Watcher, Lateral Thinking Puzzles, Log Triage, Murder Mystery Interrogation, New Listing Watcher, Notes Synthesizer, Personal Website Builder, Price / Availability Watcher, Professional Website Builder, Rental Watcher, Research Paper Tracker, Resume Coach, Sensitive Doc Q&A, Should I Watch This, Summarize, Text Adventure, Tone Reframer, Translate → French, Translate → German, Translate → Spanish, Wikipedia Edit Watcher
   - "Restore built-in prompts" button in Settings re-copies them if you've deleted any
 - **Quick-query overlay** (⌘⇧Space on macOS, Alt+Space on Windows; customisable in Settings — *not available on Linux yet*)
   - Spotlight-style panel that pops up over any app — never steals focus from your work
@@ -267,6 +270,7 @@ For development with hot-reload, use `cargo tauri dev` from the
   - The captured PNG opens in a fresh chat tab with the image attached as a vision attachment
   - Auto-switches to a vision-capable model if your current model can't see images (and tells you via toast); warns if no vision model is available
 - **Watch feature (ambient background work)** — three kinds, all writing into the same notes file
+  - **One-click recipes**: start from a gallery of ready-made watches — **Watch my Downloads**, price / availability, job postings, blog / RSS, or a blank **Custom** watch — that pre-fill the folder, prompt, and cadence so the first watch is a single click. The Watches panel shows this gallery whenever you have no watches yet
   - **Folder**: Ekorbia polls a chosen folder and summarises any new file (PDF / TXT / MD) that lands there
   - **RSS feed**: Polls an RSS or Atom feed; summarises each unseen entry. If the feed only ships a short teaser and a link, Ekorbia automatically follows the link and extracts the article body so summaries aren't paper-thin
   - **URL**: Polls an arbitrary public page and only summarises when its visible text actually changes. **Snapshot mode** sends the whole new page to the model; **Diff mode** sends a unified line diff of what changed since the last poll — ideal for release notes, changelogs, leaderboards, status pages
@@ -276,8 +280,11 @@ For development with hot-reload, use `cargo tauri dev` from the
   - **Edit watches** — pencil icon on each watch row reopens the form pre-filled so you can change the name, prompt, model, cadence, or any other field without deleting and re-creating
   - **OS notifications** — per-watch opt-in toggle in the form sends a native OS notification (macOS Notification Center, Linux libnotify, Windows toast) when new events arrive. Multiple events from one poll cycle are coalesced into a single banner ("8 new items from My Folder"). Watches with notifications enabled show a 🔔 glyph in the list. On macOS the form explains the permission request before the OS dialog fires.
   - Right-panel "Watches" tab shows the activity feed with live processing indicators and a kind glyph (📁 / 📡 / 🌐) per row
+  - **Today view**: an **All / Today** toggle on the feed; *Today* bounds it to the last 24 hours and unlocks **Chat about today**, which opens a chat seeded with a digest of everything your watches surfaced today
+  - **Folder watches skip pre-existing files** — a new folder watch (e.g. the Downloads recipe) only summarises files added *after* you create it, so it won't dump a backlog of everything already in the folder; a "skip files already in folder" checkbox in the form controls this
   - "Chat with notes" button opens a new chat with the accumulated notes injected as system context — ideal for asking questions across many summaries at once
 - **Live Ollama model picker** — lists all locally pulled models, switch mid-session; your selection sticks across launches and auto-falls-back to an installed model if your previous pick is no longer pulled
+- **In-app model management** — browse, **download**, and delete Ollama models without opening a terminal: a curated starter list (Gemma 4 tiers, an embedding model, and more) plus a free-text field with name autocomplete, live download progress (per-layer, with a Cancel button), and one-click delete. Reachable from **Settings → Models**, the picker's **Manage models…** footer, and the guided first-run. You can still `ollama pull` from a terminal if you prefer
 - **Streaming responses** — assistant tokens appear as the model produces them; a **Stop** button mid-generation freezes whatever was written so far and marks the partial message as `Stopped` so you can see exactly where the cut-off happened
 - **Markdown rendering** for assistant replies — headings, lists, tables, blockquotes, inline and fenced code, all rendered cleanly; **syntax-highlighted code blocks** via highlight.js (github-dark) with a per-block **Copy** button on hover. User messages stay as plain text so you see exactly what you typed
 - **Edit & retry messages** — click the pencil icon on any past user message to edit and resend (the conversation truncates from that point so the model re-answers with your revision); click the retry icon on the last assistant reply to regenerate. The DB and FTS index stay consistent — no orphan rows
@@ -296,8 +303,9 @@ For development with hot-reload, use `cargo tauri dev` from the
   - Every write is sandboxed to the chat's output directory; path-traversal attempts (`..`, absolute paths, symlink escapes) are rejected server-side with unit-tested rules
 - **Tab strip with attachment indicator** — tabs with attached files show a small paperclip + count so you can see context coverage at a glance
 - **History sidebar** with searchable chat history grouped by date, plus per-chat delete
-- **Settings panel** (tabbed: General / Prompts / Memory / Attachments) exposes theme, density, status-bar toggle, overlay hotkey, screenshot hotkey, prompts folder, memory file path, embedding model, top-k chunk count, folder file types and ignore patterns, plus a **Show tour again** button to re-run the onboarding
+- **Settings panel** (tabbed: General / Models / Prompts / Memory / Attachments) exposes theme, density, status-bar toggle, overlay hotkey, screenshot hotkey, in-app model install/removal, prompts folder, memory file path, embedding model, top-k chunk count, folder file types and ignore patterns, plus a **Show tour again** button to re-run the onboarding
 - **First-launch onboarding tour** — a 5-slide intro covers the hotkeys, attachments, memory file, and prompts library on the very first launch. Skippable any time with ⎋, and re-openable later from Settings → General → Help → Show tour again
+- **Guided first-run setup** — after the tour, if Ollama is running but you have no models, Ekorbia detects your system RAM, recommends a right-sized Gemma 4 (down to `gemma4:e2b` on low-RAM machines), optionally grabs an embedding model for folder RAG, and downloads them in-app with progress — so you land in a working chat without ever touching a terminal. "Choose a different model" opens the model manager, and a copy-paste terminal command is offered as a fallback
 - **Toasts** for non-modal feedback (model not pulled, attachment errors, watch failures) — never blocks the UI
 - **Ollama auto-start** — detects whether Ollama is running at launch and offers to start it; the main window keeps focus while Ollama boots
 - **Status bar** that distinguishes *Ollama not running* / *model not pulled* / *cold* / *warming* / *loaded* states, plus an aggregated *Indexing docs/ — 42/87* line whenever any attachment is being indexed
@@ -373,7 +381,9 @@ matrix runners.
 
 ## Switching models
 
-Click the model name button in the bottom-right of the composer to open the model picker. It lists every model currently pulled in Ollama (queried live from `/api/tags` each time the picker opens). To add a model:
+Click the model name button in the bottom-right of the composer to open the model picker. It lists every model currently pulled in Ollama (queried live from `/api/tags` each time the picker opens).
+
+To add a model, click **Manage models…** in the picker footer (or open **Settings → Models**) and download it from the curated starter list or by name — progress shows inline and the new model appears in the picker as soon as it finishes. You can still pull from a terminal if you prefer:
 
 ```bash
 ollama pull <model-name>
@@ -417,7 +427,7 @@ Start typing in the **search box at the top of the History sidebar**. After ~150
 
 ## Watching folders, feeds, and URLs
 
-Open the right-side **Watches** panel and click **+ Configure** to create a new watch, or click the **pencil icon** on an existing watch row to edit it. Pick a kind:
+Open the right-side **Watches** panel and click **+ Configure** to open the **recipe gallery** — ready-made watches you can start with one click (**Watch my Downloads**, price / availability, job postings, blog / RSS) or **Custom** for a blank form. (With no watches yet, the panel shows this gallery directly.) Picking a recipe drops you into the watch form pre-filled for that recipe. To edit an existing watch instead, click the **pencil icon** on its row. Each watch has a kind:
 
 - **Folder** — Ekorbia scans the directory every 30 s (configurable). When a new `.pdf` / `.txt` / `.md` lands, it summarises the file and appends the summary to your notes file.
 
@@ -429,6 +439,10 @@ Open the right-side **Watches** panel and click **+ Configure** to create a new 
   - **Advanced → CSS selector**: optionally narrow extraction to a sub-tree (`article`, `main`, `.post-content`). If the selector matches nothing on a given poll, the whole page is used as a fallback so the watch doesn't silently break.
 
 All three kinds share the same notes file, model, and (optional) summarisation prompt. The activity feed in the right panel shows kind glyph (📁 / 📡 / 🌐), source label, model, processing dots, and each event's full summary inline (click to expand truncated entries).
+
+**Today view**: the feed has an **All / Today** toggle. *Today* bounds it to the last 24 hours and enables **Chat about today**, which opens a new chat seeded with a digest of everything your watches captured today — handy for a single morning catch-up across all of them.
+
+**Folder watches skip pre-existing files**: a newly-created folder watch (e.g. the Downloads recipe) summarises only files that arrive *after* you set it up — it won't flood your notes with a backlog of everything already sitting in the folder. The "skip files already in folder" checkbox in the form controls this.
 
 **Editing a watch**: click the pencil icon between the on/off toggle and the trash icon on any watch row. The form opens pre-filled; saving runs the same upsert so pipeline state (`last_content`, `last_polled_at`) is preserved — the next poll continues from where it left off rather than re-firing a baseline summary.
 
@@ -502,7 +516,7 @@ When you complete a capture:
 - A new chat tab opens automatically with the screenshot attached as a vision attachment
 - If your current model can see images, you're good to go — type a question and send
 - If your current model **can't** see images but a vision model is cached from earlier this session, Ekorbia switches to it and toasts *"Switched to vision model: <name>"*
-- If no vision model is available at all, a toast warns you the image will be ignored — `ollama pull` one (e.g. `gemma3:4b`, `llava`) and reattach
+- If no vision model is available at all, a toast warns you the image will be ignored — `ollama pull` one (e.g. `gemma4:e4b`, `llava`) and reattach
 
 The captured PNG is written to your system temp directory and referenced by path from the attachment store, so don't delete it before sending the first message. On macOS the OS reclaims temp files on reboot.
 
@@ -526,4 +540,4 @@ Ekorbia is released under the [MIT License](LICENSE).
 
 Copyright (c) 2026 Ekorbia.
 
-Third-party crate attributions are enumerated in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). The front-end loads React, ReactDOM, Babel-standalone, marked, highlight.js, and DOMPurify from CDN (unpkg) and Google Fonts; none of those libraries are vendored into the repository.
+Third-party crate attributions are enumerated in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). The front-end libraries (React, ReactDOM, Babel-standalone, marked, highlight.js, DOMPurify) and fonts (Inter, JetBrains Mono, Instrument Serif) are **vendored into [`ui/vendor/`](ui/vendor/) and served locally** — Ekorbia loads no code or fonts from any CDN, so it boots fully offline and the only network traffic it produces is to your local Ollama server. See [`ui/vendor/README.md`](ui/vendor/README.md) for pinned versions and upstream sources, and [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSES.md) for their license texts.
