@@ -1,0 +1,51 @@
+# Voice input
+
+Dictate into the composer instead of typing. Ekorbia records from your
+microphone and transcribes your speech **on your machine** — the audio is
+never uploaded.
+
+> Voice input is macOS-only for now.
+
+## Dictating
+
+1. Click the **microphone button** in the composer (between the prompt button
+   and the model picker).
+2. Speak. The button turns red and shows a timer while it's recording.
+3. Click it again to stop. Your words are transcribed and inserted at the
+   cursor, ready to edit or send.
+
+Press **Esc** while recording to cancel without transcribing.
+
+The first time you record, macOS asks for permission to use the microphone —
+click **Allow**. If you dismiss it or change your mind later, enable Ekorbia
+under **System Settings → Privacy & Security → Microphone**.
+
+## Choosing a speech model
+
+The first time you use voice input, Ekorbia offers to download a small speech
+model. Three English models are available:
+
+| Model | Size | Best for |
+|-------|------|----------|
+| **base.en** | ~142 MB | The recommended default — fast and accurate |
+| tiny.en | ~75 MB | The fastest option / lowest memory |
+| small.en | ~466 MB | The most accurate, a little slower |
+
+Models download once and then run entirely offline. On Apple Silicon
+transcription is GPU-accelerated and typically takes well under a second for a
+short dictation.
+
+Manage your speech models any time under **Settings → Voice** — download
+another, switch which one is the default, or remove ones you don't use.
+
+## Notes
+
+- Everything runs locally. The only network use is the one-time model
+  download from Hugging Face; after that, voice input works with the network
+  off.
+- Dictation works in private chats too — it's just another way to enter text.
+- Speech models are separate from your chat (Ollama) models: the model picker
+  in the composer chooses which LLM answers; the voice model only turns your
+  speech into text.
+- If you see "No audio captured," the microphone permission likely isn't
+  granted yet — check **System Settings → Privacy & Security → Microphone**.

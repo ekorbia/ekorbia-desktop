@@ -38,6 +38,7 @@ mod settings;
 mod spaces;
 mod system;
 mod text_extract;
+mod voice;
 mod watch;
 
 use crate::log::{log_info, log_warn};
@@ -135,6 +136,14 @@ pub fn run() {
             ollama::ollama_pull_cancel,
             ollama::ollama_delete,
             system::system_profile,
+            voice::voice_models_installed,
+            voice::voice_model_download,
+            voice::voice_model_download_cancel,
+            voice::voice_model_delete,
+            voice::voice_record_start,
+            voice::voice_record_stop,
+            voice::voice_record_cancel,
+            voice::voice_prewarm,
             overlay::overlay_hide,
             overlay::overlay_resize,
             overlay::focus_main,

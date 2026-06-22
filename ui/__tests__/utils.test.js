@@ -19,6 +19,8 @@ const {
   defaultIntervalForKind,
   formatBytes,
   accumulatePullProgress,
+  voiceModelProgress,
+  formatClock,
   applyThinkPref,
   recommendGemmaModel,
   recipeToFormDefaults,
@@ -913,4 +915,45 @@ test("buildTodayDigest: unknown watch id falls back to 'Watch' label", () => {
     [],
   );
   assert.match(d.text, /## Watch/);
+});
+
+// ── voiceModelProgress ─────────────────────────────────────────────────────
+
+test("voiceModelProgress: null seed is zeroed + indeterminate", () => {
+  const p = voiceModelProgress(null);
+  assert.equal(p.completed, 0);
+  assert.equal(p.total, 0);
+  assert.equal(p.pct, null);
+  assert.equal(p.done, false);
+  assert.equal(p.error, null);
+});
+
+test("voiceModelProgress: computes percent from completed/total", () => {
+  assert.equal(voiceModelProgress({ completed: 71, total: 142 }).pct, 50);
+});
+
+test("voiceModelProgress: pct null until total known; caps at 100", () => {
+  assert.equal(voiceModelProgress({ completed: 100, total: 0 }).pct, null);
+  assert.equal(voiceModelProgress({ completed: 200, total: 100 }).pct, 100);
+});
+
+test("voiceModelProgress: surfaces done + error", () => {
+  assert.equal(voiceModelProgress({ done: true }).done, true);
+  assert.equal(voiceModelProgress({ error: "boom" }).error, "boom");
+});
+
+// ── formatClock ────────────────────────────────────────────────────────────
+
+test("formatClock: pads seconds and rolls minutes", () => {
+  assert.equal(formatClock(0), "0:00");
+  assert.equal(formatClock(5), "0:05");
+  assert.equal(formatClock(42), "0:42");
+  assert.equal(formatClock(75), "1:15");
+  assert.equal(formatClock(600), "10:00");
+});
+
+test("formatClock: clamps negative / NaN to 0:00", () => {
+  assert.equal(formatClock(-3), "0:00");
+  assert.equal(formatClock(NaN), "0:00");
+  assert.equal(formatClock("12"), "0:12");
 });

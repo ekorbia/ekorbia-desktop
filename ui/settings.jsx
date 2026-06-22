@@ -950,6 +950,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
           {[
             { id: "general", label: "General" },
             { id: "models", label: "Models" },
+            { id: "voice", label: "Voice" },
             { id: "prompts", label: "Prompts" },
             { id: "memory", label: "Memory" },
             { id: "attachments", label: "Attachments" },
@@ -1282,6 +1283,27 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                 localStorage.getItem("ekorbia.main.model") || "gemma4:latest"
               }
             />
+          )}
+
+          {/* ── Voice tab ─────────────────────────────────────────── */}
+          {activeTab === "voice" && (
+            <>
+              <SectionLabel label="Voice input" />
+              <div
+                style={{
+                  fontFamily: T.mono,
+                  fontSize: 10,
+                  color: T.fg3,
+                  lineHeight: 1.5,
+                  marginBottom: 8,
+                }}
+              >
+                Push-to-talk dictation in the composer — click the mic, speak, then
+                click again to insert the transcript. Audio is transcribed on your
+                machine and never uploaded.
+              </div>
+              <VoiceSettings />
+            </>
           )}
 
           {/* ── Attachments tab ──────────────────────────────────── */}

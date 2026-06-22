@@ -5,6 +5,21 @@ All notable changes to Ekorbia are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Voice input — push-to-talk dictation in the composer.** Click the mic
+  button (between the prompt button and the model picker), speak, then click
+  again to insert the transcript at your cursor; Esc cancels. Speech is
+  transcribed entirely on your machine with
+  [whisper.cpp](https://github.com/ggml-org/whisper.cpp) — nothing is
+  uploaded. First use downloads a small English model (`base.en`, ~142 MB;
+  `tiny.en` and `small.en` are also offered) with a cancellable progress bar;
+  manage them under **Settings → Voice**. Metal-accelerated on Apple Silicon
+  (a few hundred milliseconds for a short dictation). macOS-first; the mic
+  permission prompt appears the first time you record.
+
 ## [0.4.0] - 2026-06-16
 
 A "works without a terminal" release: guided first-run, in-app model

@@ -92,6 +92,18 @@
 
     // attachments
     attachment_list: () => [],
+
+    // voice dictation (Phase 1). Defaults keep mounts quiet; specs override
+    // to exercise download progress (drive args.onProgress.__deliver) or a
+    // captured transcript.
+    voice_models_installed: () => ["base.en"],
+    voice_model_download: () => undefined,
+    voice_model_download_cancel: () => undefined,
+    voice_model_delete: () => undefined,
+    voice_record_start: () => undefined,
+    voice_record_stop: () => ({ text: "", captured: false, audioSecs: 0 }),
+    voice_record_cancel: () => undefined,
+    voice_prewarm: () => undefined,
   };
 
   const invoke = function (cmd, args) {

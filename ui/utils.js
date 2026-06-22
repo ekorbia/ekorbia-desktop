@@ -449,6 +449,29 @@ function accumulatePullProgress(state, chunk) {
   return { layers, statusLine, totalBytes, completedBytes, pct, done, error };
 }
 
+// Fold one voice-model download chunk into display state. Whisper models are
+// a single file (unlike Ollama's per-layer pull), so each chunk already
+// carries cumulative {completed, total} bytes. Pure — safe in setState.
+//   chunk — { completed?, total?, done?, error? }, or null to seed
+// Returns { completed, total, pct, done, error }. `pct` is null until the
+// total is known (render an indeterminate bar until then).
+function voiceModelProgress(chunk) {
+  const c = chunk || {};
+  const completed = typeof c.completed === "number" ? c.completed : 0;
+  const total = typeof c.total === "number" ? c.total : 0;
+  const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : null;
+  return { completed, total, pct, done: !!c.done, error: c.error ? String(c.error) : null };
+}
+
+// Format a whole-second duration as "M:SS" for the recording timer.
+//   42 → "0:42", 75 → "1:15". Negative / NaN clamps to "0:00".
+function formatClock(secs) {
+  const s = Math.max(0, Math.floor(Number(secs) || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${r < 10 ? "0" : ""}${r}`;
+}
+
 // Apply the thinking preference to an Ollama /api/chat request body.
 //
 // Reasoning models (qwen3.x, deepseek-r1, gpt-oss, …) auto-enable thinking
@@ -808,6 +831,8 @@ if (typeof window !== "undefined") {
   window.defaultIntervalForKind = defaultIntervalForKind;
   window.formatBytes = formatBytes;
   window.accumulatePullProgress = accumulatePullProgress;
+  window.voiceModelProgress = voiceModelProgress;
+  window.formatClock = formatClock;
   window.applyThinkPref = applyThinkPref;
   window.recommendGemmaModel = recommendGemmaModel;
   window.recipeToFormDefaults = recipeToFormDefaults;
@@ -911,6 +936,8 @@ if (typeof module !== "undefined" && module.exports) {
     defaultIntervalForKind,
     formatBytes,
     accumulatePullProgress,
+    voiceModelProgress,
+    formatClock,
     applyThinkPref,
     recommendGemmaModel,
     recipeToFormDefaults,

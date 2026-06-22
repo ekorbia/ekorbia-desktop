@@ -2407,6 +2407,36 @@ function Composer({
               title="Insert prompt (/)"
               size={24}
             />
+            {/* Voice dictation — records mic audio and inserts the local
+                Whisper transcript at the caret. Always available (even in
+                private chats — it's just text entry). See voice.jsx. */}
+            <VoiceMicButton
+              disabled={isStreaming}
+              onInsert={(t) => {
+                if (!t) return;
+                const ta = taRef.current;
+                const cur = text;
+                let start = cur.length;
+                let end = cur.length;
+                if (ta) {
+                  start = ta.selectionStart != null ? ta.selectionStart : cur.length;
+                  end = ta.selectionEnd != null ? ta.selectionEnd : cur.length;
+                }
+                const pre = cur.slice(0, start);
+                const needsSpace = pre.length > 0 && !/\s$/.test(pre);
+                const ins = (needsSpace ? " " : "") + t;
+                setText(pre + ins + cur.slice(end));
+                requestAnimationFrame(() => {
+                  try {
+                    if (ta) {
+                      ta.focus();
+                      const p = start + ins.length;
+                      ta.setSelectionRange(p, p);
+                    }
+                  } catch (_) {}
+                });
+              }}
+            />
             <span style={{ flex: 1 }} />
             {/* Model selector */}
             <button
