@@ -16,6 +16,11 @@ never uploaded.
 
 Press **Esc** while recording to cancel without transcribing.
 
+Voice input is also available in the **quick-query overlay** — the same mic
+button sits in the overlay's input row, so you can dictate a quick question
+without switching to the main window. The overlay stays open while you're
+recording.
+
 The first time you record, macOS asks for permission to use the microphone —
 click **Allow**. If you dismiss it or change your mind later, enable Ekorbia
 under **System Settings → Privacy & Security → Microphone**.
@@ -31,12 +36,29 @@ model. Three English models are available:
 | tiny.en | ~75 MB | The fastest option / lowest memory |
 | small.en | ~466 MB | The most accurate, a little slower |
 
+For languages other than English, download a **multilingual** model instead —
+`base`, `small`, or `large-v3-turbo` (most accurate, ~1.6 GB). These cover 99
+languages and can also translate to English.
+
 Models download once and then run entirely offline. On Apple Silicon
 transcription is GPU-accelerated and typically takes well under a second for a
 short dictation.
 
 Manage your speech models any time under **Settings → Voice** — download
 another, switch which one is the default, or remove ones you don't use.
+
+## Other languages
+
+By default Ekorbia transcribes English. To dictate in another language,
+download a **multilingual** model (see above), then open **Settings → Voice**:
+
+- **Language** — choose **Auto-detect** or a specific language. Auto-detect
+  works well for a sentence or more of clear speech.
+- **Translate to English** — when on, your speech is transcribed *and*
+  translated into English in one step.
+
+Both settings apply only to multilingual models; the English-only (`*.en`)
+models always produce English.
 
 ## Notes
 

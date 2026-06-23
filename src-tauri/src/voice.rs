@@ -306,10 +306,28 @@ pub(crate) async fn voice_prewarm(app: AppHandle, model: String) -> Result<(), S
         .map_err(|e| format!("prewarm task failed: {e}"))?
 }
 
+/// Resolve the effective recognition language + translate flag for a model.
+/// English-only models (`*.en`) always transcribe English and can't run the
+/// translate task, so force `("en", false)` for them regardless of the user's
+/// picks. Multilingual models use the chosen language ("auto" auto-detects)
+/// and honour translate-to-English.
+fn effective_lang_translate<'a>(
+    model: &str,
+    language: Option<&'a str>,
+    translate: bool,
+) -> (&'a str, bool) {
+    if model.ends_with(".en") {
+        ("en", false)
+    } else {
+        (language.unwrap_or("auto"), translate)
+    }
+}
+
 fn transcribe_samples(
     ctx: &WhisperContext,
     audio: &[f32],
-    language: Option<&str>,
+    language: &str,
+    translate: bool,
 ) -> Result<String, String> {
     let mut state = ctx
         .create_state()
@@ -320,8 +338,8 @@ fn transcribe_samples(
         .unwrap_or(4)
         .clamp(1, 8);
     params.set_n_threads(threads);
-    params.set_language(Some(language.unwrap_or("en")));
-    params.set_translate(false);
+    params.set_language(Some(language));
+    params.set_translate(translate);
     // Each dictation is independent — don't carry decoder state between them.
     params.set_no_context(true);
     params.set_suppress_blank(true);
@@ -564,11 +582,12 @@ pub(crate) async fn voice_record_stop(
     session_id: String,
     model: String,
     language: Option<String>,
+    translate: bool,
 ) -> Result<VoiceResult, String> {
     // Joining the capture thread + running Whisper blocks; keep it off the
     // async worker threads.
     tokio::task::spawn_blocking(move || {
-        voice_record_stop_blocking(&app, &session_id, &model, language.as_deref())
+        voice_record_stop_blocking(&app, &session_id, &model, language.as_deref(), translate)
     })
     .await
     .map_err(|e| format!("transcription task failed: {e}"))?
@@ -579,6 +598,7 @@ fn voice_record_stop_blocking(
     session_id: &str,
     model: &str,
     language: Option<&str>,
+    translate: bool,
 ) -> Result<VoiceResult, String> {
     let mut sess = take_session(session_id).ok_or_else(|| "no active recording".to_string())?;
     sess.stop.store(true, Ordering::Relaxed);
@@ -608,7 +628,8 @@ fn voice_record_stop_blocking(
     }
 
     let ctx = load_or_get_context(app, model)?;
-    let text = transcribe_samples(&ctx, &audio, language)?;
+    let (lang, do_translate) = effective_lang_translate(model, language, translate);
+    let text = transcribe_samples(&ctx, &audio, lang, do_translate)?;
     Ok(VoiceResult {
         text,
         captured: true,
@@ -650,6 +671,29 @@ mod tests {
         assert!(!valid_model_name("a/b"));
         assert!(!valid_model_name("has space"));
         assert!(!valid_model_name("..")); // contains ".."
+    }
+
+    #[test]
+    fn lang_translate_gating() {
+        // English-only models force ("en", false) and ignore the user's picks.
+        assert_eq!(
+            effective_lang_translate("base.en", Some("es"), true),
+            ("en", false)
+        );
+        // Multilingual models honour the chosen language + translate flag.
+        assert_eq!(
+            effective_lang_translate("small", Some("es"), true),
+            ("es", true)
+        );
+        assert_eq!(
+            effective_lang_translate("base", Some("auto"), false),
+            ("auto", false)
+        );
+        // No language → auto-detect on multilingual.
+        assert_eq!(
+            effective_lang_translate("large-v3-turbo", None, true),
+            ("auto", true)
+        );
     }
 
     #[test]

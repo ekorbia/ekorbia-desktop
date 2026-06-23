@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manage them under **Settings → Voice**. Metal-accelerated on Apple Silicon
   (a few hundred milliseconds for a short dictation). macOS-first; the mic
   permission prompt appears the first time you record.
+- **Voice input in the quick-query overlay** — the same mic button in the
+  Spotlight-style overlay, so you can dictate a quick question without
+  switching to the main window. Recording keeps the overlay open (it won't
+  auto-dismiss mid-dictation).
+- **Multilingual dictation + translate-to-English.** Alongside the English
+  models, multilingual Whisper models (`base`, `small`, `large-v3-turbo`)
+  cover 99 languages. **Settings → Voice** adds a language picker
+  (auto-detect or a specific language) and a **Translate to English** toggle;
+  both apply to multilingual models (English-only models always transcribe
+  English).
 
 ## [0.4.0] - 2026-06-16
 

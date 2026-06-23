@@ -18,14 +18,48 @@
 // set expectations. base.en is the recommended default — the Phase 0 spike
 // measured ~150 ms for 11 s of audio on an M1 Max with near-perfect accuracy.
 const VOICE_MODELS = [
+  // English-only — smaller + a touch faster; they ignore language/translate.
   {
     name: "base.en",
     approx: "142 MB",
-    blurb: "Recommended — fast and accurate (English)",
+    blurb: "Recommended — fast and accurate",
     recommended: true,
+    multilingual: false,
   },
-  { name: "tiny.en", approx: "75 MB", blurb: "Fastest, lowest memory (English)" },
-  { name: "small.en", approx: "466 MB", blurb: "Most accurate; a little slower (English)" },
+  { name: "tiny.en", approx: "75 MB", blurb: "Fastest, lowest memory", multilingual: false },
+  {
+    name: "small.en",
+    approx: "466 MB",
+    blurb: "Most accurate English; a little slower",
+    multilingual: false,
+  },
+  // Multilingual — 99 languages + translate-to-English.
+  { name: "base", approx: "142 MB", blurb: "Multilingual — 99 languages", multilingual: true },
+  { name: "small", approx: "466 MB", blurb: "Multilingual, more accurate; slower", multilingual: true },
+  {
+    name: "large-v3-turbo",
+    approx: "1.6 GB",
+    blurb: "Multilingual, most accurate; large download",
+    multilingual: true,
+  },
+];
+
+// Curated subset of Whisper's 99 languages for the picker. "auto" detects.
+const VOICE_LANGUAGES = [
+  ["auto", "Auto-detect"],
+  ["en", "English"],
+  ["es", "Spanish"],
+  ["fr", "French"],
+  ["de", "German"],
+  ["it", "Italian"],
+  ["pt", "Portuguese"],
+  ["nl", "Dutch"],
+  ["ru", "Russian"],
+  ["zh", "Chinese"],
+  ["ja", "Japanese"],
+  ["ko", "Korean"],
+  ["ar", "Arabic"],
+  ["hi", "Hindi"],
 ];
 
 const VOICE_MODEL_KEY = "ekorbia.voice.model";
@@ -44,6 +78,42 @@ function setVoiceModel(name) {
     localStorage.setItem(VOICE_MODEL_KEY, name);
   } catch (_) {
     /* private mode / storage disabled — fall back to the default */
+  }
+}
+
+const VOICE_LANG_KEY = "ekorbia.voice.lang";
+const VOICE_TRANSLATE_KEY = "ekorbia.voice.translate";
+
+// Recognition language ("auto" + the codes in VOICE_LANGUAGES) and whether to
+// translate to English. Both apply only to multilingual models — the Rust side
+// forces ("en", no-translate) for `*.en` models. Shared across composer +
+// overlay.
+function getVoiceLanguage() {
+  try {
+    return localStorage.getItem(VOICE_LANG_KEY) || "auto";
+  } catch (_) {
+    return "auto";
+  }
+}
+function setVoiceLanguage(code) {
+  try {
+    localStorage.setItem(VOICE_LANG_KEY, code);
+  } catch (_) {
+    /* storage disabled */
+  }
+}
+function getVoiceTranslate() {
+  try {
+    return localStorage.getItem(VOICE_TRANSLATE_KEY) === "1";
+  } catch (_) {
+    return false;
+  }
+}
+function setVoiceTranslate(on) {
+  try {
+    localStorage.setItem(VOICE_TRANSLATE_KEY, on ? "1" : "0");
+  } catch (_) {
+    /* storage disabled */
   }
 }
 
@@ -140,6 +210,8 @@ async function ekVoiceDownload(name) {
 function VoiceModelPanel({ compact }) {
   const [installed, setInstalled] = useState(null); // null = loading
   const [selected, setSelected] = useState(getVoiceModel());
+  const [lang, setLang] = useState(getVoiceLanguage());
+  const [translate, setTranslate] = useState(getVoiceTranslate());
   const [, setTick] = useState(0); // bumped on download progress
   const prevDownloadingRef = useRef(new Set());
   const invoke = getInvoke();
@@ -236,6 +308,22 @@ function VoiceModelPanel({ compact }) {
                     recommended
                   </span>
                 )}
+                {m.multilingual && (
+                  <span
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 9,
+                      padding: "1px 5px",
+                      borderRadius: 3,
+                      background: "rgba(122,162,247,0.15)",
+                      color: T.blue || "#7aa2f7",
+                      textTransform: "uppercase",
+                      letterSpacing: 0.4,
+                    }}
+                  >
+                    multilingual
+                  </span>
+                )}
                 {isDefault && isInstalled && (
                   <span style={{ fontFamily: T.mono, fontSize: 9, color: T.fg3 }}>· default</span>
                 )}
@@ -313,6 +401,78 @@ function VoiceModelPanel({ compact }) {
           </div>
         );
       })}
+
+      {/* Recognition language + translate — apply to multilingual models. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+          padding: "10px 8px 2px",
+        }}
+      >
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontFamily: T.sans,
+            fontSize: 12,
+            color: T.fg2,
+          }}
+        >
+          Language
+          <select
+            value={lang}
+            onChange={(e) => {
+              setLang(e.target.value);
+              setVoiceLanguage(e.target.value);
+            }}
+            style={{
+              background: T.bg2,
+              color: T.fg,
+              border: `1px solid ${T.border}`,
+              borderRadius: 5,
+              padding: "3px 6px",
+              fontFamily: T.sans,
+              fontSize: 12,
+              outline: "none",
+            }}
+          >
+            {VOICE_LANGUAGES.map(([code, label]) => (
+              <option key={code} value={code}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontFamily: T.sans,
+            fontSize: 12,
+            color: T.fg2,
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={translate}
+            onChange={(e) => {
+              setTranslate(e.target.checked);
+              setVoiceTranslate(e.target.checked);
+            }}
+          />
+          Translate to English
+        </label>
+      </div>
+      <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3, padding: "2px 8px 0" }}>
+        Language &amp; translation apply to multilingual models; English-only models
+        always transcribe English.
+      </div>
 
       {!compact && (
         <div style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3, padding: "8px 2px 0", lineHeight: 1.5 }}>
@@ -419,7 +579,7 @@ function VoiceSettings() {
 // is pre-warmed on first hover so the first dictation isn't slowed by the
 // one-time model load.
 
-function VoiceMicButton({ onInsert, disabled }) {
+function VoiceMicButton({ onInsert, disabled, onRecordingChange, onNeedsSetup }) {
   const [phase, setPhase] = useState("idle"); // idle | starting | recording | transcribing
   const [elapsed, setElapsed] = useState(0);
   const [hasModel, setHasModel] = useState(true); // optimistic; checked on mount
@@ -450,6 +610,12 @@ function VoiceMicButton({ onInsert, disabled }) {
     setElapsed(0);
     const iv = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 250);
     return () => clearInterval(iv);
+  }, [phase]);
+
+  // Let host surfaces (e.g. the overlay) suppress auto-hide while recording.
+  useEffect(() => {
+    onRecordingChange?.(phase === "recording");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
   // Escape cancels an in-progress recording.
@@ -503,7 +669,8 @@ function VoiceMicButton({ onInsert, disabled }) {
         (await invoke("voice_record_stop", {
           sessionId: id,
           model: getVoiceModel(),
-          language: null,
+          language: getVoiceLanguage(),
+          translate: getVoiceTranslate(),
         })) || {};
       if (r.captured && r.text) {
         onInsert?.(r.text);
@@ -539,7 +706,10 @@ function VoiceMicButton({ onInsert, disabled }) {
     }
     if (phase !== "idle") return; // starting / transcribing — ignore
     if (!hasModel) {
-      setSetupOpen(true);
+      // Hosts in cramped surfaces (the overlay) opt out of the inline setup
+      // modal and handle it themselves (e.g. a toast pointing to Settings).
+      if (onNeedsSetup) onNeedsSetup();
+      else setSetupOpen(true);
       return;
     }
     startRecording();

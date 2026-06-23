@@ -6,10 +6,13 @@
 
 const { useState: qS, useEffect: qE, useRef: qR } = React;
 
-// Default model when the user has never picked one. After first pick the
-// choice is sticky via localStorage (shared with the main window since
-// both webviews load from the same origin).
-const QUICK_DEFAULT_MODEL = "gemma4:26b";
+// Fallback model for the very first overlay open, before we've validated
+// against what's actually pulled (the mount effect below switches to the main
+// window's model — or the first installed model — if this one isn't available).
+// The overlay keeps its OWN sticky choice (`ekorbia.overlay.model`, a separate
+// key from the composer's `ekorbia.main.model`) so you can run a small, fast
+// model here independent of the main window.
+const QUICK_DEFAULT_MODEL = "gemma4:e4b";
 
 // Window heights (px) for the three states. Driven by the overlay_resize
 // Rust command rather than JS-side LogicalSize plumbing.
@@ -20,6 +23,15 @@ const EXPANDED_H = 480; // streaming or response visible
 function QuickQuery() {
   // ── Query / streaming ──────────────────────────────────────────────────────
   const [text, setText] = qS("");
+  // Suppress overlay auto-hide (blur + Esc) while a dictation is in flight so
+  // an accidental focus change — or the Esc-to-cancel keystroke — doesn't
+  // discard the recording. The ref mirrors the state for the []-deps
+  // window/document listeners below (which close over first-render values).
+  const [voiceRecording, setVoiceRecording] = qS(false);
+  const voiceRecRef = qR(false);
+  qE(() => {
+    voiceRecRef.current = voiceRecording;
+  }, [voiceRecording]);
   // `sentMessage` is the user's previously-submitted question, frozen at
   // send time. We snapshot it because `text` clears the moment the request
   // fires (so the input is ready for the next question) — but we still
@@ -53,6 +65,29 @@ function QuickQuery() {
       localStorage.setItem("ekorbia.overlay.model", modelId);
     } catch {}
   }, [modelId]);
+
+  // The overlay's sticky model pref can point at a model that isn't pulled
+  // (the first-run default, or one removed since). Unlike the composer, the
+  // overlay had no fallback — it would just fail the send and mislabel it as
+  // "Ollama isn't running". On mount, validate against what's installed and,
+  // if our pick is missing, fall back to the main window's model (if pulled)
+  // or the first installed model. No-op when Ollama is genuinely down
+  // (empty/failed tags) so submit() can still surface that for real.
+  qE(() => {
+    const inv = getInvoke();
+    if (!inv) return;
+    inv("ollama_tags")
+      .then((data) => {
+        const names = (data?.models || []).map((m) => m.name);
+        if (!names.length || names.includes(modelId)) return;
+        let mainModel = null;
+        try {
+          mainModel = localStorage.getItem("ekorbia.main.model");
+        } catch {}
+        setModelId(mainModel && names.includes(mainModel) ? mainModel : names[0]);
+      })
+      .catch(() => {});
+  }, []);
 
   // ── Available models (queried from Ollama, like the Composer picker) ───────
   // `null` = haven't fetched yet (or fetching). Empty array = fetched but
@@ -196,6 +231,9 @@ function QuickQuery() {
   // are stable across renders.
   qE(() => {
     const onBlur = () => {
+      // Don't dismiss mid-dictation — an accidental focus change shouldn't
+      // discard a recording in progress.
+      if (voiceRecRef.current) return;
       hide();
     };
     window.addEventListener("blur", onBlur);
@@ -208,6 +246,9 @@ function QuickQuery() {
   qE(() => {
     const onKey = (e) => {
       if (e.key === "Escape") {
+        // While dictating, Esc cancels the recording (handled by the mic
+        // button) — don't also dismiss the overlay or close the picker.
+        if (voiceRecRef.current) return;
         e.preventDefault();
         if (picker) setPicker(null);
         else hide();
@@ -377,7 +418,6 @@ function QuickQuery() {
       : [{ role: "user", content: text }];
 
     let acc = "";
-    let ok = false;
     try {
       const Channel = getChannel();
       const channel = new Channel();
@@ -404,20 +444,24 @@ function QuickQuery() {
         body,
         onChunk: channel,
       });
-      ok = true;
     } catch (e) {
-      // Rust returns Err for connection-refused / non-2xx / parse
-      // errors. We don't distinguish a user-cancelled stream here
-      // (that returns Ok by design) from a real failure — both leave
-      // `ok` false and `acc` whatever streamed before the stop.
+      // Rust returns Err for connection-refused / non-2xx / parse errors.
+      // A user-cancelled stream returns Ok by design, so reaching here with
+      // no output is a real failure. Distinguish "model not available" (the
+      // overlay keeps its own model pref, which may not be pulled) from a
+      // genuine "Ollama is down" — they point at different fixes.
       if (!acc) {
-        setResponse("Could not reach Ollama on 127.0.0.1:11434.");
+        const msg = String(e || "");
+        if (/40\d|not found|no such model|try pulling|unknown model/i.test(msg)) {
+          setResponse(
+            `Model "${modelId}" isn't available in Ollama. Pick a pulled model from the list below.`,
+          );
+        } else {
+          setResponse(
+            "Couldn't reach Ollama on 127.0.0.1:11434. Open the main Ekorbia app to start it, or run `ollama serve`.",
+          );
+        }
       }
-    }
-    if (!ok && !acc) {
-      setResponse(
-        "Ollama isn't running. Open the main Ekorbia app to start it, or run `ollama serve`.",
-      );
     }
     setStreaming(false);
   };
@@ -530,6 +574,44 @@ function QuickQuery() {
             fontSize: 17,
             outline: "none",
             padding: 0,
+          }}
+        />
+        {/* Voice dictation — inserts the local Whisper transcript into the
+            overlay input. No model yet → toast (the setup modal would be
+            cramped in this small window). */}
+        <VoiceMicButton
+          disabled={streaming}
+          onRecordingChange={setVoiceRecording}
+          onNeedsSetup={() =>
+            window.ekToast?.({
+              kind: "info",
+              title: "Set up voice input",
+              body: "Download a speech model in the main window: Settings → Voice.",
+            })
+          }
+          onInsert={(t) => {
+            if (!t) return;
+            const el = inputRef.current;
+            const cur = text;
+            let start = cur.length;
+            let end = cur.length;
+            if (el) {
+              start = el.selectionStart != null ? el.selectionStart : cur.length;
+              end = el.selectionEnd != null ? el.selectionEnd : cur.length;
+            }
+            const pre = cur.slice(0, start);
+            const needsSpace = pre.length > 0 && !/\s$/.test(pre);
+            const ins = (needsSpace ? " " : "") + t;
+            setText(pre + ins + cur.slice(end));
+            requestAnimationFrame(() => {
+              try {
+                if (el) {
+                  el.focus();
+                  const p = start + ins.length;
+                  el.setSelectionRange(p, p);
+                }
+              } catch (_) {}
+            });
           }}
         />
         {streaming && (

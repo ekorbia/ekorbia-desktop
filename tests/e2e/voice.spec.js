@@ -98,6 +98,32 @@ test.describe("VoiceMicButton", () => {
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText("Set up voice input");
   });
+
+  test("passes the selected language + translate flag to voice_record_stop", async ({ page }) => {
+    await page.evaluate(() => {
+      localStorage.setItem("ekorbia.voice.model", "small");
+      localStorage.setItem("ekorbia.voice.lang", "es");
+      localStorage.setItem("ekorbia.voice.translate", "1");
+      window.__INVOKE_RESPONSES.voice_models_installed = () => ["small"];
+      window.__INVOKE_RESPONSES.voice_record_stop = () => ({
+        text: "hola",
+        captured: true,
+        audioSecs: 1,
+      });
+      window.__TEST_MOUNT("VoiceMicButton", {});
+    });
+
+    const mic = page.locator("[data-voice-mic]");
+    await mic.click();
+    await expect(mic).toHaveAttribute("data-phase", "recording");
+    await mic.click();
+    await expect(mic).toHaveAttribute("data-phase", "idle");
+
+    const call = await page.evaluate(() => window.__INVOKE_FIND("voice_record_stop"));
+    expect(call.args.model).toBe("small");
+    expect(call.args.language).toBe("es");
+    expect(call.args.translate).toBe(true);
+  });
 });
 
 test.describe("VoiceModelPanel", () => {
@@ -127,6 +153,18 @@ test.describe("VoiceModelPanel", () => {
     // Progress chunk (71/142 = 50%) renders + a Cancel control appears.
     await expect(tinyRow).toContainText("50%");
     await expect(tinyRow.locator("button", { hasText: "Cancel" })).toBeVisible();
+  });
+
+  test("shows multilingual models + language/translate controls", async ({ page }) => {
+    await page.evaluate(() => {
+      window.__INVOKE_RESPONSES.voice_models_installed = () => ["base.en"];
+      window.__TEST_MOUNT("VoiceModelPanel", {});
+    });
+    const root = page.locator("#test-root");
+    await expect(root).toContainText("large-v3-turbo");
+    await expect(root).toContainText("multilingual");
+    await expect(root).toContainText("Translate to English");
+    await expect(root.locator("select")).toBeVisible();
   });
 });
 
