@@ -124,6 +124,77 @@ test.describe("VoiceMicButton", () => {
     expect(call.args.language).toBe("es");
     expect(call.args.translate).toBe(true);
   });
+
+  test("auto-stops on the backend autostop event (no second click)", async ({ page }) => {
+    await page.evaluate(() => {
+      window.__INVOKE_RESPONSES.voice_models_installed = () => ["base.en"];
+      window.__INVOKE_RESPONSES.voice_record_start = (args) => {
+        // Simulate the VAD firing shortly after recording begins.
+        if (args && args.onEvent) {
+          setTimeout(() => args.onEvent.__deliver({ type: "autostop" }), 20);
+        }
+        return undefined;
+      };
+      window.__INVOKE_RESPONSES.voice_record_stop = () => ({
+        text: "auto done",
+        captured: true,
+        audioSecs: 1,
+      });
+      window.__voiceText = null;
+      window.__TEST_MOUNT("VoiceMicButton", {
+        onInsert: (t) => {
+          window.__voiceText = t;
+        },
+      });
+    });
+
+    const mic = page.locator("[data-voice-mic]");
+    await mic.click(); // single click — the VAD finalizes the rest
+    await expect(mic).toHaveAttribute("data-phase", "idle");
+    await page.waitForFunction(() => window.__voiceText === "auto done");
+    expect(await page.evaluate(() => window.__INVOKE_COUNT("voice_record_stop"))).toBe(1);
+  });
+
+  test("hands onInsert a submit flag driven by the auto-send setting", async ({ page }) => {
+    // Default (unset) → auto-send on → submit: true.
+    await page.evaluate(() => {
+      window.__INVOKE_RESPONSES.voice_models_installed = () => ["base.en"];
+      window.__INVOKE_RESPONSES.voice_record_stop = () => ({
+        text: "send me",
+        captured: true,
+        audioSecs: 1,
+      });
+      window.__voiceOpts = null;
+      window.__TEST_MOUNT("VoiceMicButton", {
+        onInsert: (t, opts) => {
+          window.__voiceOpts = opts || {};
+        },
+      });
+    });
+    let mic = page.locator("[data-voice-mic]");
+    await mic.click();
+    await expect(mic).toHaveAttribute("data-phase", "recording");
+    await mic.click();
+    await page.waitForFunction(() => window.__voiceOpts !== null);
+    expect(await page.evaluate(() => window.__voiceOpts.submit)).toBe(true);
+
+    // Setting off → submit: false.
+    await page.evaluate(() => {
+      localStorage.setItem("ekorbia.voice.autosubmit", "0");
+      window.__voiceOpts = null;
+      window.__TEST_MOUNT("VoiceMicButton", {
+        onInsert: (t, opts) => {
+          window.__voiceOpts = opts || {};
+        },
+      });
+    });
+    mic = page.locator("[data-voice-mic]");
+    await mic.click();
+    await expect(mic).toHaveAttribute("data-phase", "recording");
+    await mic.click();
+    await page.waitForFunction(() => window.__voiceOpts !== null);
+    expect(await page.evaluate(() => window.__voiceOpts.submit)).toBe(false);
+  });
 });
 
 test.describe("VoiceModelPanel", () => {
@@ -164,6 +235,8 @@ test.describe("VoiceModelPanel", () => {
     await expect(root).toContainText("large-v3-turbo");
     await expect(root).toContainText("multilingual");
     await expect(root).toContainText("Translate to English");
+    await expect(root).toContainText("Stop automatically when I pause");
+    await expect(root).toContainText("Send automatically after dictation");
     await expect(root.locator("select")).toBeVisible();
   });
 });

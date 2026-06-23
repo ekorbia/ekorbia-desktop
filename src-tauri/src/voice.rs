@@ -270,6 +270,11 @@ fn evict_cached_context(name: &str) {
 }
 
 fn load_or_get_context(app: &AppHandle, name: &str) -> Result<Arc<WhisperContext>, String> {
+    // Silence whisper.cpp + ggml/Metal's stderr spam (model-load + backend-init
+    // logging that otherwise prints on every dictation). whisper-rs captures it
+    // via its logging hooks; we don't enable the log/tracing backends, so it's
+    // dropped rather than printed. Idempotent — only the first call installs.
+    whisper_rs::install_logging_hooks();
     {
         let g = whisper_cache().lock().map_err(|_| "cache lock poisoned")?;
         if let Some(c) = g.as_ref() {
@@ -398,15 +403,23 @@ fn stop_and_join(session_id: &str) {
 /// stream is actually running (or fails to build), so the caller knows the mic
 /// is live before it shows a recording indicator.
 #[tauri::command]
-pub(crate) async fn voice_record_start(session_id: String) -> Result<(), String> {
+pub(crate) async fn voice_record_start(
+    session_id: String,
+    vad: bool,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<(), String> {
     // Building the input stream + waiting for it to start blocks; run on the
     // blocking pool so the UI / async threads stay responsive.
-    tokio::task::spawn_blocking(move || voice_record_start_blocking(session_id))
+    tokio::task::spawn_blocking(move || voice_record_start_blocking(session_id, vad, on_event))
         .await
         .map_err(|e| format!("record start task failed: {e}"))?
 }
 
-fn voice_record_start_blocking(session_id: String) -> Result<(), String> {
+fn voice_record_start_blocking(
+    session_id: String,
+    vad: bool,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<(), String> {
     // Replace any stale session reusing this id (defensive — the UI uses a
     // fresh id per press).
     stop_and_join(&session_id);
@@ -420,7 +433,7 @@ fn voice_record_start_blocking(session_id: String) -> Result<(), String> {
     let t_samples = samples.clone();
     let t_rate = in_rate.clone();
     let handle = std::thread::spawn(move || {
-        run_capture(t_stop, t_samples, t_rate, ready_tx);
+        run_capture(t_stop, t_samples, t_rate, ready_tx, vad, on_event);
     });
 
     match ready_rx.recv_timeout(Duration::from_secs(5)) {
@@ -450,14 +463,51 @@ fn voice_record_start_blocking(session_id: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── Voice-activity detection (auto-stop on silence) ─────────────────────────
+//
+// Energy-based: the capture callback stores the latest buffer's peak amplitude
+// and the polling loop decides when trailing silence (after some speech) means
+// the user is done. Crude next to a trained VAD but plenty for push-to-talk
+// dictation and dependency-free. Tunables are conservative so a pause
+// mid-thought doesn't clip the recording.
+const VAD_POLL_MS: u32 = 30;
+const VAD_SPEECH_THRESHOLD: f32 = 0.02; // peak amplitude that counts as speech
+const VAD_SILENCE_MS: u32 = 1500; // trailing silence (after speech) → stop
+const VAD_MAX_MS: u32 = 60_000; // hard cap so a hot mic can't record forever
+
+#[derive(Default)]
+struct VadState {
+    had_speech: bool,
+    silent_ms: u32,
+    elapsed_ms: u32,
+}
+
+/// Advance the VAD by one poll tick; return whether to auto-stop. Pure (no
+/// I/O) so the silence logic is unit-testable. `level` is the current peak
+/// amplitude in 0..1.
+fn vad_should_stop(state: &mut VadState, level: f32, tick_ms: u32) -> bool {
+    state.elapsed_ms = state.elapsed_ms.saturating_add(tick_ms);
+    if level > VAD_SPEECH_THRESHOLD {
+        state.had_speech = true;
+        state.silent_ms = 0;
+    } else if state.had_speech {
+        state.silent_ms = state.silent_ms.saturating_add(tick_ms);
+    }
+    (state.had_speech && state.silent_ms >= VAD_SILENCE_MS) || state.elapsed_ms >= VAD_MAX_MS
+}
+
 /// Owns the cpal stream for its whole lifetime (the stream is !Send, so it can
 /// never leave this thread). Reports build/start success or failure back to
-/// `voice_record_start` via `ready`, then idles until the stop flag is set.
+/// `voice_record_start` via `ready`, then idles until the stop flag is set —
+/// or, when `vad` is on, until trailing silence triggers an auto-stop, which it
+/// announces on `on_event` so the UI can finalize like a manual stop.
 fn run_capture(
     stop: Arc<AtomicBool>,
     samples: Arc<Mutex<Vec<f32>>>,
     in_rate: Arc<AtomicU32>,
     ready: std::sync::mpsc::Sender<Result<(), String>>,
+    vad: bool,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
 ) {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -482,19 +532,29 @@ fn run_capture(
     let cfg: cpal::StreamConfig = supported.into();
     let err_fn = |e| eprintln!("[voice] stream error: {e}");
 
-    // Downmix each frame to mono and append. The audio callback runs on a
-    // realtime thread; keep it allocation-light (push into the shared Vec).
+    // Latest buffer peak amplitude × 10000, read by the VAD polling loop.
+    let level = Arc::new(AtomicU32::new(0));
+
+    // Downmix each frame to mono, append, and track the buffer peak. The audio
+    // callback runs on a realtime thread; keep it allocation-light.
     let s = samples.clone();
+    let lvl = level.clone();
     let stream_result: Result<cpal::Stream, String> = match fmt {
         cpal::SampleFormat::F32 => device
             .build_input_stream(
                 &cfg,
                 move |data: &[f32], _: &_| {
+                    let mut peak = 0.0f32;
                     if let Ok(mut g) = s.lock() {
                         for fr in data.chunks(channels) {
-                            g.push(fr.iter().sum::<f32>() / channels as f32);
+                            let v = fr.iter().sum::<f32>() / channels as f32;
+                            if v.abs() > peak {
+                                peak = v.abs();
+                            }
+                            g.push(v);
                         }
                     }
+                    lvl.store((peak * 10000.0) as u32, Ordering::Relaxed);
                 },
                 err_fn,
                 None,
@@ -504,13 +564,18 @@ fn run_capture(
             .build_input_stream(
                 &cfg,
                 move |data: &[i16], _: &_| {
+                    let mut peak = 0.0f32;
                     if let Ok(mut g) = s.lock() {
                         for fr in data.chunks(channels) {
                             let v = fr.iter().map(|x| *x as f32 / 32768.0).sum::<f32>()
                                 / channels as f32;
+                            if v.abs() > peak {
+                                peak = v.abs();
+                            }
                             g.push(v);
                         }
                     }
+                    lvl.store((peak * 10000.0) as u32, Ordering::Relaxed);
                 },
                 err_fn,
                 None,
@@ -520,6 +585,7 @@ fn run_capture(
             .build_input_stream(
                 &cfg,
                 move |data: &[u16], _: &_| {
+                    let mut peak = 0.0f32;
                     if let Ok(mut g) = s.lock() {
                         for fr in data.chunks(channels) {
                             let v = fr
@@ -527,9 +593,13 @@ fn run_capture(
                                 .map(|x| (*x as f32 - 32768.0) / 32768.0)
                                 .sum::<f32>()
                                 / channels as f32;
+                            if v.abs() > peak {
+                                peak = v.abs();
+                            }
                             g.push(v);
                         }
                     }
+                    lvl.store((peak * 10000.0) as u32, Ordering::Relaxed);
                 },
                 err_fn,
                 None,
@@ -551,8 +621,17 @@ fn run_capture(
     }
     let _ = ready.send(Ok(()));
 
+    let mut vad_state = VadState::default();
     while !stop.load(Ordering::Relaxed) {
-        std::thread::sleep(Duration::from_millis(30));
+        std::thread::sleep(Duration::from_millis(VAD_POLL_MS as u64));
+        if vad {
+            let lvl = level.load(Ordering::Relaxed) as f32 / 10000.0;
+            if vad_should_stop(&mut vad_state, lvl, VAD_POLL_MS) {
+                let _ = on_event.send(serde_json::json!({ "type": "autostop" }));
+                stop.store(true, Ordering::Relaxed);
+                break;
+            }
+        }
     }
     drop(stream);
 }
@@ -660,6 +739,39 @@ fn resample_linear(input: &[f32], in_rate: u32, out_rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vad_stops_after_silence_following_speech() {
+        // Silence with no prior speech never triggers an auto-stop.
+        let mut st = VadState::default();
+        for _ in 0..300 {
+            assert!(!vad_should_stop(&mut st, 0.0, 30));
+        }
+        // Speech, then trailing silence → stops within ~VAD_SILENCE_MS.
+        let mut st = VadState::default();
+        assert!(!vad_should_stop(&mut st, 0.5, 30));
+        let mut stopped = false;
+        for _ in 0..(VAD_SILENCE_MS / 30 + 2) {
+            if vad_should_stop(&mut st, 0.0, 30) {
+                stopped = true;
+                break;
+            }
+        }
+        assert!(stopped, "should auto-stop after trailing silence");
+    }
+
+    #[test]
+    fn vad_hard_cap_fires_under_constant_speech() {
+        let mut st = VadState::default();
+        let mut stopped = false;
+        for _ in 0..(VAD_MAX_MS / 30 + 2) {
+            if vad_should_stop(&mut st, 0.9, 30) {
+                stopped = true;
+                break;
+            }
+        }
+        assert!(stopped, "hard cap should fire even with continuous speech");
+    }
 
     #[test]
     fn model_name_validation() {

@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (auto-detect or a specific language) and a **Translate to English** toggle;
   both apply to multilingual models (English-only models always transcribe
   English).
+- **Hands-free auto-stop.** Dictation can stop on its own a moment after you
+  finish speaking (energy-based voice-activity detection) instead of needing a
+  second click — toggle it under **Settings → Voice** ("Stop automatically
+  when I pause," on by default).
+- **Auto-send after dictation.** With this on (default), a finished dictation
+  submits the message for you — speak and it sends, no Enter or click. Works in
+  the composer and the overlay; Esc during recording still cancels without
+  sending. Toggle under **Settings → Voice** ("Send automatically after
+  dictation").
 
 ## [0.4.0] - 2026-06-16
 

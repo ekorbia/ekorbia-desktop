@@ -2412,7 +2412,7 @@ function Composer({
                 private chats — it's just text entry). See voice.jsx. */}
             <VoiceMicButton
               disabled={isStreaming}
-              onInsert={(t) => {
+              onInsert={(t, opts) => {
                 if (!t) return;
                 const ta = taRef.current;
                 const cur = text;
@@ -2425,7 +2425,15 @@ function Composer({
                 const pre = cur.slice(0, start);
                 const needsSpace = pre.length > 0 && !/\s$/.test(pre);
                 const ins = (needsSpace ? " " : "") + t;
-                setText(pre + ins + cur.slice(end));
+                const next = pre + ins + cur.slice(end);
+                // Auto-send after dictation (Settings → Voice). Falls back to a
+                // plain insert if there's nothing to send or a reply is streaming.
+                if (opts && opts.submit && next.trim() && !isStreaming) {
+                  onSend(next);
+                  setText("");
+                  return;
+                }
+                setText(next);
                 requestAnimationFrame(() => {
                   try {
                     if (ta) {

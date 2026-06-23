@@ -389,15 +389,18 @@ function QuickQuery() {
   // ── Submit ─────────────────────────────────────────────────────────────────
   // Single-turn ephemeral chat. The attached prompt's body becomes a system
   // message — same shape the main app uses for new chats.
-  const submit = async () => {
-    if (!text.trim() || streaming) return;
+  const submit = async (override) => {
+    // `override` lets voice auto-submit send the exact transcript without
+    // racing the setText state flush.
+    const q = typeof override === "string" ? override : text;
+    if (!q.trim() || streaming) return;
     setStreaming(true);
     setResponse("");
     setPicker(null);
     // Snapshot the question before clearing the input so we can show it
     // above the streaming response. Each submit replaces the previous
     // snapshot — only the most recent Q&A pair stays visible.
-    setSentMessage(text);
+    setSentMessage(q);
     // Clear the input as soon as the request is fired so the user can start
     // typing their next question while the answer is still streaming in.
     // The `text` value is captured in this closure for the messages array
@@ -413,9 +416,9 @@ function QuickQuery() {
     const messages = attached
       ? [
           { role: "system", content: attached.body },
-          { role: "user", content: text },
+          { role: "user", content: q },
         ]
-      : [{ role: "user", content: text }];
+      : [{ role: "user", content: q }];
 
     let acc = "";
     try {
@@ -589,7 +592,7 @@ function QuickQuery() {
               body: "Download a speech model in the main window: Settings → Voice.",
             })
           }
-          onInsert={(t) => {
+          onInsert={(t, opts) => {
             if (!t) return;
             const el = inputRef.current;
             const cur = text;
@@ -602,7 +605,14 @@ function QuickQuery() {
             const pre = cur.slice(0, start);
             const needsSpace = pre.length > 0 && !/\s$/.test(pre);
             const ins = (needsSpace ? " " : "") + t;
-            setText(pre + ins + cur.slice(end));
+            const next = pre + ins + cur.slice(end);
+            // Auto-send after dictation (Settings → Voice) — submit the exact
+            // text directly so we don't race the setText flush.
+            if (opts && opts.submit && next.trim() && !streaming) {
+              submit(next);
+              return;
+            }
+            setText(next);
             requestAnimationFrame(() => {
               try {
                 if (el) {

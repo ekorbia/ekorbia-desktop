@@ -117,6 +117,46 @@ function setVoiceTranslate(on) {
   }
 }
 
+const VOICE_AUTOSTOP_KEY = "ekorbia.voice.autostop";
+
+// Whether to auto-stop recording after a pause (hands-free). Default on; the
+// backend's energy-based VAD decides when. Set to "0" to require a manual
+// second click.
+function getVoiceAutoStop() {
+  try {
+    return localStorage.getItem(VOICE_AUTOSTOP_KEY) !== "0";
+  } catch (_) {
+    return true;
+  }
+}
+function setVoiceAutoStop(on) {
+  try {
+    localStorage.setItem(VOICE_AUTOSTOP_KEY, on ? "1" : "0");
+  } catch (_) {
+    /* storage disabled */
+  }
+}
+
+const VOICE_AUTOSUBMIT_KEY = "ekorbia.voice.autosubmit";
+
+// Whether a finished dictation submits the message automatically (hands-free)
+// instead of only inserting the text. Default on; Esc during recording still
+// cancels without sending.
+function getVoiceAutoSubmit() {
+  try {
+    return localStorage.getItem(VOICE_AUTOSUBMIT_KEY) !== "0";
+  } catch (_) {
+    return true;
+  }
+}
+function setVoiceAutoSubmit(on) {
+  try {
+    localStorage.setItem(VOICE_AUTOSUBMIT_KEY, on ? "1" : "0");
+  } catch (_) {
+    /* storage disabled */
+  }
+}
+
 // ── Download store (module scope; read cross-script via hoisted functions) ───
 
 const EK_VOICE_DLS = new Map(); // name -> progress state ({...voiceModelProgress, name, requestId})
@@ -212,6 +252,8 @@ function VoiceModelPanel({ compact }) {
   const [selected, setSelected] = useState(getVoiceModel());
   const [lang, setLang] = useState(getVoiceLanguage());
   const [translate, setTranslate] = useState(getVoiceTranslate());
+  const [autoStop, setAutoStop] = useState(getVoiceAutoStop());
+  const [autoSubmit, setAutoSubmit] = useState(getVoiceAutoSubmit());
   const [, setTick] = useState(0); // bumped on download progress
   const prevDownloadingRef = useRef(new Set());
   const invoke = getInvoke();
@@ -401,6 +443,52 @@ function VoiceModelPanel({ compact }) {
           </div>
         );
       })}
+
+      {/* Dictation behaviour. */}
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontFamily: T.sans,
+          fontSize: 12,
+          color: T.fg2,
+          cursor: "pointer",
+          padding: "10px 8px 0",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={autoStop}
+          onChange={(e) => {
+            setAutoStop(e.target.checked);
+            setVoiceAutoStop(e.target.checked);
+          }}
+        />
+        Stop automatically when I pause
+      </label>
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontFamily: T.sans,
+          fontSize: 12,
+          color: T.fg2,
+          cursor: "pointer",
+          padding: "6px 8px 0",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={autoSubmit}
+          onChange={(e) => {
+            setAutoSubmit(e.target.checked);
+            setVoiceAutoSubmit(e.target.checked);
+          }}
+        />
+        Send automatically after dictation
+      </label>
 
       {/* Recognition language + translate — apply to multilingual models. */}
       <div
@@ -643,8 +731,23 @@ function VoiceMicButton({ onInsert, disabled, onRecordingChange, onNeedsSetup })
     const id = `voice:${genId()}`;
     sessionRef.current = id;
     setPhase("starting");
+    // Channel carries backend → UI events; today just {type:"autostop"} when
+    // the VAD detects a pause, which we finalize exactly like a manual stop.
+    const Channel = getChannel();
+    const ch = Channel ? new Channel() : null;
+    if (ch) {
+      ch.onmessage = (msg) => {
+        if (msg?.type === "autostop" && sessionRef.current === id) {
+          stopRecording();
+        }
+      };
+    }
     try {
-      await invoke("voice_record_start", { sessionId: id });
+      await invoke("voice_record_start", {
+        sessionId: id,
+        vad: getVoiceAutoStop(),
+        onEvent: ch,
+      });
       setPhase("recording");
     } catch (e) {
       setPhase("idle");
@@ -673,7 +776,7 @@ function VoiceMicButton({ onInsert, disabled, onRecordingChange, onNeedsSetup })
           translate: getVoiceTranslate(),
         })) || {};
       if (r.captured && r.text) {
-        onInsert?.(r.text);
+        onInsert?.(r.text, { submit: getVoiceAutoSubmit() });
       } else if (r.captured && !r.text) {
         window.ekToast?.({ kind: "info", title: "Didn't catch any words", body: "Try speaking a little longer." });
       } else {

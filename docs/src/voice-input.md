@@ -11,8 +11,10 @@ never uploaded.
 1. Click the **microphone button** in the composer (between the prompt button
    and the model picker).
 2. Speak. The button turns red and shows a timer while it's recording.
-3. Click it again to stop. Your words are transcribed and inserted at the
-   cursor, ready to edit or send.
+3. It stops on its own a moment after you finish speaking — or click again to
+   stop immediately. Your words are transcribed and inserted at the cursor,
+   ready to edit or send. (Prefer to always click to stop? Turn off "Stop
+   automatically when I pause" in **Settings → Voice**.)
 
 Press **Esc** while recording to cancel without transcribing.
 
@@ -20,6 +22,12 @@ Voice input is also available in the **quick-query overlay** — the same mic
 button sits in the overlay's input row, so you can dictate a quick question
 without switching to the main window. The overlay stays open while you're
 recording.
+
+By default Ekorbia **sends** the message as soon as a dictation finishes —
+speak and it goes, with no Enter or Send click (especially handy in the
+overlay: speak a question, get an answer). Turn off "Send automatically after
+dictation" in **Settings → Voice** if you'd rather review before sending;
+pressing Esc while recording always cancels without sending.
 
 The first time you record, macOS asks for permission to use the microphone —
 click **Allow**. If you dismiss it or change your mind later, enable Ekorbia
