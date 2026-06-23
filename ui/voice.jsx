@@ -667,7 +667,7 @@ function VoiceSettings() {
 // is pre-warmed on first hover so the first dictation isn't slowed by the
 // one-time model load.
 
-function VoiceMicButton({ onInsert, disabled, onRecordingChange, onNeedsSetup }) {
+function VoiceMicButton({ onInsert, disabled, onRecordingChange, onNeedsSetup, startSignal }) {
   const [phase, setPhase] = useState("idle"); // idle | starting | recording | transcribing
   const [elapsed, setElapsed] = useState(0);
   const [hasModel, setHasModel] = useState(true); // optimistic; checked on mount
@@ -800,6 +800,20 @@ function VoiceMicButton({ onInsert, disabled, onRecordingChange, onNeedsSetup })
     sessionRef.current = null;
     setPhase("idle");
   };
+
+  // A bumped `startSignal` (e.g. the overlay reacting to the global voice
+  // hotkey) begins a recording when we're idle — same path as a click.
+  useEffect(() => {
+    if (!startSignal) return; // 0 / undefined = no trigger yet
+    if (phase !== "idle") return; // already recording / transcribing
+    if (!hasModel) {
+      if (onNeedsSetup) onNeedsSetup();
+      else setSetupOpen(true);
+      return;
+    }
+    startRecording();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startSignal]);
 
   const onClick = () => {
     if (disabled) return;

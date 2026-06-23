@@ -96,6 +96,9 @@ pub fn run() {
                         // hold the lock through that thread's lifetime.
                         drop(reg);
                         screenshot::dispatch_capture(app.clone());
+                    } else if reg.voice.as_ref() == Some(shortcut) {
+                        drop(reg);
+                        let _ = overlay::start_voice_query(app);
                     }
                 })
                 .build(),
@@ -149,6 +152,7 @@ pub fn run() {
             overlay::focus_main,
             overlay::register_hotkey,
             overlay::register_screenshot_hotkey,
+            overlay::register_voice_hotkey,
             screenshot::screenshot_consumed,
             chat::db_load_chats,
             chat::db_load_messages,
@@ -368,6 +372,24 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let screenshot_capture_opt: Option<Shortcut> = None;
 
+            // Voice dictation hotkey — macOS + Windows (overlay-backed; the
+            // Linux overlay is deferred). Defaults to ⌘⇧V / Alt+Shift+V,
+            // rebindable in Settings → General. Shadowing of the app-local
+            // ⌘⇧V (paste-and-match-style) is the cost of a mnemonic default;
+            // registration failure just leaves the slot empty (best-effort).
+            #[cfg(target_os = "macos")]
+            let voice_opt: Option<Shortcut> = try_register(
+                Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyV),
+                "voice",
+            );
+            #[cfg(target_os = "windows")]
+            let voice_opt: Option<Shortcut> = try_register(
+                Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::KeyV),
+                "voice",
+            );
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            let voice_opt: Option<Shortcut> = None;
+
             // Populate the registry so the handler can dispatch by
             // identity. Errors here would mean the OnceLock-init panicked,
             // which shouldn't happen — we log and proceed; the worst case
@@ -375,6 +397,7 @@ pub fn run() {
             if let Ok(mut reg) = overlay::registry().lock() {
                 reg.overlay = overlay_toggle_opt;
                 reg.screenshot = screenshot_capture_opt;
+                reg.voice = voice_opt;
             } else {
                 log_warn!("hotkey registry init failed");
             }

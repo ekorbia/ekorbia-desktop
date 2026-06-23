@@ -23,6 +23,11 @@ button sits in the overlay's input row, so you can dictate a quick question
 without switching to the main window. The overlay stays open while you're
 recording.
 
+You can also trigger overlay dictation from anywhere with the global **voice
+hotkey** (default ⌘⇧V on macOS; rebind under **Settings → General → Voice
+input**) — it opens the overlay and starts listening immediately, so you can
+dictate without switching to Ekorbia first.
+
 By default Ekorbia **sends** the message as soon as a dictation finishes —
 speak and it goes, with no Enter or Send click (especially handy in the
 overlay: speak a question, get an answer). Turn off "Send automatically after

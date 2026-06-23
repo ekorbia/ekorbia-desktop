@@ -19,6 +19,10 @@ const HOTKEY_LS_KEY = "ekorbia.overlay.hotkey";
 // model but doesn't collide with any system-bound combination.
 const SCREENSHOT_HOTKEY_DEFAULT = "Super+Shift+Digit1";
 const SCREENSHOT_HOTKEY_LS_KEY = "ekorbia.screenshot.hotkey";
+// Third slot: voice-dictation hotkey (Phase 3B). Opens the overlay already
+// listening. Default ⌘⇧V / Alt+Shift+V — must mirror the Rust setup() default.
+const VOICE_HOTKEY_DEFAULT = IS_WIN ? "Alt+Shift+KeyV" : "Super+Shift+KeyV";
+const VOICE_HOTKEY_LS_KEY = "ekorbia.voice.hotkey";
 
 // Hotkey helpers (HOTKEY_MOD_CODES, formatHotkey, hotkeyFromEvent) live in
 // `ui/utils.js` so they're unit-testable under node:test. Re-published on
@@ -718,6 +722,15 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
     }
   });
   const [screenshotHotkeyError, setScreenshotHotkeyError] = useState(null);
+  // Voice-dictation hotkey (Phase 3B) — same persistence pattern, own slot.
+  const [voiceHotkey, setVoiceHotkey] = useState(() => {
+    try {
+      return localStorage.getItem(VOICE_HOTKEY_LS_KEY) || VOICE_HOTKEY_DEFAULT;
+    } catch {
+      return VOICE_HOTKEY_DEFAULT;
+    }
+  });
+  const [voiceHotkeyError, setVoiceHotkeyError] = useState(null);
   const [activeTab, setActiveTab] = useState("general");
 
   useEffect(() => {
@@ -779,6 +792,26 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
       } catch {}
     } catch (err) {
       setScreenshotHotkeyError(String(err));
+    }
+  };
+
+  // Apply a candidate voice-dictation hotkey. Mirrors applyHotkey but routes
+  // through register_voice_hotkey so the voice slot stays independent.
+  const applyVoiceHotkey = async (spec) => {
+    const invoke = getInvoke();
+    if (!invoke) {
+      setVoiceHotkeyError("Tauri runtime not available");
+      return;
+    }
+    try {
+      await invoke("register_voice_hotkey", { shortcut: spec });
+      setVoiceHotkey(spec);
+      setVoiceHotkeyError(null);
+      try {
+        localStorage.setItem(VOICE_HOTKEY_LS_KEY, spec);
+      } catch {}
+    } catch (err) {
+      setVoiceHotkeyError(String(err));
     }
   };
 
@@ -1068,6 +1101,42 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                     {IS_MAC
                       ? "Click to capture. Needs at least one modifier (⌘/⌃/⌥)."
                       : "Click to capture. Needs at least one modifier (Win / Ctrl / Alt)."}
+                  </div>
+                </>
+              )}
+
+              {/* Voice dictation hotkey — overlay-backed, so the same
+                  !IS_LINUX gate as Quick Query. */}
+              {!IS_LINUX && (
+                <>
+                  <SectionLabel label="Voice input" />
+                  <Row label="Dictation hotkey">
+                    <HotkeyCapture value={voiceHotkey} onChange={applyVoiceHotkey} />
+                  </Row>
+                  {voiceHotkeyError && (
+                    <div
+                      style={{
+                        marginTop: -2,
+                        padding: "4px 0",
+                        fontFamily: T.mono,
+                        fontSize: 10.5,
+                        color: T.red,
+                        textAlign: "right",
+                      }}
+                    >
+                      {voiceHotkeyError}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 10,
+                      color: T.fg3,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Opens the quick-query overlay and starts listening. Click to
+                    capture; needs at least one modifier.
                   </div>
                 </>
               )}

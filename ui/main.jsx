@@ -1133,6 +1133,20 @@ function App() {
     }
   }, []);
 
+  // Voice-dictation hotkey (Phase 3B). Rust's setup() registered the default
+  // (⌘⇧V / Alt+Shift+V); re-apply the user's customisation if any. Gated like
+  // the overlay hotkey since it drives the overlay (not wired on Linux yet).
+  useE(() => {
+    if (IS_LINUX) return;
+    let stored = null;
+    try { stored = localStorage.getItem('ekorbia.voice.hotkey'); } catch {}
+    if (stored) {
+      invoke('register_voice_hotkey', { shortcut: stored }).catch((err) => {
+        console.error('Failed to apply stored voice hotkey, falling back:', err);
+      });
+    }
+  }, []);
+
   // First-launch onboarding gate (Phase 6). We read the completion flag
   // from app_settings — null/empty means "never finished the tour", so
   // open it. Any other value (we write "1" on completion) keeps it hidden.

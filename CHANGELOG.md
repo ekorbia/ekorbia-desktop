@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the composer and the overlay; Esc during recording still cancels without
   sending. Toggle under **Settings → Voice** ("Send automatically after
   dictation").
+- **Global voice hotkey.** A system-wide, rebindable shortcut (default ⌘⇧V on
+  macOS, Alt+Shift+V on Windows) opens the quick-query overlay already
+  listening — dictate from any app without clicking. Rebind under
+  **Settings → General → Voice input**.
 
 ## [0.4.0] - 2026-06-16
 

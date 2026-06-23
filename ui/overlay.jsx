@@ -32,6 +32,26 @@ function QuickQuery() {
   qE(() => {
     voiceRecRef.current = voiceRecording;
   }, [voiceRecording]);
+
+  // The global voice hotkey shows this overlay and emits "voice:start"; bump a
+  // counter the mic button watches (its `startSignal` prop) so a hotkey press
+  // begins recording without a click.
+  const [voiceStartSignal, setVoiceStartSignal] = qS(0);
+  qE(() => {
+    let un = null;
+    let cancelled = false;
+    getEventApi()
+      .listen("voice:start", () => setVoiceStartSignal((n) => n + 1))
+      .then((u) => {
+        if (cancelled) u();
+        else un = u;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (un) un();
+    };
+  }, []);
   // `sentMessage` is the user's previously-submitted question, frozen at
   // send time. We snapshot it because `text` clears the moment the request
   // fires (so the input is ready for the next question) — but we still
@@ -584,6 +604,7 @@ function QuickQuery() {
             cramped in this small window). */}
         <VoiceMicButton
           disabled={streaming}
+          startSignal={voiceStartSignal}
           onRecordingChange={setVoiceRecording}
           onNeedsSetup={() =>
             window.ekToast?.({

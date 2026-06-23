@@ -21,7 +21,7 @@
 //! other slot's hotkey).
 
 use std::sync::{Mutex, OnceLock};
-use tauri::{LogicalSize, Manager};
+use tauri::{Emitter, LogicalSize, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 /// One entry per logical hotkey slot. Add fields when you add slots.
@@ -29,6 +29,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 pub(crate) struct HotkeyRegistry {
     pub overlay: Option<Shortcut>,
     pub screenshot: Option<Shortcut>,
+    pub voice: Option<Shortcut>,
 }
 
 static HOTKEY_REGISTRY: OnceLock<Mutex<HotkeyRegistry>> = OnceLock::new();
@@ -51,6 +52,24 @@ pub(crate) fn toggle_overlay(app: &tauri::AppHandle) -> tauri::Result<()> {
         window.show()?;
         window.set_focus()?;
     }
+    Ok(())
+}
+
+/// Show the overlay (if hidden) and tell it to begin a voice dictation.
+/// Driven by the global voice hotkey so the user can speak without first
+/// focusing the app. The overlay webview is always booted, so the emitted
+/// `voice:start` event is received whether or not it was previously visible;
+/// overlay.jsx listens for it and triggers the mic button.
+pub(crate) fn start_voice_query(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let Some(window) = app.get_webview_window("overlay") else {
+        return Ok(());
+    };
+    if !window.is_visible()? {
+        window.center()?;
+        window.show()?;
+    }
+    window.set_focus()?;
+    let _ = window.emit("voice:start", ());
     Ok(())
 }
 
@@ -135,6 +154,26 @@ pub(crate) fn register_screenshot_hotkey(
         gs.register(parsed)
             .map_err(|e| format!("Failed to register '{shortcut}': {e}"))?;
         reg.screenshot = Some(parsed);
+    }
+    Ok(())
+}
+
+/// Replace the current voice-dictation hotkey. Same shape as `register_hotkey`
+/// but operates on the voice slot, independent of the overlay/screenshot slots.
+#[tauri::command]
+pub(crate) fn register_voice_hotkey(app: tauri::AppHandle, shortcut: String) -> Result<(), String> {
+    let parsed: Shortcut = shortcut
+        .parse()
+        .map_err(|e| format!("Invalid shortcut '{shortcut}': {e:?}"))?;
+    let gs = app.global_shortcut();
+    {
+        let mut reg = registry().lock().map_err(|e| e.to_string())?;
+        if let Some(prev) = reg.voice {
+            let _ = gs.unregister(prev);
+        }
+        gs.register(parsed)
+            .map_err(|e| format!("Failed to register '{shortcut}': {e}"))?;
+        reg.voice = Some(parsed);
     }
     Ok(())
 }

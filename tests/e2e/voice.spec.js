@@ -195,6 +195,22 @@ test.describe("VoiceMicButton", () => {
     await page.waitForFunction(() => window.__voiceOpts !== null);
     expect(await page.evaluate(() => window.__voiceOpts.submit)).toBe(false);
   });
+
+  test("a bumped startSignal begins recording (global hotkey path)", async ({ page }) => {
+    await page.evaluate(() => {
+      window.__INVOKE_RESPONSES.voice_models_installed = () => ["base.en"];
+      window.__TEST_MOUNT("VoiceMicButton", { startSignal: 0 });
+    });
+    const mic = page.locator("[data-voice-mic]");
+    await expect(mic).toHaveAttribute("data-phase", "idle");
+
+    // Bumping the signal (what the overlay does on the voice hotkey) starts it.
+    await page.evaluate(() => {
+      window.__TEST_RERENDER("VoiceMicButton", { startSignal: 1 });
+    });
+    await expect(mic).toHaveAttribute("data-phase", "recording");
+    expect(await page.evaluate(() => window.__INVOKE_COUNT("voice_record_start"))).toBe(1);
+  });
 });
 
 test.describe("VoiceModelPanel", () => {
