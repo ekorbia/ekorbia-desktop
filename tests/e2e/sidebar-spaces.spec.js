@@ -409,6 +409,14 @@ async function mountSidebarWithChatAndSpaces(page) {
       { id: "s2", name: "Work",  slug: "work",  color: "blue",  sortIndex: 1, createdAt: 1, updatedAt: 1 },
     ],
   });
+  // Gate on the sidebar actually painting its rows before returning. The
+  // drag-drop tests reach into the DOM with document.querySelector via
+  // page.evaluate (synthetic DragEvents — Playwright's native D&D is
+  // unreliable in WebKit), which does NOT auto-wait the way locator actions
+  // do. Under parallel load the React mount can lag the evaluate, so the
+  // query returns null → "drop target not found". Waiting on a Space row
+  // (the drag targets) removes the race.
+  await page.waitForSelector('[data-space-row][data-space-id="s2"]');
 }
 
 test("ChatContextMenu: shows the Move to Space submenu when spaces exist", async ({ page }) => {

@@ -43,7 +43,10 @@ module.exports = defineConfig({
   ],
   use: {
     browserName: "webkit",
-    baseURL: "http://localhost:18765",
+    // Pin to 127.0.0.1 (IPv4) rather than `localhost` — see webServer below
+    // for why (newer macOS runners resolve localhost to ::1, which the
+    // IPv4-only http.server doesn't listen on).
+    baseURL: "http://127.0.0.1:18765",
     // Save a trace whenever a test fails. Open later with
     // `npx playwright show-trace test-results/<...>.zip`.
     trace: "retain-on-failure",
@@ -56,14 +59,22 @@ module.exports = defineConfig({
   webServer: {
     // python3 -m http.server roots wherever it's launched. We launch from
     // the repo root so /ui/* and /tests/e2e/* both resolve.
-    command: "python3 -m http.server 18765",
+    //
+    // IPv4 pin (--bind 127.0.0.1 + a 127.0.0.1 readiness URL): http.server
+    // listens on IPv4 only. Newer GitHub macOS runner images resolve
+    // `localhost` to ::1 (IPv6) first, so a localhost/port readiness probe
+    // connects to nothing and the job dies with "Timed out waiting … from
+    // config.webServer" even though the server is up. Probing an explicit
+    // 127.0.0.1 URL (matched by baseURL above) sidesteps the mismatch.
+    command: "python3 -m http.server 18765 --bind 127.0.0.1",
     cwd: __dirname,
-    port: 18765,
+    url: "http://127.0.0.1:18765/tests/e2e/fixtures/playwright.html",
     // Reuse a running server when iterating locally (`python3 -m
     // http.server 18765 &` in another shell), spin up fresh in CI.
     reuseExistingServer: !process.env.CI,
     stdout: "ignore",
     stderr: "pipe",
-    timeout: 30_000,
+    // Headroom for a cold runner spinning up the interpreter + server.
+    timeout: 60_000,
   },
 });
