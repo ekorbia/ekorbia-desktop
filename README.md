@@ -4,6 +4,7 @@
 ![Platform: macOS · Linux · Windows](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey)
 ![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db)
 ![Powered by Ollama](https://img.shields.io/badge/powered%20by-Ollama-black)
+[![Launch Certified by FuzzPage](https://fuzzpage.com/badge/ekorbia-ekorbia-desktop.svg)](https://fuzzpage.com/p/ekorbia-ekorbia-desktop)
 
 A native desktop chat and productivity environment for local AI models powered by [Ollama](https://ollama.com). Ekorbia runs entirely on your machine — no cloud, no API keys. It pairs multi-tab local chat with the features that set it apart — background **Watches** over folders, feeds, and web pages, a **Spotlight-style quick-query overlay**, and **ephemeral chats, model comparison mode, prompt library** — all fully offline, with no telemetry and no CDN calls.
 
