@@ -1134,10 +1134,10 @@ function App() {
   }, []);
 
   // Voice-dictation hotkey (Phase 3B). Rust's setup() registered the default
-  // (⌘⇧V / Alt+Shift+V); re-apply the user's customisation if any. Gated like
-  // the overlay hotkey since it drives the overlay (not wired on Linux yet).
+  // (⌘⇧V); re-apply the user's customisation if any. macOS only — voice input
+  // is a macOS feature (the Whisper backend is macOS-gated; see voice.jsx).
   useE(() => {
-    if (IS_LINUX) return;
+    if (!IS_MAC) return;
     let stored = null;
     try { stored = localStorage.getItem('ekorbia.voice.hotkey'); } catch {}
     if (stored) {

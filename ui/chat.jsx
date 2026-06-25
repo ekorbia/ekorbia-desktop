@@ -2408,8 +2408,9 @@ function Composer({
               size={24}
             />
             {/* Voice dictation — records mic audio and inserts the local
-                Whisper transcript at the caret. Always available (even in
-                private chats — it's just text entry). See voice.jsx. */}
+                Whisper transcript at the caret. macOS only — the Whisper
+                backend is macOS-gated (see voice.jsx / Cargo.toml). */}
+            {IS_MAC && (
             <VoiceMicButton
               disabled={isStreaming}
               onInsert={(t, opts) => {
@@ -2445,6 +2446,7 @@ function Composer({
                 });
               }}
             />
+            )}
             <span style={{ flex: 1 }} />
             {/* Model selector */}
             <button

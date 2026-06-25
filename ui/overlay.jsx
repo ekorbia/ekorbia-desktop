@@ -600,8 +600,9 @@ function QuickQuery() {
           }}
         />
         {/* Voice dictation — inserts the local Whisper transcript into the
-            overlay input. No model yet → toast (the setup modal would be
-            cramped in this small window). */}
+            overlay input. macOS only — the Whisper backend is macOS-gated
+            (see voice.jsx / Cargo.toml). No model yet → toast. */}
+        {IS_MAC && (
         <VoiceMicButton
           disabled={streaming}
           startSignal={voiceStartSignal}
@@ -645,6 +646,7 @@ function QuickQuery() {
             });
           }}
         />
+        )}
         {streaming && (
           <span
             style={{

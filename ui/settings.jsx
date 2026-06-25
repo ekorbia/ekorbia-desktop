@@ -983,7 +983,8 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
           {[
             { id: "general", label: "General" },
             { id: "models", label: "Models" },
-            { id: "voice", label: "Voice" },
+            // Voice input is macOS-only (the Whisper backend is macOS-gated).
+            ...(IS_MAC ? [{ id: "voice", label: "Voice" }] : []),
             { id: "prompts", label: "Prompts" },
             { id: "memory", label: "Memory" },
             { id: "attachments", label: "Attachments" },
@@ -1105,9 +1106,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                 </>
               )}
 
-              {/* Voice dictation hotkey — overlay-backed, so the same
-                  !IS_LINUX gate as Quick Query. */}
-              {!IS_LINUX && (
+              {/* Voice dictation hotkey — macOS only (the Whisper backend is
+                  macOS-gated; see voice.jsx / Cargo.toml). */}
+              {IS_MAC && (
                 <>
                   <SectionLabel label="Voice input" />
                   <Row label="Dictation hotkey">

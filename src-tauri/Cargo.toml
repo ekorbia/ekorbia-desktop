@@ -76,22 +76,22 @@ bytemuck = "1"
 feed-rs = "2"
 scraper = "0.20"
 similar = "2"
-# Voice input — push-to-talk dictation (Phase 1):
-#   cpal       — cross-platform microphone capture (CoreAudio on macOS).
-#                `cpal::Stream` is !Send, so capture runs on its own thread
-#                (see voice.rs); only the sample buffer + stop flag cross it.
-#   whisper-rs — Rust bindings to whisper.cpp for local transcription. The
-#                Metal GPU backend is added per-target below (macOS only); off
-#                macOS this base dep gives the CPU backend so the module still
-#                compiles on the frozen Linux/Windows targets.
-cpal = "0.15"
-whisper-rs = "0.16"
-
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Metal GPU backend for whisper.cpp — macOS only. Cargo unions features across
-# dependency tables, so this adds `metal` on top of the base `whisper-rs` above
-# for macOS builds while non-macOS builds keep the CPU backend.
+# Voice input — push-to-talk dictation, macOS only.
+#   cpal       — microphone capture (CoreAudio). `cpal::Stream` is !Send, so
+#                capture runs on its own thread (see voice.rs); only the sample
+#                buffer + stop flag cross it.
+#   whisper-rs — Rust bindings to whisper.cpp for local transcription, built
+#                with the Metal GPU backend.
+#
+# Why macOS-gated: on Linux, cpal pulls in alsa-sys, whose build script needs
+# the ALSA dev headers (libasound2-dev) + pkg-config present at compile time.
+# Voice is a macOS feature — the roadmap freezes Linux/Windows at their 0.3.0
+# feature level — so rather than burden the frozen-platform CI with an audio
+# system dependency for a feature they don't ship, the whole voice stack is
+# gated to macOS: here, and at `mod voice` in lib.rs.
 [target.'cfg(target_os = "macos")'.dependencies]
+cpal = "0.15"
 whisper-rs = { version = "0.16", features = ["metal"] }

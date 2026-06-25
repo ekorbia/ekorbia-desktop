@@ -38,6 +38,10 @@ mod settings;
 mod spaces;
 mod system;
 mod text_extract;
+// Voice input is macOS-only — it depends on cpal + whisper-rs, which are
+// macOS-gated in Cargo.toml (cpal pulls in alsa-sys on Linux). Keep this
+// `cfg` in lockstep with the command registrations + setup() default below.
+#[cfg(target_os = "macos")]
 mod voice;
 mod watch;
 
@@ -139,13 +143,24 @@ pub fn run() {
             ollama::ollama_pull_cancel,
             ollama::ollama_delete,
             system::system_profile,
+            // Voice commands — macOS only (see `mod voice`). generate_handler!
+            // honours per-entry cfg attributes, so on Linux/Windows these are
+            // dropped and the `voice` module isn't compiled at all.
+            #[cfg(target_os = "macos")]
             voice::voice_models_installed,
+            #[cfg(target_os = "macos")]
             voice::voice_model_download,
+            #[cfg(target_os = "macos")]
             voice::voice_model_download_cancel,
+            #[cfg(target_os = "macos")]
             voice::voice_model_delete,
+            #[cfg(target_os = "macos")]
             voice::voice_record_start,
+            #[cfg(target_os = "macos")]
             voice::voice_record_stop,
+            #[cfg(target_os = "macos")]
             voice::voice_record_cancel,
+            #[cfg(target_os = "macos")]
             voice::voice_prewarm,
             overlay::overlay_hide,
             overlay::overlay_resize,
@@ -372,8 +387,8 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let screenshot_capture_opt: Option<Shortcut> = None;
 
-            // Voice dictation hotkey — macOS + Windows (overlay-backed; the
-            // Linux overlay is deferred). Defaults to ⌘⇧V / Alt+Shift+V,
+            // Voice dictation hotkey — macOS only (voice input is a macOS
+            // feature; see `mod voice` / Cargo.toml). Defaults to ⌘⇧V,
             // rebindable in Settings → General. Shadowing of the app-local
             // ⌘⇧V (paste-and-match-style) is the cost of a mnemonic default;
             // registration failure just leaves the slot empty (best-effort).
@@ -382,12 +397,7 @@ pub fn run() {
                 Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyV),
                 "voice",
             );
-            #[cfg(target_os = "windows")]
-            let voice_opt: Option<Shortcut> = try_register(
-                Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::KeyV),
-                "voice",
-            );
-            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            #[cfg(not(target_os = "macos"))]
             let voice_opt: Option<Shortcut> = None;
 
             // Populate the registry so the handler can dispatch by
