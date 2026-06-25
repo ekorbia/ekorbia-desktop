@@ -147,6 +147,14 @@ jobs:
       # major, update here and in release.yml together.
       - name: Install Linux system dependencies
         run: |
+          # The hosted ubuntu-22.04 image preconfigures Microsoft's APT repos
+          # (azure-cli + packages.microsoft.com prod). They intermittently
+          # return "403 Forbidden / no longer signed", which makes the whole
+          # `apt-get update` exit non-zero and fails the job — even though our
+          # build needs nothing from them. Drop any source file referencing
+          # that host so we only depend on the Ubuntu mirrors.
+          sudo find /etc/apt/sources.list.d -type f \
+            -exec grep -q 'packages\.microsoft\.com' {} \; -print -delete
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \

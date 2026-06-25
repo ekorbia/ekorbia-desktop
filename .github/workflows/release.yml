@@ -161,6 +161,12 @@ jobs:
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
+          # See ci.yml for why: the hosted ubuntu-22.04 image preconfigures
+          # Microsoft's APT repos, which intermittently 403 and break the whole
+          # `apt-get update`. We need nothing from them — drop any source file
+          # referencing that host before updating.
+          sudo find /etc/apt/sources.list.d -type f \
+            -exec grep -q 'packages\.microsoft\.com' {} \; -print -delete
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
