@@ -71,6 +71,9 @@
         "type": "embedBootstrapper",
         "silent": true
       }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
     }
   }
 }
