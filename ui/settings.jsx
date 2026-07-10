@@ -646,7 +646,7 @@ function MemorySettings() {
             style={{
               fontFamily: T.mono,
               fontSize: 10.5,
-              color: info.oversized ? "#d8a87e" : T.fg3,
+              color: info.oversized ? T.amber : T.fg3,
             }}
           >
             {info.exists ? fmtBytes(info.bytes) : "not yet created"}
@@ -671,7 +671,7 @@ function MemorySettings() {
           style={{
             fontFamily: T.mono,
             fontSize: 10,
-            color: "#d8a87e",
+            color: T.amber,
             lineHeight: 1.5,
           }}
         >
@@ -924,11 +924,14 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 420,
-          background: T.bg1,
+          // Wide enough that all six tabs (General…Attachments) fit inside
+          // the strip's own 16px side padding — at 420 the last tab sat
+          // flush against the dialog edge.
+          width: 480,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 12,
-          boxShadow: "0 30px 70px rgba(0,0,0,0.55)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
           overflow: "hidden",
         }}
       >
@@ -999,7 +1002,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                   activeTab === id
                     ? `2px solid ${T.amber}`
                     : "2px solid transparent",
-                padding: "8px 14px",
+                padding: "8px 11px",
                 marginBottom: -1,
                 cursor: "pointer",
                 fontFamily: T.sans,

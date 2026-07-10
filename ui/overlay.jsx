@@ -521,17 +521,17 @@ function QuickQuery() {
 
   // ── Styles (defined once outside the JSX for readability) ──────────────────
   const ROW_PAD = "0 18px";
-  const C_BG = "rgba(20, 20, 26, 0.94)";
+  const C_BG = "rgba(20, 23, 29, 0.94)";
   const C_BORDER = "rgba(255,255,255,0.05)";
   const C_BORDER_STRONG = "rgba(255,255,255,0.1)";
-  const C_FG = "#e6e3dc";
-  const C_FG1 = "#b8b4ab";
-  const C_FG2 = "#8a877e";
-  const C_FG3 = "#5e5c54";
+  const C_FG = "#e3e6ec";
+  const C_FG1 = "#a5acba";
+  const C_FG2 = "#6b7384";
+  const C_FG3 = "#4e5564";
   const C_BG2 = "rgba(255,255,255,0.04)";
   const C_BG3 = "rgba(255,255,255,0.08)";
   const C_BG4 = "rgba(255,255,255,0.12)";
-  const C_AMBER = "#d48a50";
+  const C_AMBER = "#f0934a";
   const FONT_SANS = '"Inter", system-ui, sans-serif';
   const FONT_MONO = '"JetBrains Mono", monospace';
 
@@ -1208,7 +1208,7 @@ function QuickQuery() {
   const current = winApi?.getCurrentWindow?.() ?? winApi?.getCurrent?.();
   if (current?.label !== "overlay") return;
   // Tag both layers so the CSS rule that strips backgrounds applies to
-  // <html> as well as <body> — otherwise the body's #0c0c0e shows through
+  // <html> as well as <body> — otherwise the body's #0d0f13 shows through
   // the rounded card's corner cut-outs as a faint rectangular border.
   document.documentElement.dataset.window = "overlay";
   document.body.dataset.window = "overlay";

@@ -38,26 +38,26 @@
 .navy,
 .coal,
 .ayu {
-  --ek-bg0:           #0a0a0c;
-  --ek-bg1:           #15151a;
-  --ek-bg2:           #1c1c22;
-  --ek-bg3:           #272730;
-  --ek-bg4:           #33333d;
-  --ek-border:        #2e2e38;
-  --ek-border-strong: #3d3d48;
-  --ek-fg:            #e6e3dc;
-  --ek-fg1:           #b8b4ab;
-  --ek-fg2:           #8a877e;
-  --ek-fg3:           #5e5c54;
+  --ek-bg0:           #0d0f13;
+  --ek-bg1:           #14171d;
+  --ek-bg2:           #1c1f26;
+  --ek-bg3:           #232730;
+  --ek-bg4:           #2a2f3a;
+  --ek-border:        #262a33;
+  --ek-border-strong: #2f3540;
+  --ek-fg:            #e3e6ec;
+  --ek-fg1:           #a5acba;
+  --ek-fg2:           #6b7384;
+  --ek-fg3:           #4e5564;
 
-  /* One Dark syntax accents (matches ui/tokens.jsx) */
-  --ek-amber:  #d48a50;
-  --ek-blue:   #7ea7d8;
-  --ek-green:  #9bbf83;
-  --ek-purple: #c89bd0;
-  --ek-yellow: #d8c97e;
-  --ek-teal:   #83b4bf;
-  --ek-red:    #d87e7e;
+  /* One Dark brand accents (matches ui/tokens.jsx + ekorbia.com) */
+  --ek-amber:  #f0934a;
+  --ek-blue:   #5fb0ff;
+  --ek-green:  #7dd17a;
+  --ek-purple: #c281f5;
+  --ek-yellow: #e8ca6a;
+  --ek-teal:   #6cc7d1;
+  --ek-red:    #ff8b8b;
 }
 
 /* ─── Map Ekorbia variables → mdBook variables ─────────────────────────
@@ -154,7 +154,7 @@ code:not(pre code) {
 .navy code:not(pre code),
 .coal code:not(pre code),
 .ayu code:not(pre code) {
-  background: rgba(212, 138, 80, 0.10); /* darker-theme amber tint */
+  background: rgba(240, 147, 74, 0.10); /* darker-theme amber tint */
 }
 
 /* ─── Tables ───────────────────────────────────────────────────────────── */

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Visual refresh**, with the default **One Dark** theme using a slate
+  palette and brighter accents (the old look is still available as a new
+  **Warm Dark** theme).
+- **Interface polish across the chrome** — a glowing model-status pill,
+  tinted capability badges and chips, softer rows, primary buttons with
+  an accent glow, and a gentle popover motion.
+
+### Fixed
+
+- **No more light/dark flash at startup.** The window backing and the
+  first painted frame now match your saved theme — previously the app
+  could flash between light and dark while loading.
+- **The macOS app icon now sits properly in the Dock.** It was rendered
+  full-bleed (oversized, with visible corners against the Dock's icon
+  style); the icon set is rebuilt on Apple's standard icon grid with
+  correct margins and transparent corners.
+
 ## [0.5.0] - 2026-07-03
 
 ### Added

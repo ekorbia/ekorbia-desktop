@@ -4,37 +4,63 @@ const { useState: useS, useEffect: useE, useRef: useR } = React;
 
 // Theme palettes. Each theme defines all tokens that can plausibly invert
 // between light and dark — bg0..bg4, fg/fg1..fg3, border/borderStrong,
-// amber. Applied via Object.assign(T, ...) below.
+// and the full accent set (amber..red — light themes need darker accents
+// for contrast). `light: true` flags themes whose elevation shadows must
+// soften (dark-tuned shadows read as dirt on a light surface). Applied
+// via Object.assign(T, ...) below.
+//
+// `one_dark` mirrors ekorbia.com's site tokens (the vignette palette) and
+// MUST stay in sync with the defaults in tokens.jsx — the overlay window
+// never mounts App(), so it renders off those defaults. `warm_dark` is the
+// pre-0.6 neutral/earthy palette, kept for anyone who prefers the old look.
 const THEMES = {
   one_dark: {
+    bg0:'#0d0f13', bg1:'#14171d', bg2:'#1c1f26', bg3:'#232730', bg4:'#2a2f3a',
+    fg:'#e3e6ec', fg1:'#a5acba', fg2:'#6b7384', fg3:'#4e5564',
+    border:'#262a33', borderStrong:'#2f3540',
+    amber:'#f0934a', blue:'#5fb0ff', green:'#7dd17a', purple:'#c281f5',
+    yellow:'#e8ca6a', teal:'#6cc7d1', red:'#ff8b8b',
+    label:'one dark',
+  },
+  warm_dark: {
     bg0:'#0a0a0c', bg1:'#15151a', bg2:'#1c1c22', bg3:'#272730', bg4:'#33333d',
     fg:'#e6e3dc', fg1:'#b8b4ab', fg2:'#8a877e', fg3:'#5e5c54',
     border:'#2e2e38', borderStrong:'#3d3d48',
-    amber:'#d48a50', label:'one dark',
+    amber:'#d48a50', blue:'#7ea7d8', green:'#9bbf83', purple:'#c89bd0',
+    yellow:'#d8c97e', teal:'#83b4bf', red:'#d87e7e',
+    label:'warm dark',
   },
   one_light: {
     bg0:'#fafafa', bg1:'#f0f0f0', bg2:'#e7e7e7', bg3:'#d8d8d8', bg4:'#c4c4c4',
     fg:'#383a42', fg1:'#5c5f66', fg2:'#828489', fg3:'#a0a1a7',
     border:'#d4d4d4', borderStrong:'#bcbcbc',
-    amber:'#b15c13', label:'one light',
+    amber:'#b15c13', blue:'#4078f2', green:'#50a14f', purple:'#a626a4',
+    yellow:'#c18401', teal:'#0184bc', red:'#e45649',
+    light:true, label:'one light',
   },
   ayu_dark: {
     bg0:'#0d1017', bg1:'#131721', bg2:'#1b202a', bg3:'#232a35', bg4:'#2d3540',
     fg:'#bfbdb6', fg1:'#9a9890', fg2:'#787570', fg3:'#5a5852',
     border:'#262d38', borderStrong:'#3a4150',
-    amber:'#e6b450', label:'ayu dark',
+    amber:'#e6b450', blue:'#5fb0ff', green:'#7dd17a', purple:'#c281f5',
+    yellow:'#e8ca6a', teal:'#6cc7d1', red:'#ff8b8b',
+    label:'ayu dark',
   },
   ayu_mirage: {
     bg0:'#1f2430', bg1:'#232834', bg2:'#2a2f3d', bg3:'#343a4b', bg4:'#3d4456',
     fg:'#cccac2', fg1:'#b3b1a8', fg2:'#8a8780', fg3:'#5c6773',
     border:'#2d3340', borderStrong:'#3d4456',
-    amber:'#ffcc66', label:'ayu mirage',
+    amber:'#ffcc66', blue:'#5fb0ff', green:'#7dd17a', purple:'#c281f5',
+    yellow:'#e8ca6a', teal:'#6cc7d1', red:'#ff8b8b',
+    label:'ayu mirage',
   },
   ayu_light: {
     bg0:'#fcfcfc', bg1:'#f3f4f5', bg2:'#e8eaeb', bg3:'#dcdfe2', bg4:'#c8ccd0',
     fg:'#5c6166', fg1:'#787c80', fg2:'#959a9f', fg3:'#b3b8bd',
     border:'#dcdfe2', borderStrong:'#bcc0c5',
-    amber:'#fa8d3e', label:'ayu light',
+    amber:'#fa8d3e', blue:'#399ee6', green:'#86b300', purple:'#a37acc',
+    yellow:'#f2ae49', teal:'#4cbf99', red:'#f07171',
+    light:true, label:'ayu light',
   },
 };
 
@@ -224,12 +250,12 @@ function OutputDirModal({ chatId, chatTitle, suggested, onClose, invoke }) {
       <div
         style={{
           width: 440, padding: 18,
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 10,
           fontFamily: T.sans,
           color: T.fg,
-          boxShadow: '0 16px 40px rgba(0,0,0,0.5)',
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
         }}
       >
         <div style={{ fontFamily: T.serif, fontSize: 18, marginBottom: 6 }}>
@@ -328,13 +354,48 @@ function App() {
 
   // Apply theme tokens to T (mutate in place — components read T at render).
   // Includes fg1/fg2/fg3 + border tokens so light themes don't end up with
-  // dark-theme borders and washed-out muted text on a white background.
+  // dark-theme borders and washed-out muted text on a white background,
+  // the full accent set (light themes need darker accents for contrast),
+  // and the elevation shadows (softened on light themes).
   Object.assign(T, {
     bg0: theme.bg0, bg1: theme.bg1, bg2: theme.bg2, bg3: theme.bg3, bg4: theme.bg4,
     fg: theme.fg, fg1: theme.fg1, fg2: theme.fg2, fg3: theme.fg3,
     border: theme.border, borderStrong: theme.borderStrong,
-    amber: theme.amber,
+    amber: theme.amber, blue: theme.blue, green: theme.green,
+    purple: theme.purple, yellow: theme.yellow, teal: theme.teal,
+    red: theme.red,
+    shadowSm: theme.light
+      ? "0 8px 22px -6px rgba(0,0,0,0.14)"
+      : "0 8px 22px -6px rgba(0,0,0,0.45)",
+    shadowLg: theme.light
+      ? "0 18px 50px -18px rgba(0,0,0,0.20)"
+      : "0 18px 50px -18px rgba(0,0,0,0.55)",
+    shadowPop: theme.light
+      ? "0 24px 60px -20px rgba(0,0,0,0.25)"
+      : "0 24px 60px -20px rgba(0,0,0,0.7)",
+    insetHi: theme.light
+      ? "inset 0 1px 0 rgba(255,255,255,0.65)"
+      : "inset 0 1px 0 rgba(255,255,255,0.04)",
+    isLight: !!theme.light,
   });
+
+  // Mirror the accent onto CSS custom properties so the static styles in
+  // index.html (markdown links, inline-code tint, citation chips, the
+  // streaming border) follow the theme. T can't reach raw CSS; these vars
+  // are the bridge. `--ek-accent-ink` is the inline-code text color —
+  // light themes read best with the accent itself, dark themes with a
+  // cream-lightened tint.
+  useE(() => {
+    const s = document.documentElement.style;
+    s.setProperty("--ek-accent", theme.amber);
+    s.setProperty("--ek-accent-rgb", hexToRgbTriplet(theme.amber));
+    s.setProperty("--ek-accent-hover", lightenHex(theme.amber, theme.light ? -0.15 : 0.18));
+    s.setProperty("--ek-accent-ink", theme.light ? theme.amber : lightenHex(theme.amber, 0.55));
+    // Body background follows the theme too — the anti-flash script in
+    // index.html sets this before first paint from localStorage; this
+    // keeps it correct after in-session theme switches.
+    s.setProperty("--ek-bg0", theme.bg0);
+  }, [theme]);
 
   // Tabs (multi-chat). The welcome tab is the empty "new chat" the user
   // sees at startup. Its id is freshly generated each launch — a literal
@@ -909,7 +970,7 @@ function App() {
 
   const [modelId, setModelId] = useS(readPersistedComposerModel);
   // Build a display object — fall back to a minimal stub for models not in the static list
-  const model = MODELS_BY_ID[modelId] || { id: modelId, name: modelId, color: '#9bbf83' };
+  const model = MODELS_BY_ID[modelId] || { id: modelId, name: modelId, color: T.green };
   const [streaming, setStreaming] = useS(false);
   const [ramUsed, setRamUsed] = useS(28);
 
@@ -2981,7 +3042,7 @@ function App() {
     (history.dateSections || []).reduce((n, s) => n + (s.items?.length || 0), 0);
 
   const activeTabModelId = tabs.find(t => t.id === activeTab)?.model || modelId;
-  const tabModel = MODELS_BY_ID[activeTabModelId] || { id: activeTabModelId, name: activeTabModelId, color: '#9bbf83' };
+  const tabModel = MODELS_BY_ID[activeTabModelId] || { id: activeTabModelId, name: activeTabModelId, color: T.green };
 
   const closeTab = (id) => {
     // Pre-compute the post-close tab list so the branch decision happens

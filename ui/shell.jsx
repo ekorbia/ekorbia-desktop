@@ -339,6 +339,7 @@ function Sidebar({
           doesn't compete with the primary action. */}
       <div style={{ margin: 8, display: "flex", gap: 6 }}>
         <button
+          className="ek-btn-primary"
           onClick={onNew}
           style={{
             flex: 1,
@@ -346,10 +347,10 @@ function Sidebar({
             display: "flex",
             alignItems: "center",
             gap: 8,
-            background: T.bg2,
-            border: `1px solid ${T.border}`,
+            background: T.amber + "14",
+            border: `1px solid ${T.amber}40`,
             borderRadius: 5,
-            color: T.fg,
+            color: T.amber,
             fontFamily: T.mono,
             fontSize: 11.5,
             cursor: "pointer",
@@ -358,7 +359,7 @@ function Sidebar({
           <I.Plus size={11} />
           <span>New chat</span>
           <span style={{ flex: 1 }} />
-          <span style={{ color: T.fg3, fontSize: 10 }}>{MOD_GLYPH}N</span>
+          <span style={{ color: T.amber + "99", fontSize: 10 }}>{MOD_GLYPH}N</span>
         </button>
         {/* Private chat is disabled inside a Space — the Space's whole
             point is persistent context (system prompt, pinned attachments,
@@ -952,11 +953,14 @@ function SpaceRow({
               : "transparent",
         // Amber border on drop-hover doubles down on the affordance; a
         // 1px border avoids any layout shift relative to the transparent
-        // default.
+        // default. Plain hover gets the quieter border-reveal treatment
+        // shared with ChatRow (site .v-row recipe).
         border: dropHover
           ? `1px solid ${T.amber}`
-          : "1px solid transparent",
-        borderRadius: 4,
+          : hover && !active
+            ? `1px solid ${T.border}`
+            : "1px solid transparent",
+        borderRadius: 7,
         cursor: "pointer",
         userSelect: "none",
         position: "relative",
@@ -1120,7 +1124,7 @@ function SpaceOverflowMenu({ x, y, onEdit, onRename, onRecolor, onDelete, onClos
           borderRadius: 5,
           padding: 4,
           minWidth: 140,
-          boxShadow: "0 8px 20px rgba(0,0,0,0.4)",
+          boxShadow: T.shadowPop,
         }}
       >
         <MenuItem onClick={onEdit}>Edit settings…</MenuItem>
@@ -1186,13 +1190,13 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
           top: "50%",
           left: "50%",
           transform: "translate(-50%,-50%)",
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 8,
           padding: 20,
           width: 380,
           zIndex: 71,
-          boxShadow: "0 16px 40px rgba(0,0,0,0.6)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
         }}
       >
         <div
@@ -1420,7 +1424,7 @@ function SpaceColorPickerPopover({ anchorRect, current, onPick, onClose }) {
           borderRadius: 6,
           padding: 10,
           zIndex: 66,
-          boxShadow: "0 8px 20px rgba(0,0,0,0.45)",
+          boxShadow: T.shadowPop,
           display: "flex",
           flexWrap: "wrap",
           gap: 8,
@@ -1770,7 +1774,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
           top: "50%",
           left: "50%",
           transform: "translate(-50%,-50%)",
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 8,
           width: 560,
@@ -1778,7 +1782,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
           display: "flex",
           flexDirection: "column",
           zIndex: 71,
-          boxShadow: "0 16px 40px rgba(0,0,0,0.6)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
         }}
       >
         <div
@@ -2683,7 +2687,7 @@ function ChatContextMenu({
           minWidth: menuW,
           maxHeight: "70vh",
           overflowY: "auto",
-          boxShadow: "0 8px 20px rgba(0,0,0,0.4)",
+          boxShadow: T.shadowPop,
           fontFamily: T.sans,
           fontSize: 12,
         }}
@@ -2771,7 +2775,7 @@ function MenuItem({ children, onClick, selected, danger, indent, ...rest }) {
         cursor: "pointer",
         color: danger
           ? hover
-            ? T.red || "#d87e7e"
+            ? T.red
             : T.fg1
           : hover
             ? T.fg
@@ -2873,12 +2877,12 @@ function NameModal({
         style={{
           width: 320,
           padding: 16,
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 8,
           fontFamily: T.sans,
           color: T.fg,
-          boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
         }}
       >
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
@@ -2991,12 +2995,12 @@ function ConfirmModal({
         style={{
           width: 360,
           padding: 18,
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 8,
           fontFamily: T.sans,
           color: T.fg,
-          boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
         }}
       >
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
@@ -3033,7 +3037,8 @@ function ConfirmModal({
             data-confirm-button
             style={{
               padding: "5px 14px",
-              background: danger ? (T.red || "#d87e7e") : T.amber,
+              background: danger ? T.red : T.amber,
+              boxShadow: `0 5px 16px -6px ${danger ? T.red : T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
               border: "none",
               borderRadius: 5,
               color: T.bg0,
@@ -3172,7 +3177,7 @@ function ChatRow({
         <mark
           key={i}
           style={{
-            background: "rgba(212,138,80,0.25)",
+            background: T.amber + "40",
             color: T.amber,
             padding: 0,
           }}
@@ -3214,7 +3219,8 @@ function ChatRow({
         margin: "0 6px",
         padding: "5px 8px",
         background: active ? T.bg4 : hover ? T.bg3 : "transparent",
-        borderRadius: 4,
+        border: `1px solid ${hover && !active ? T.border : "transparent"}`,
+        borderRadius: 7,
         cursor: "pointer",
         display: "flex",
         alignItems: "center",
@@ -3450,7 +3456,7 @@ function Tab({ tab, active, model, attachmentCount = 0, onSelect, onClose }) {
             // Ephemeral tabs get a distinct accent on the active-tab
             // top bar (cool slate instead of amber) so the user can see
             // at a glance which tab is the private one.
-            background: tab.ephemeral ? "#7aa6b8" : T.amber,
+            background: tab.ephemeral ? T.teal : T.amber,
           }}
         />
       )}
@@ -3458,7 +3464,7 @@ function Tab({ tab, active, model, attachmentCount = 0, onSelect, onClose }) {
         // Replace the model dot with a lock for private chats. Keeps the
         // tab the same width / layout while making the privacy state
         // visible without hovering. Tooltip lets you double-check.
-        <span title="Private chat — not saved" style={{ display: "inline-flex", color: "#7aa6b8" }}>
+        <span title="Private chat — not saved" style={{ display: "inline-flex", color: T.teal }}>
           <I.Lock size={11} />
         </span>
       ) : (
@@ -3691,6 +3697,9 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
     label = `${model.name} cold`;
     dim = true;
   }
+  // Pill chrome follows the state (site status-pill ladder): loaded glows
+  // green, warming pulses amber, cold/missing states stay quiet gray.
+  const pillTint = ollamaUp && (loaded || warming) ? dotColor : null;
 
   return (
     <div
@@ -3721,14 +3730,23 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
         ollama
       </span>
       <span
+        data-status-model-pill
         style={{
           display: "inline-flex",
           alignItems: "center",
-          gap: 4,
-          color: dim ? T.fg3 : T.fg2,
+          gap: 5,
+          padding: "1px 9px 1px 7px",
+          borderRadius: 999,
+          background: T.bg2,
+          border: `1px solid ${pillTint ? pillTint + "4d" : T.border}`,
+          color: pillTint ? pillTint : dim ? T.fg3 : T.fg2,
+          fontSize: 11,
         }}
       >
-        <I.Cpu size={10} /> {label}
+        <span className={warming ? "watch-pulse-dot" : undefined} style={{ display: "inline-flex" }}>
+          <ModelDot color={dotColor} size={6} glow={!!pillTint} />
+        </span>
+        {label}
       </span>
       {indexingAttachments.length > 0 && (
         // Aggregated indexing line across ALL chats. When one folder is

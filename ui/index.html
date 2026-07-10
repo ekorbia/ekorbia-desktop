@@ -4,6 +4,26 @@
 <meta charset="utf-8" />
 <title>Ekorbia — Local AI Desktop</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Anti-flash: paint the persisted theme's background before first paint.
+     React applies the full theme only after mount; without this, a
+     light-theme user saw the dark CSS default for a frame (and vice
+     versa on the window backing). Values duplicate THEMES[*].bg0 in
+     main.jsx — keep the two in sync when palettes change. Runs in the
+     overlay window too, harmlessly: the overlay's transparent-body rule
+     has higher specificity than the var-valued body rule. -->
+<script>
+  (function () {
+    try {
+      var t = JSON.parse(localStorage.getItem('ekorbia.tweaks') || '{}').theme;
+      var bg = {
+        one_dark: '#0d0f13', warm_dark: '#0a0a0c',
+        one_light: '#fafafa', ayu_dark: '#0d1017',
+        ayu_mirage: '#1f2430', ayu_light: '#fcfcfc'
+      }[t];
+      if (bg) document.documentElement.style.setProperty('--ek-bg0', bg);
+    } catch (e) { /* corrupt tweaks JSON — keep the dark default */ }
+  })();
+</script>
 <!-- Self-hosted fonts (Inter, JetBrains Mono, Instrument Serif) — see
      ui/vendor/README.md for versions/provenance. No network requests. -->
 <link href="vendor/fonts/fonts.css" rel="stylesheet">
@@ -12,11 +32,27 @@
      classnames stay in sync (hljs-keyword, hljs-string, etc.). -->
 <link href="vendor/github-dark.min.css" rel="stylesheet">
 <style>
+  /* Theme accent bridge. The React side mutates T (tokens.jsx) for inline
+     styles, but the static rules below can't read T — App() mirrors the
+     active theme's accent onto these custom properties instead (see the
+     useEffect next to the Object.assign(T, …) block in main.jsx). The
+     defaults here MUST match THEMES.one_dark so the overlay window (which
+     never mounts App) and the pre-mount paint look right. */
+  :root {
+    --ek-accent: #f0934a;
+    --ek-accent-hover: #f3a66b;
+    --ek-accent-ink: #f8ceae;
+    --ek-accent-rgb: 240, 147, 74;
+    --ek-bg0: #0d0f13;
+  }
   html, body { margin: 0; padding: 0; height: 100%; }
   body {
     font-family: 'Inter', system-ui, sans-serif;
-    background: #0c0c0e;
-    color: #e6e3dc;
+    /* Var-valued so the anti-flash head script (below) and the theme
+       effect in main.jsx can repaint it — a literal here caused a
+       dark-frame flash for light-theme users before React mounted. */
+    background: var(--ek-bg0, #0d0f13);
+    color: #e3e6ec;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
   }
@@ -26,9 +62,9 @@
     position: fixed; inset: 0;
     z-index: -1;
     background:
-      radial-gradient(circle at 20% 20%, rgba(212, 138, 80, 0.06), transparent 50%),
-      radial-gradient(circle at 80% 80%, rgba(80, 120, 200, 0.06), transparent 50%),
-      #0a0a0c;
+      radial-gradient(circle at 20% 20%, rgba(240, 147, 74, 0.06), transparent 50%),
+      radial-gradient(circle at 80% 80%, rgba(95, 176, 255, 0.06), transparent 50%),
+      var(--ek-bg0, #0d0f13);
     pointer-events: none;
   }
   #root { position: relative; z-index: 0; }
@@ -59,19 +95,19 @@
   .typing-dot:nth-child(2) { animation-delay: 0.15s; }
   .typing-dot:nth-child(3) { animation-delay: 0.3s; }
   @keyframes typing { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
-  /* Streaming assistant message: amber left border that breathes while the
-     model is generating. Applied via className so the keyframe can reference
-     the amber hex directly without needing a CSS variable. The border is set
-     on the content div (which has border-radius:10) so we match that radius
-     to avoid a flat edge clipping the rounded corners. */
+  /* Streaming assistant message: accent left border that breathes while
+     the model is generating. Colors flow through the --ek-accent vars so
+     the pulse follows the active theme. The border is set on the content
+     div (which has border-radius:10) so we match that radius to avoid a
+     flat edge clipping the rounded corners. */
   .ek-stream-border {
-    border-left: 2px solid #d48a50 !important;
+    border-left: 2px solid var(--ek-accent) !important;
     border-radius: 10px !important;
     animation: ek-stream-border-pulse 1.4s ease-in-out infinite;
   }
   @keyframes ek-stream-border-pulse {
-    0%, 100% { border-left-color: #d48a50; }
-    50%       { border-left-color: rgba(212, 138, 80, 0.2); }
+    0%, 100% { border-left-color: var(--ek-accent); }
+    50%       { border-left-color: rgba(var(--ek-accent-rgb), 0.2); }
   }
   /* Watch-panel "processing" indicator: pulsing dot + breathing text so
      in-flight rows are visually distinct from the static green/red ones. */
@@ -91,6 +127,44 @@
     from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: translateY(0); }
   }
+  /* Primary CTA hover lift (the site's .btn treatment). Fill + glow stay
+     inline (they follow T per theme); only the motion lives here so :hover
+     works without per-component JS hover state. */
+  .ek-btn-primary {
+    transition: transform 0.12s, filter 0.15s;
+  }
+  .ek-btn-primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    filter: brightness(1.07);
+  }
+  .ek-btn-primary:active:not(:disabled) { transform: translateY(0); }
+  /* Popovers and menus rise in. Targets the data-attributes the components
+     already carry for tests and outside-click hooks — div-scoped where a
+     trigger button shares the attribute (prompt sort button). Modals are
+     deliberately excluded: several center with translate(-50%,-50%), which
+     an animated transform would fight. */
+  div[data-menu],
+  [data-model-picker],
+  [data-prompt-picker],
+  [data-space-overflow-menu],
+  [data-space-color-popover],
+  [role="menu"] {
+    animation: ek-pop-in 0.13s ease-out;
+  }
+  @keyframes ek-pop-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ek-btn-primary { transition: none; }
+    .ek-btn-primary:hover:not(:disabled) { transform: none; filter: none; }
+    div[data-menu],
+    [data-model-picker],
+    [data-prompt-picker],
+    [data-space-overflow-menu],
+    [data-space-color-popover],
+    [role="menu"] { animation: none; }
+  }
   /* macOS title bar drag region.
      -webkit-app-region does NOT inherit, so the parent's "drag" doesn't reach
      children that fully cover it. We propagate it to all descendants and then
@@ -107,7 +181,7 @@
      rounded-card UI in overlay.jsx can float against the desktop. We can't
      use a media query here because both windows share this stylesheet —
      overlay.jsx sets data-window="overlay" on both <html> and <body>.
-     Both layers need to be transparent: <body>'s default #0c0c0e otherwise
+     Both layers need to be transparent: <body>'s default #0d0f13 otherwise
      bleeds through the card's rounded corners, drawing the rectangular
      window outline that the OS window cannot itself round off. */
   html[data-window="overlay"],
@@ -117,7 +191,7 @@
      Default WKWebView placeholder is ~38% opacity which gets eaten alive
      against any wallpaper that bleeds through the blur. */
   body[data-window="overlay"] input::placeholder {
-    color: rgba(230, 227, 220, 0.55);
+    color: rgba(227, 230, 236, 0.55);
   }
   /* ─── Markdown rendering for assistant messages (Phase 1a) ───────────
      Applied via the .ek-md root class on the container that holds the
@@ -143,16 +217,16 @@
   .ek-md h3 { font-size: 15px; }
   .ek-md h4 { font-size: 14px; }
   .ek-md a {
-    color: #d48a50;
+    color: var(--ek-accent);
     text-decoration: underline;
     text-underline-offset: 2px;
   }
-  .ek-md a:hover { color: #e6a268; }
+  .ek-md a:hover { color: var(--ek-accent-hover); }
   .ek-md blockquote {
     margin: 8px 0;
     padding: 4px 12px;
-    border-left: 2px solid rgba(212, 138, 80, 0.4);
-    color: rgba(230, 227, 220, 0.78);
+    border-left: 2px solid rgba(var(--ek-accent-rgb), 0.4);
+    color: rgba(227, 230, 236, 0.78);
     background: rgba(255, 255, 255, 0.02);
   }
   .ek-md hr {
@@ -171,16 +245,16 @@
     text-align: left;
   }
   .ek-md th { background: rgba(255, 255, 255, 0.03); font-weight: 600; }
-  /* Inline code: tight pill, monospace, subtle warm tint so it's visible
+  /* Inline code: tight pill, monospace, subtle accent tint so it's visible
      against the message background without competing with code blocks. */
   .ek-md :not(pre) > code {
     font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 12.5px;
     padding: 1px 5px;
     border-radius: 4px;
-    background: rgba(212, 138, 80, 0.10);
-    color: #f0d9c2;
-    border: 1px solid rgba(212, 138, 80, 0.18);
+    background: rgba(var(--ek-accent-rgb), 0.10);
+    color: var(--ek-accent-ink);
+    border: 1px solid rgba(var(--ek-accent-rgb), 0.18);
   }
   /* Code-block container. The .hljs class is added by highlight.js's
      render; the github-dark stylesheet handles inner token colors. We
@@ -192,7 +266,7 @@
     padding: 0;
     border-radius: 8px;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    background: #0f0f12;
+    background: #14171d;
     overflow: hidden;
   }
   .ek-md pre.ek-code > code.hljs {
@@ -215,7 +289,7 @@
     font-size: 9.5px;
     letter-spacing: 0.6px;
     text-transform: uppercase;
-    color: rgba(230, 227, 220, 0.4);
+    color: rgba(227, 230, 236, 0.4);
     pointer-events: none;
   }
   .ek-md pre.ek-code[data-lang] > code.hljs {
@@ -231,7 +305,7 @@
     padding: 3px 8px;
     font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 10px;
-    color: rgba(230, 227, 220, 0.55);
+    color: rgba(227, 230, 236, 0.55);
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 5px;
@@ -242,12 +316,12 @@
   .ek-md pre.ek-code:hover .ek-copy-btn,
   .ek-md pre.ek-code .ek-copy-btn:focus { opacity: 1; }
   .ek-md pre.ek-code .ek-copy-btn:hover {
-    color: #e6e3dc;
+    color: #e3e6ec;
     background: rgba(255, 255, 255, 0.08);
   }
   .ek-md pre.ek-code .ek-copy-btn.ek-copied {
-    color: #7fb069;
-    border-color: rgba(127, 176, 105, 0.4);
+    color: #7dd17a;
+    border-color: rgba(125, 209, 122, 0.4);
     opacity: 1;
   }
   /* Citation chip — wraps [N] markers when the message has sources.
@@ -258,8 +332,8 @@
     padding: 0 4px;
     margin: 0 1px;
     border-radius: 4px;
-    background: rgba(212, 138, 80, 0.13);
-    color: #d48a50;
+    background: rgba(var(--ek-accent-rgb), 0.13);
+    color: var(--ek-accent);
     font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 9px;
     font-weight: 700;
@@ -270,8 +344,8 @@
   /* Search-match highlight — matches the React <mark> in renderHighlighted
      so visual identity is preserved when search is active. */
   .ek-md mark.ek-search {
-    background: rgba(212, 138, 80, 0.25);
-    color: #e6e3dc;
+    background: rgba(var(--ek-accent-rgb), 0.25);
+    color: inherit;
     padding: 0;
     border-radius: 2px;
   }

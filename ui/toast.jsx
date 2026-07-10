@@ -75,7 +75,7 @@ function ToastHost() {
               borderLeft: `3px solid ${accent}`,
               borderRadius: 6,
               padding: "10px 12px",
-              boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
+              boxShadow: `${T.shadowSm}, ${T.insetHi}`,
               display: "flex",
               flexDirection: "column",
               gap: 4,

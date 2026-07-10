@@ -19,7 +19,8 @@
         "label": "main",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "backgroundColor": "#0d0f13"
       },
       {
         "label": "overlay",

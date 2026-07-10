@@ -28,6 +28,8 @@ const {
   ekFilesGroupByPath,
   bucketChatsByDate,
   instantiateSpacePinnedAttachments,
+  hexToRgbTriplet,
+  lightenHex,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -956,4 +958,32 @@ test("formatClock: clamps negative / NaN to 0:00", () => {
   assert.equal(formatClock(-3), "0:00");
   assert.equal(formatClock(NaN), "0:00");
   assert.equal(formatClock("12"), "0:12");
+});
+
+// ── hexToRgbTriplet / lightenHex (theme accent derivation) ─────────────────
+
+test("hexToRgbTriplet: #rrggbb and #rgb forms", () => {
+  assert.equal(hexToRgbTriplet("#f0934a"), "240,147,74");
+  assert.equal(hexToRgbTriplet("f0934a"), "240,147,74");
+  assert.equal(hexToRgbTriplet("#fff"), "255,255,255");
+  assert.equal(hexToRgbTriplet("#000"), "0,0,0");
+});
+
+test("hexToRgbTriplet: garbage falls back to mid-gray", () => {
+  assert.equal(hexToRgbTriplet("garbage"), "128,128,128");
+  assert.equal(hexToRgbTriplet(""), "128,128,128");
+  assert.equal(hexToRgbTriplet(null), "128,128,128");
+  assert.equal(hexToRgbTriplet("#12zz34"), "128,128,128");
+});
+
+test("lightenHex: mixes toward white for positive amounts", () => {
+  assert.equal(lightenHex("#000000", 1), "#ffffff");
+  assert.equal(lightenHex("#f0934a", 0), "#f0934a");
+  assert.equal(lightenHex("#f0934a", 0.55), "#f8ceae");
+});
+
+test("lightenHex: negative amounts darken; out-of-range clamps", () => {
+  assert.equal(lightenHex("#ffffff", -0.5), "#808080");
+  assert.equal(lightenHex("#ffffff", -2), "#000000");
+  assert.equal(lightenHex("#5fb0ff", 2), "#ffffff");
 });

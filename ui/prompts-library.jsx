@@ -514,11 +514,11 @@ function PromptLibrary({
                       style={{
                         fontFamily: T.mono,
                         fontSize: 9.5,
-                        padding: "2px 7px",
-                        background: active ? T.bg4 : T.bg2,
-                        color: active ? T.fg : T.fg2,
-                        border: `1px solid ${active ? T.borderStrong : T.border}`,
-                        borderRadius: 3,
+                        padding: "2px 8px",
+                        background: active ? T.amber + "1f" : T.bg2,
+                        color: active ? T.amber : T.fg2,
+                        border: `1px solid ${active ? T.amber + "4d" : T.border}`,
+                        borderRadius: 999,
                         cursor: "pointer",
                       }}
                     >
@@ -580,7 +580,7 @@ function PromptLibrary({
               borderRadius: 5,
               padding: 4,
               minWidth: 100,
-              boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+              boxShadow: T.shadowPop,
             }}
           >
             {Object.entries(SORT_LABELS).map(([k, v]) => (
@@ -685,19 +685,24 @@ function PromptLibrary({
                 style={{
                   margin: "0 6px",
                   padding: "6px 8px",
-                  borderRadius: 4,
+                  border: "1px solid transparent",
+                  borderRadius: 7,
                   background: sel ? T.bg4 : "transparent",
                   cursor: "pointer",
                   display: "flex",
                   flexDirection: "column",
                   gap: 2,
                 }}
-                onMouseEnter={(e) =>
-                  !sel && (e.currentTarget.style.background = T.bg3)
-                }
-                onMouseLeave={(e) =>
-                  !sel && (e.currentTarget.style.background = "transparent")
-                }
+                onMouseEnter={(e) => {
+                  if (sel) return;
+                  e.currentTarget.style.background = T.bg3;
+                  e.currentTarget.style.borderColor = T.border;
+                }}
+                onMouseLeave={(e) => {
+                  if (sel) return;
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.borderColor = "transparent";
+                }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   {/* Favorite color dot (or an 8px placeholder so names align). */}
@@ -989,6 +994,7 @@ function PromptLibrary({
                     height: 24,
                     padding: "0 10px",
                     background: T.amber,
+                    boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
                     border: "none",
                     borderRadius: 4,
                     color: T.bg0,
@@ -1172,7 +1178,7 @@ function PromptLibrary({
             borderRadius: 5,
             padding: 4,
             minWidth: 160,
-            boxShadow: "0 8px 22px rgba(0,0,0,0.5)",
+            boxShadow: T.shadowPop,
           }}
         >
           <div

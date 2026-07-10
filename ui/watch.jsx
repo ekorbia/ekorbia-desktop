@@ -194,9 +194,9 @@ function RecipePickerModal({ open, onClose, onPick }) {
         aria-modal="true"
         aria-label="Choose a watch type"
         style={{
-          width: 460, maxWidth: "90vw", background: T.bg1,
+          width: 460, maxWidth: "90vw", background: panelGrad(),
           border: `1px solid ${T.borderStrong}`, borderRadius: 10,
-          boxShadow: "0 16px 40px rgba(0,0,0,0.5)", padding: "16px 18px 18px",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`, padding: "16px 18px 18px",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
@@ -574,18 +574,22 @@ function WatchPanel({
                   margin: "0 6px 2px",
                   padding: "6px 8px",
                   background: isSelected ? T.bg4 : "transparent",
-                  borderRadius: 5,
+                  border: "1px solid transparent",
+                  borderRadius: 7,
                   cursor: "pointer",
                   display: "flex",
                   flexDirection: "column",
                   gap: 3,
                 }}
                 onMouseEnter={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = T.bg3;
+                  if (isSelected) return;
+                  e.currentTarget.style.background = T.bg3;
+                  e.currentTarget.style.borderColor = T.border;
                 }}
                 onMouseLeave={(e) => {
-                  if (!isSelected)
-                    e.currentTarget.style.background = "transparent";
+                  if (isSelected) return;
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.borderColor = "transparent";
                 }}
               >
                 <div
@@ -1466,10 +1470,10 @@ function WatchModal({
         style={{
           width: 480,
           maxHeight: "82vh",
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 12,
-          boxShadow: "0 30px 70px rgba(0,0,0,0.55)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
           overflow: "hidden",
           display: "flex",
           flexDirection: "column",
@@ -1972,6 +1976,7 @@ function WatchModal({
                   disabled={permBusy}
                   style={{
                     background: T.amber,
+                    boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
                     color: T.bg0,
                     border: "none",
                     borderRadius: 4,

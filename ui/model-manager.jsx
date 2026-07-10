@@ -301,7 +301,7 @@ function ModelManagerPanel({ activeModel }) {
                   <span
                     style={{
                       fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
-                      background: "rgba(155,191,131,0.15)", color: T.green,
+                      background: T.green + "26", color: T.green,
                       textTransform: "uppercase", letterSpacing: 0.4,
                     }}
                   >
@@ -323,7 +323,7 @@ function ModelManagerPanel({ activeModel }) {
                 background: "transparent", color: T.fg3, fontFamily: T.sans,
                 fontSize: 11.5, cursor: "pointer",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = T.red || "#bf8383"; }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = T.red; }}
               onMouseLeave={(e) => { e.currentTarget.style.color = T.fg3; }}
             >
               Delete
@@ -405,7 +405,7 @@ function ModelManagerPanel({ activeModel }) {
           style={{
             padding: "7px 14px", borderRadius: 6, border: "none",
             background: pullInput.trim() ? T.amber : T.bg3,
-            color: pullInput.trim() ? "#1a1008" : T.fg3,
+            color: pullInput.trim() ? T.bg0 : T.fg3,
             fontFamily: T.sans, fontSize: 12.5, fontWeight: 600,
             cursor: pullInput.trim() ? "pointer" : "default",
           }}
@@ -504,8 +504,8 @@ function ModelManagerModal({ open, onClose, activeModel }) {
         aria-label="Manage models"
         style={{
           width: 460, maxHeight: "78vh", overflowY: "auto",
-          background: T.bg1, border: `1px solid ${T.borderStrong}`,
-          borderRadius: 8, boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+          background: panelGrad(), border: `1px solid ${T.borderStrong}`,
+          borderRadius: 8, boxShadow: `${T.shadowPop}, ${T.insetHi}`,
           padding: "14px 16px 16px",
         }}
       >

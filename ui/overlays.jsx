@@ -4,15 +4,18 @@
 // Depends on: tokens, atoms, icons. Byte formatting comes from
 // utils.js `formatBytes` (formerly a local `fmt_size` here).
 
+// Brand accent set (matches THEMES.one_dark / ekorbia.com) plus two
+// extenders so eight models hash to distinct dots. Static hexes by design:
+// a model keeps its color across theme switches.
 const MODEL_COLORS = [
-  "#d48a50",
-  "#7ea7d8",
-  "#9bbf83",
-  "#c89bd0",
-  "#d8c97e",
-  "#83b4bf",
-  "#b88f6a",
-  "#bf8383",
+  "#f0934a",
+  "#5fb0ff",
+  "#7dd17a",
+  "#c281f5",
+  "#e8ca6a",
+  "#6cc7d1",
+  "#f17ba0",
+  "#ff8b8b",
 ];
 
 function modelColor(name) {
@@ -68,7 +71,7 @@ function ModelPicker({ active, onPick, onClose }) {
         background: T.bg1,
         border: `1px solid ${T.borderStrong}`,
         borderRadius: 6,
-        boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+        boxShadow: T.shadowPop,
         padding: 4,
         zIndex: 100,
         maxHeight: 360,
@@ -131,7 +134,8 @@ function ModelPicker({ active, onPick, onClose }) {
               borderRadius: 6,
               border: "none",
               background: T.amber,
-              color: "#1a1008",
+              boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
+              color: T.bg0,
               fontFamily: T.sans,
               fontSize: 12,
               fontWeight: 600,
@@ -228,7 +232,7 @@ function ModelPicker({ active, onPick, onClose }) {
                   fontSize: 9,
                   padding: "1px 5px",
                   borderRadius: 3,
-                  background: "rgba(155,191,131,0.15)",
+                  background: T.green + "26",
                   color: T.green,
                   textTransform: "uppercase",
                   letterSpacing: 0.4,
@@ -343,10 +347,10 @@ function CompareModelPickerModal({ open, onClose, onConfirm }) {
         style={{
           width: 480,
           maxHeight: "70vh",
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 8,
-          boxShadow: "0 30px 80px rgba(0,0,0,0.6)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -593,10 +597,10 @@ function CommandPalette({ open, onClose, chats, onPick }) {
         style={{
           width: 560,
           maxHeight: "60vh",
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 8,
-          boxShadow: "0 30px 80px rgba(0,0,0,0.6)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -756,10 +760,10 @@ function ConfirmDialog({
         aria-label={title}
         style={{
           width: 380,
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 12,
-          boxShadow: "0 30px 70px rgba(0,0,0,0.55)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
           overflow: "hidden",
         }}
       >
@@ -1029,11 +1033,11 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
       <div
         style={{
           width: 420,
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 12,
           padding: "28px 28px 24px",
-          boxShadow: "0 40px 80px rgba(0,0,0,0.6)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
           display: "flex",
           flexDirection: "column",
           gap: 16,
@@ -1099,7 +1103,7 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                   padding: "8px 12px",
                   fontFamily: T.sans,
                   fontSize: 12,
-                  color: "#e07070",
+                  color: T.red,
                   lineHeight: 1.5,
                 }}
               >
@@ -1253,7 +1257,7 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
               padding: "10px 12px",
               fontFamily: T.mono,
               fontSize: 11.5,
-              color: "#e07070",
+              color: T.red,
               lineHeight: 1.6,
             }}
           >
@@ -1288,13 +1292,15 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                 Continue without Ollama
               </button>
               <button
+                className="ek-btn-primary"
                 onClick={startOllama}
                 style={{
                   padding: "7px 16px",
                   borderRadius: 6,
                   border: "none",
                   background: T.amber,
-                  color: "#1a1008",
+                  boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                  color: T.bg0,
                   fontFamily: T.sans,
                   fontSize: 13,
                   fontWeight: 600,
@@ -1342,13 +1348,15 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                 Choose a different model
               </button>
               <button
+                className="ek-btn-primary"
                 onClick={downloadAndSetup}
                 style={{
                   padding: "7px 16px",
                   borderRadius: 6,
                   border: "none",
                   background: T.amber,
-                  color: "#1a1008",
+                  boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                  color: T.bg0,
                   fontFamily: T.sans,
                   fontSize: 13,
                   fontWeight: 600,

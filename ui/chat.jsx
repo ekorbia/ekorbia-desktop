@@ -200,7 +200,13 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
-        background: T.bg0,
+        // Whisper-level ambient tints (site hero glow, heavily muted) —
+        // warm top-left, cool bottom-right. Dark themes only: on light
+        // surfaces the same tints read as stains, so they collapse to
+        // the flat bg0.
+        background: T.isLight
+          ? T.bg0
+          : `radial-gradient(ellipse 55% 45% at 18% -5%, ${T.amber}0d, transparent), radial-gradient(ellipse 55% 45% at 88% 108%, ${T.blue}0a, transparent), ${T.bg0}`,
       }}
     >
       {/* Header */}
@@ -234,7 +240,7 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                 gap: 5,
                 padding: "2px 8px 2px 6px",
                 background: T.bg2,
-                border: `1px solid ${T.border}`,
+                border: `1px solid ${(window.spaceColorHex ? window.spaceColorHex(space.color) : T.fg2) + "4d"}`,
                 borderRadius: 999,
                 fontFamily: T.mono,
                 fontSize: 10.5,
@@ -397,7 +403,7 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                     background: T.bg2,
                     border: `1px solid ${T.border}`,
                     borderRadius: 6,
-                    boxShadow: "0 6px 20px rgba(0,0,0,0.4)",
+                    boxShadow: T.shadowPop,
                     padding: 4,
                     zIndex: 10,
                   }}
@@ -472,6 +478,9 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                 lineHeight: 1.7,
               }}
             >
+              <div style={{ marginBottom: 12 }}>
+                <BrandMark size={30} />
+              </div>
               <div
                 style={{
                   color: T.fg,
@@ -480,7 +489,19 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                   marginBottom: 8,
                 }}
               >
-                Start a conversation.
+                Start a{" "}
+                <em
+                  style={{
+                    fontFamily: T.serif,
+                    fontStyle: "italic",
+                    fontWeight: 400,
+                    fontSize: 17.5,
+                    color: T.amber,
+                  }}
+                >
+                  conversation
+                </em>
+                .
               </div>
               <div style={{ marginBottom: 14 }}>
                 Type below to chat with{" "}
@@ -1278,6 +1299,7 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
               style={{
                 padding: '4px 12px',
                 background: T.amber,
+                boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
                 color: T.bg0,
                 border: 'none',
                 borderRadius: 5,
@@ -1626,7 +1648,7 @@ function PromptSlashPicker({
         background: T.bg2,
         border: `1px solid ${T.borderStrong}`,
         borderRadius: 6,
-        boxShadow: "0 8px 22px rgba(0,0,0,0.4)",
+        boxShadow: T.shadowPop,
         maxHeight: 260,
         overflowY: "auto",
         zIndex: 30,
@@ -2037,11 +2059,11 @@ function Composer({
       <div style={{ maxWidth: "100%", margin: "0" }}>
         <div
           style={{
-            background: T.bg1,
+            background: panelGrad(),
             border: `1px solid ${T.borderStrong}`,
             borderRadius: 8,
             padding: 8,
-            boxShadow: "0 4px 14px rgba(0,0,0,0.25)",
+            boxShadow: `${T.shadowSm}, ${T.insetHi}`,
             // position: relative anchors the absolutely-positioned
             // PromptSlashPicker below — its bottom: 100% rises from
             // the top edge of this card.
@@ -2232,13 +2254,14 @@ function Composer({
                       <span
                         title="Model supports vision"
                         style={{
-                          padding: "0 4px",
-                          borderRadius: 2,
-                          background: T.amber + "22",
-                          color: T.amber,
+                          padding: "0 5px",
+                          borderRadius: 4,
+                          background: T.blue + "1f",
+                          border: `1px solid ${T.blue}4d`,
+                          color: T.blue,
                           fontSize: 8,
                           fontWeight: 700,
-                          letterSpacing: 0.4,
+                          letterSpacing: 0.6,
                         }}
                       >
                         VISION
@@ -2455,9 +2478,9 @@ function Composer({
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 5,
-                padding: "3px 8px",
+                padding: "3px 10px",
                 height: 24,
-                borderRadius: 5,
+                borderRadius: 999,
                 background: pickerOpen ? T.bg3 : T.bg2,
                 border: `1px solid ${pickerOpen ? T.borderStrong : T.border}`,
                 color: T.fg2,
@@ -2474,7 +2497,7 @@ function Composer({
                   : T.border)
               }
             >
-              <ModelDot color={modelColor(model.id)} size={6} glow={false} />
+              <ModelDot color={modelColor(model.id)} size={6} glow={true} />
               {model.id}
               <I.Chevron
                 size={9}
@@ -2504,17 +2527,18 @@ function Composer({
                 title="Model supports tool use — can save files via write_file"
                 style={{
                   marginLeft: 4,
-                  padding: "0 5px",
+                  padding: "0 6px",
                   height: 16,
                   display: "inline-flex",
                   alignItems: "center",
-                  borderRadius: 3,
-                  background: T.green + "22",
+                  borderRadius: 4,
+                  background: T.green + "1f",
+                  border: `1px solid ${T.green}4d`,
                   color: T.green,
                   fontFamily: T.mono,
                   fontSize: 8,
                   fontWeight: 700,
-                  letterSpacing: 0.4,
+                  letterSpacing: 0.6,
                 }}
               >
                 TOOL
@@ -2523,6 +2547,7 @@ function Composer({
 
             {isStreaming ? (
               <button
+                className="ek-btn-primary"
                 onClick={onStop}
                 style={{
                   display: "flex",
@@ -2538,12 +2563,14 @@ function Composer({
                   fontFamily: T.mono,
                   fontSize: 11,
                   fontWeight: 600,
+                  boxShadow: `0 5px 16px -6px ${T.red}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
                 }}
               >
                 <I.Stop size={9} /> Stop
               </button>
             ) : (
               <button
+                className="ek-btn-primary"
                 onClick={handleSend}
                 disabled={!text.trim()}
                 style={{
@@ -2560,6 +2587,9 @@ function Composer({
                   fontFamily: T.mono,
                   fontSize: 11,
                   fontWeight: 600,
+                  boxShadow: text.trim()
+                    ? `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`
+                    : "none",
                 }}
               >
                 Send <span style={{ opacity: 0.6 }}>{MOD_GLYPH}{ENTER_GLYPH}</span>

@@ -69,6 +69,32 @@ function IconButton({
   );
 }
 
+// Ekorbia brand mark — the site's gradient diamond (nav mark / favicon),
+// drawn inline so it ships no asset and scales crisply. Gradient stops are
+// brand constants (deliberately theme-independent); the punch-out core
+// reads T.bg0 at render so it matches the page on light themes too.
+// Duplicate <defs> ids across instances are harmless — url(#…) resolves
+// to the first match and every instance defines identical stops.
+function BrandMark({ size = 28 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <defs>
+        <linearGradient id="ek-brand-grad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#f0934a" />
+          <stop offset="0.6" stopColor="#f17ba0" />
+          <stop offset="1" stopColor="#c281f5" />
+        </linearGradient>
+      </defs>
+      <rect
+        x="5" y="5" width="22" height="22" rx="4"
+        fill="url(#ek-brand-grad)"
+        transform="rotate(45 16 16)"
+      />
+      <rect x="10" y="10" width="12" height="12" rx="2" fill={T.bg0} />
+    </svg>
+  );
+}
+
 function ModelDot({ color, size = 7, glow = true }) {
   return (
     <span

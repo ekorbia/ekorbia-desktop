@@ -301,10 +301,10 @@ function OnboardingTour({ open, onClose }) {
         style={{
           width: 480,
           minHeight: 360,
-          background: T.bg1,
+          background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 12,
-          boxShadow: "0 30px 70px rgba(0,0,0,0.55)",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
           overflow: "hidden",
           display: "flex", flexDirection: "column",
         }}

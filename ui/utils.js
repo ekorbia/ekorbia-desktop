@@ -801,6 +801,37 @@ function getWindowApi() {
   return getTauriRoot()?.window;
 }
 
+// ── Color helpers (theming) ─────────────────────────────────────────────
+//
+// hexToRgbTriplet: "#f0934a" → "240,147,74" — the shape CSS
+// `rgba(var(--ek-accent-rgb), a)` needs. Accepts #rgb and #rrggbb; anything
+// unparsable falls back to a neutral mid-gray triplet so a bad theme value
+// degrades to legible output rather than a CSS parse error.
+function hexToRgbTriplet(hex) {
+  const h = String(hex || "").replace("#", "").trim();
+  const x = h.length === 3 ? h.replace(/./g, (c) => c + c) : h;
+  if (!/^[0-9a-fA-F]{6}$/.test(x)) return "128,128,128";
+  const n = parseInt(x, 16);
+  return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+}
+
+// lightenHex: mix a hex color toward white (amount > 0) or black
+// (amount < 0). `amount` is clamped to [-1, 1]; 0 returns the input
+// normalised to #rrggbb. Drives the derived accent shades (--ek-accent-hover,
+// --ek-accent-ink) so themes only have to declare one accent hex.
+function lightenHex(hex, amount) {
+  const t = hexToRgbTriplet(hex).split(",").map(Number);
+  const a = Math.max(-1, Math.min(1, Number(amount) || 0));
+  const target = a >= 0 ? 255 : 0;
+  return (
+    "#" +
+    t
+      .map((c) => Math.round(c + (target - c) * Math.abs(a)))
+      .map((c) => c.toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
+
 // ── Publish on window (browser) and module.exports (Node) ──────────────────
 //
 // `typeof window` lets the same file work as both a global-scope script
@@ -848,6 +879,8 @@ if (typeof window !== "undefined") {
   window.getNotificationApi = getNotificationApi;
   window.getWindowApi = getWindowApi;
   window.instantiateSpacePinnedAttachments = instantiateSpacePinnedAttachments;
+  window.hexToRgbTriplet = hexToRgbTriplet;
+  window.lightenHex = lightenHex;
 }
 
 // ── instantiateSpacePinnedAttachments ────────────────────────────────────
@@ -953,5 +986,7 @@ if (typeof module !== "undefined" && module.exports) {
     getNotificationApi,
     getWindowApi,
     instantiateSpacePinnedAttachments,
+    hexToRgbTriplet,
+    lightenHex,
   };
 }

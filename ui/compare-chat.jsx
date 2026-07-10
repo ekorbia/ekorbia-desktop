@@ -230,7 +230,7 @@ function CompareMissingBanner({ missing }) {
       style={{
         padding: "10px 20px",
         borderBottom: `1px solid ${T.border}`,
-        background: "rgba(212, 138, 80, 0.08)",
+        background: T.amber + "14",
         display: "flex",
         flexDirection: "column",
         gap: 6,
@@ -309,7 +309,7 @@ function CompareHeader({ chat, modelCount, isStreaming, onStopAll, onCancel }) {
           textTransform: "uppercase",
           letterSpacing: 0.8,
           padding: "2px 6px",
-          border: `1px solid rgba(212, 138, 80, 0.4)`,
+          border: `1px solid ${T.amber}66`,
           borderRadius: 4,
         }}
       >
@@ -427,7 +427,7 @@ function CompareEmptyState({ models }) {
             >
               <ModelDot
                 color={
-                  typeof modelColor === "function" ? modelColor(m) : "#9bbf83"
+                  typeof modelColor === "function" ? modelColor(m) : T.green
                 }
                 size={6}
               />
@@ -479,7 +479,7 @@ function CompareColumn({ model, message, onStop, onKeep }) {
         }}
       >
         <ModelDot
-          color={typeof modelColor === "function" ? modelColor(model) : "#9bbf83"}
+          color={typeof modelColor === "function" ? modelColor(model) : T.green}
           size={7}
         />
         <span
