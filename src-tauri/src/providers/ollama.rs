@@ -1117,17 +1117,6 @@ mod tests {
         assert_eq!(tc["type"], "toolCalls");
     }
 
-    /// Cancel registry happy path: register inserts an entry whose
-    /// flag is initially false; explicit cancel flips the flag to
-    /// true and removes the entry.
-
-    /// Cancel registry drop semantics: the registry slot is removed
-    /// when the token is dropped (normal scope exit). The Arc<AtomicBool>
-    /// the spawned task may still hold via clone() is independent — it
-    /// just stops being reachable through the registry.
-
-    /// `ollama_chat_stream_cancel` is safe to call for an unknown id —
-    /// no panic, no error. Matches the attachments cancel registry's
     /// /api/pull body must carry BOTH `model` (current Ollama) and `name`
     /// (older builds) plus `stream: true`. Sending both keys is the
     /// version-compatibility hedge — if someone "cleans up" the duplicate
