@@ -1365,6 +1365,25 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
           {m.streaming && (
             <span className="stream-cursor" style={{ color: T.amber }} />
           )}
+          {!isUser && m.streaming && !m.content && m.statusText && (
+            // Engine-backend progress ("loading gemma…", "waiting for
+            // model…") — a StreamEvent `status` sets the transient
+            // m.statusText; the first delta clears it. Muted italic so
+            // it reads as state, not content; never persisted.
+            <div
+              data-stream-status
+              style={{
+                marginTop: 2,
+                fontFamily: T.mono,
+                fontSize: 11,
+                color: T.fg3,
+                fontStyle: "italic",
+                letterSpacing: 0.3,
+              }}
+            >
+              {m.statusText}
+            </div>
+          )}
           {!isUser && m.incomplete && !m.streaming && (
             // "Stopped" marker for assistant messages where the user clicked
             // Stop mid-generation. Italic + muted so it doesn't compete with

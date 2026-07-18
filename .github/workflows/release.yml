@@ -189,6 +189,21 @@ jobs:
           # don't fight over a single shared cache.
           key: ${{ matrix.platform }}
 
+      # macOS only: build the bundled engine sidecar (static llama-server
+      # from a PINNED llama.cpp source release) BEFORE `cargo tauri build`
+      # — tauri.macos.conf.json's externalBin requires the file and the
+      # bundler copies it into Ekorbia.app/Contents/MacOS/. End users get
+      # it inside the DMG; nobody builds anything client-side. The Linux
+      # and Windows bundles deliberately ship WITHOUT a sidecar (engine
+      # backend is macOS-first — plan Phase 6 adds their builds), which
+      # is why externalBin lives in the macOS config overlay, not the
+      # base tauri.conf.json. Adds ~10 min to this leg (cmake is
+      # preinstalled on the hosted macOS runners; the script sha256-pins
+      # its source and refuses binaries linking non-system libraries).
+      - name: Build engine sidecar (llama-server)
+        if: matrix.platform == 'macos-latest'
+        run: ./scripts/fetch-llama-server.sh
+
       # tauri-action runs `cargo tauri build`, finds the bundle outputs,
       # and uploads them to the release identified by `releaseId`.
       - name: Build and upload bundles

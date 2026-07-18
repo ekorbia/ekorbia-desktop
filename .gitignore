@@ -10,6 +10,11 @@ target/
 src-tauri/gen/
 src-tauri/WixTools/
 
+# Bundled engine sidecar (llama-server). ~15 MB machine-built binary —
+# never committed; scripts/fetch-llama-server.sh builds it from a
+# pinned llama.cpp source release.
+src-tauri/binaries/
+
 # Bundle output from `cargo tauri build`
 src-tauri/target/release/bundle/
 

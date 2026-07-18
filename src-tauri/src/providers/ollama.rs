@@ -1113,6 +1113,14 @@ mod tests {
             .unwrap(),
             serde_json::json!({"type":"error","message":"m"})
         );
+        // `status` (Phase 2): engine-adapter progress, pre-first-delta.
+        assert_eq!(
+            serde_json::to_value(E::Status {
+                message: "loading gemma…".into()
+            })
+            .unwrap(),
+            serde_json::json!({"type":"status","message":"loading gemma…"})
+        );
         let tc = serde_json::to_value(E::ToolCalls { calls: vec![] }).unwrap();
         assert_eq!(tc["type"], "toolCalls");
     }

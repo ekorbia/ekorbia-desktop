@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bundled inference engine.** Ekorbia can now run models itself — pick
+  "Bundled engine" in Settings → Backend, drop `.gguf` files in the
+  models folder, and chat with no Ollama or other install at all.
 - **Custom inference backends.** Point Ekorbia at any OpenAI-compatible
   server (LM Studio, llama.cpp's llama-server, vLLM) in Settings →
   Backend; Ollama is now optional.

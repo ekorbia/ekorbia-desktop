@@ -1432,13 +1432,14 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
   );
 }
 
-// ── Backend settings (no-Ollama plan, Phase 1 / L1) ─────────────────────────
-// Chooses which engine serves LLM traffic: Ollama (default) or any
-// OpenAI-compatible server (LM Studio, llama-server, vLLM, …). Saving
-// applies live via llm_backend_config_set — the next send uses the new
-// backend, no relaunch. "Test connection" validates the CANDIDATE URL/key
-// via /v1/models before anything is saved, so a typo can't strand the app
-// on a dead endpoint.
+// ── Backend settings (no-Ollama plan, Phases 1-2) ───────────────────────────
+// Chooses which engine serves LLM traffic: Ollama (default), any
+// OpenAI-compatible server (LM Studio, llama-server, vLLM, …), or the
+// bundled engine (Ekorbia's own supervised llama-server — Phase 2).
+// Saving applies live via llm_backend_config_set — the next send uses the
+// new backend, no relaunch. "Test connection" validates the CANDIDATE
+// URL/key via /v1/models before anything is saved; the engine card shows
+// a live engine_status readout (binary + models folder) instead.
 function BackendSettings() {
   const invoke = getInvoke();
   const [backendKind, setBackendKind] = useState("ollama");
@@ -1447,6 +1448,11 @@ function BackendSettings() {
   const [testState, setTestState] = useState(null); // null | 'testing' | {ok, models, error}
   const [saveState, setSaveState] = useState(null); // null | 'saved' | error string
   const [loaded, setLoaded] = useState(false);
+  // engine_status snapshot {binaryOk, binaryPath, binaryError, modelsDir,
+  // modelCount} — fetched on mount and re-fetched when the engine card is
+  // selected (a fetch-llama-server.sh run or a dropped .gguf should show
+  // up without reopening Settings).
+  const [engineInfo, setEngineInfo] = useState(null);
 
   useEffect(() => {
     invoke("llm_backend_config_get")
@@ -1461,6 +1467,14 @@ function BackendSettings() {
       .catch(() => setLoaded(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
   }, []);
+
+  useEffect(() => {
+    if (backendKind !== "engine") return;
+    invoke("engine_status")
+      .then((s) => setEngineInfo(s || null))
+      .catch(() => setEngineInfo(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- invoke is stable
+  }, [backendKind]);
 
   const save = async () => {
     setSaveState(null);
@@ -1541,11 +1555,86 @@ function BackendSettings() {
           "The local engine Ekorbia manages for you — model downloads, warm-up, and capability detection all built in.",
         )}
         {optionCard(
+          "engine",
+          "Bundled engine",
+          "Ekorbia runs llama.cpp itself — no Ollama, no separate install. Drop .gguf model files in the models folder and go.",
+        )}
+        {optionCard(
           "openai",
           "Custom endpoint",
           "Any OpenAI-compatible server: LM Studio, llama-server, vLLM… Ekorbia talks to its /v1 API.",
         )}
       </div>
+
+      {backendKind === "engine" && (
+        <div
+          data-backend-engine-info
+          style={{ display: "flex", flexDirection: "column", gap: 8 }}
+        >
+          {engineInfo && (
+            <div
+              style={{
+                fontFamily: T.mono,
+                fontSize: 11,
+                color: engineInfo.binaryOk ? T.green : T.red,
+              }}
+              data-backend-engine-binary
+            >
+              {engineInfo.binaryOk
+                ? `✓ Engine ready (${engineInfo.modelCount} model${engineInfo.modelCount === 1 ? "" : "s"} in the folder)`
+                : `✗ ${engineInfo.binaryError || "Engine binary missing"}`}
+            </div>
+          )}
+          {engineInfo && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontFamily: T.mono,
+                fontSize: 10.5,
+                color: T.fg3,
+              }}
+            >
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: 340,
+                }}
+                title={engineInfo.modelsDir}
+              >
+                {engineInfo.modelsDir}
+              </span>
+              <button
+                data-backend-engine-reveal
+                onClick={() => invoke("engine_models_dir_reveal").catch(() => {})}
+                style={{
+                  background: T.bg2,
+                  color: T.fg,
+                  border: `1px solid ${T.border}`,
+                  borderRadius: 7,
+                  padding: "4px 10px",
+                  fontFamily: T.sans,
+                  fontSize: 11,
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                Reveal models folder
+              </button>
+            </div>
+          )}
+          <div style={{ fontFamily: T.sans, fontSize: 10.5, color: T.fg3, lineHeight: 1.5 }}>
+            One chat model and one embedding model stay loaded at a time;
+            switching models swaps automatically and idle models unload
+            after ~10 minutes. Vision works when a model has a matching
+            projector file (<span style={{ fontFamily: T.mono }}>name.mmproj.gguf</span>)
+            next to it.
+          </div>
+        </div>
+      )}
 
       {backendKind === "openai" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

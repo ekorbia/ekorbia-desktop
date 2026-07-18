@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-//! Provider adapters (no-Ollama plan, Phase 1).
+//! Provider adapters (no-Ollama plan, Phases 1-2).
 //!
 //! Each submodule implements the neutral surface that `llm.rs` dispatches
-//! to: `ollama` (the default local engine) and `openai_compat` (any
-//! OpenAI-compatible server — LM Studio, llama-server, vLLM, …). All HTTP
-//! for a provider lives inside its adapter file and nowhere else; the
-//! stream contract every adapter must uphold is `llm::StreamEvent` (see
-//! the guarantees documented there and pinned by each adapter's golden
-//! tests).
+//! to: `ollama` (the default external engine), `openai_compat` (any
+//! OpenAI-compatible server — LM Studio, llama-server, vLLM, …), and
+//! `engine` (the bundled, supervised llama-server sidecar — delegates
+//! its wire work to `openai_compat`, process management to
+//! `src/engine/`). All HTTP for a provider lives inside its adapter file
+//! and nowhere else; the stream contract every adapter must uphold is
+//! `llm::StreamEvent` (see the guarantees documented there and pinned by
+//! each adapter's golden tests).
 //!
 //! This module owns the one piece of genuinely shared runtime state: the
 //! **cancel registry**. Chat streams (both adapters) and Ollama pulls
@@ -17,6 +19,7 @@
 //! next chunk boundary. Request-id namespaces keep the spaces from
 //! colliding (chat = assistant message id, pulls = `pull:<model>:<nonce>`).
 
+pub(crate) mod engine;
 pub(crate) mod ollama;
 pub(crate) mod openai_compat;
 

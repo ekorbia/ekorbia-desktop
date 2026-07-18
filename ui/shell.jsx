@@ -3683,14 +3683,26 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
   }, [model.id, warming]);
 
   const byo = backendKind === "openai";
+  const engineB = backendKind === "engine";
+  // Left-glyph caption names the active backend so the pill's states
+  // read correctly ("engine · gemma loaded" vs "ollama · …").
+  const backendGlyph = engineB ? "engine" : byo ? "endpoint" : "ollama";
   let dotColor, label, dim;
   if (!ollamaUp) {
     dotColor = T.fg3;
-    label = byo ? "endpoint unreachable — check Settings → Backend" : "ollama not running";
+    label = engineB
+      ? "engine unavailable — check Settings → Backend"
+      : byo
+        ? "endpoint unreachable — check Settings → Backend"
+        : "ollama not running";
     dim = true;
   } else if (!pulled) {
     dotColor = T.amber;
-    label = byo ? `${model.name} not on the endpoint` : `${model.name} not pulled`;
+    label = engineB
+      ? `${model.name} not in the models folder`
+      : byo
+        ? `${model.name} not on the endpoint`
+        : `${model.name} not pulled`;
     dim = true;
   } else if (warming) {
     // `warming` MUST be checked before `loaded`: /api/ps flips to loaded
@@ -3731,16 +3743,19 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
       }}
     >
       <span
-        onClick={!ollamaUp && !byo ? onOllamaClick : undefined}
+        // The click-through to OllamaGate only makes sense when Ollama
+        // IS the backend — the gate's install/start flow is a dead end
+        // on the engine and custom-endpoint backends.
+        onClick={!ollamaUp && !byo && !engineB ? onOllamaClick : undefined}
         style={{
           display: "inline-flex",
           alignItems: "center",
           gap: 4,
-          cursor: ollamaUp ? "default" : "pointer",
+          cursor: ollamaUp || byo || engineB ? "default" : "pointer",
         }}
       >
         <ModelDot color={dotColor} size={6} glow={false} />
-        ollama
+        {backendGlyph}
       </span>
       <span
         data-status-model-pill

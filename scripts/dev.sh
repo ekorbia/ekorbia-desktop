@@ -15,4 +15,16 @@
 set -euo pipefail
 
 cd "$(cd "$(dirname "$0")/.." && pwd)/src-tauri"
+
+# macOS: the bundled-engine sidecar (tauri.macos.conf.json externalBin)
+# must exist or the tauri CLI aborts with an unhelpful "failed to copy
+# external binary" — catch it here with the actual fix. One-time ~5 min
+# build. Other platforms don't declare the sidecar (engine backend is
+# macOS-first), so they skip this check.
+if [[ "$(uname -s)" == "Darwin" ]] && ! ls binaries/llama-server-* >/dev/null 2>&1; then
+  echo "error: engine sidecar missing (src-tauri/binaries/llama-server-*)." >&2
+  echo "       Run ./scripts/fetch-llama-server.sh once, then retry." >&2
+  exit 1
+fi
+
 exec cargo tauri dev "$@"

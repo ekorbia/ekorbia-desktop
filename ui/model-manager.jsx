@@ -168,19 +168,33 @@ function ModelManagerPanel({ activeModel }) {
   const [, setPullTick] = useState(0);
   const prevPullingRef = useRef(new Set());
   const invoke = getInvoke();
-  // BYO backend (Settings -> Backend -> custom endpoint): pull/delete are
-  // Ollama-lifecycle operations, meaningless against an OpenAI-compatible
-  // server -- the endpoint owns its model store. Hide those affordances
-  // and show a hint instead (the installed list still works: it reads
-  // llm_list_models, which the adapter maps from /v1/models).
-  const [byoBackend, setByoBackend] = useState(false);
+  // Non-Ollama backends hide the pull/delete affordances:
+  //   - BYO (custom endpoint): the endpoint owns its model store; the
+  //     installed list mirrors /v1/models.
+  //   - Bundled engine: models are .gguf FILES in the app's models
+  //     folder — managed in the file manager (Phase 2; the Phase 3
+  //     catalog adds in-app downloads). The list reads the same
+  //     llm_list_models, which the engine adapter answers from a dir
+  //     scan.
+  const [backendKind, setBackendKind] = useState("ollama");
+  const byoBackend = backendKind === "openai";
+  const engineBackend = backendKind === "engine";
+  // engine_status snapshot for the engine hint (models folder path).
+  const [engineInfo, setEngineInfo] = useState(null);
   useEffect(() => {
     if (!invoke) return;
     invoke("llm_backend_config_get")
-      .then((c) => setByoBackend(c?.backend === "openai"))
+      .then((c) => setBackendKind(c?.backend || "ollama"))
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
   }, []);
+  useEffect(() => {
+    if (!invoke || !engineBackend) return;
+    invoke("engine_status")
+      .then((s) => setEngineInfo(s || null))
+      .catch(() => setEngineInfo(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- kind-gated
+  }, [engineBackend]);
 
   const refreshModels = () => {
     if (!invoke) { setModels([]); setLoadError("Ollama not running"); return; }
@@ -192,7 +206,13 @@ function ModelManagerPanel({ activeModel }) {
         setModels(sorted);
         setLoadError("");
       })
-      .catch(() => { setModels([]); setLoadError("Ollama not running"); });
+      .catch((e) => {
+        setModels([]);
+        // The engine's errors name the real problem ("llama-server
+        // binary not found — run scripts/…"); the legacy label only
+        // fits the Ollama backend.
+        setLoadError(String(e?.message || e || "") || "Ollama not running");
+      });
   };
 
   useEffect(() => {
@@ -329,7 +349,7 @@ function ModelManagerPanel({ activeModel }) {
                 </div>
               )}
             </div>
-            {!byoBackend && (
+            {!byoBackend && !engineBackend && (
             <button
               onClick={() => setConfirmDelete(m.name)}
               title={`Delete ${m.name} from Ollama`}
@@ -405,8 +425,49 @@ function ModelManagerPanel({ activeModel }) {
           mirrors what it reports at /v1/models.
         </div>
       )}
-      {!byoBackend && sectionLabel("Download a model")}
-      {!byoBackend && (
+      {engineBackend && (
+        <div
+          data-engine-hint
+          style={{
+            fontFamily: T.sans, fontSize: 11, color: T.fg3,
+            lineHeight: 1.5, marginTop: 10,
+            display: "flex", flexDirection: "column", gap: 6,
+          }}
+        >
+          <span>
+            The bundled engine runs .gguf model files from Ekorbia's
+            models folder — drop a file in and it appears here. Add a
+            matching <span style={{ fontFamily: T.mono }}>name.mmproj.gguf</span> to
+            enable vision for a model.
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button
+              data-engine-reveal
+              onClick={() => invoke && invoke("engine_models_dir_reveal").catch(() => {})}
+              style={{
+                padding: "4px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
+                background: T.bg2, color: T.fg, fontFamily: T.sans,
+                fontSize: 11, cursor: "pointer", flexShrink: 0,
+              }}
+            >
+              Reveal models folder
+            </button>
+            {engineInfo && (
+              <span
+                style={{
+                  fontFamily: T.mono, fontSize: 10, color: T.fg3,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}
+                title={engineInfo.modelsDir}
+              >
+                {engineInfo.modelsDir}
+              </span>
+            )}
+          </span>
+        </div>
+      )}
+      {!byoBackend && !engineBackend && sectionLabel("Download a model")}
+      {!byoBackend && !engineBackend && (
       <>
       <div style={{ display: "flex", gap: 6, padding: "0 2px" }}>
         <input
@@ -451,7 +512,7 @@ function ModelManagerPanel({ activeModel }) {
       </>
       )}
 
-      {!byoBackend && suggestions.length > 0 && (
+      {!byoBackend && !engineBackend && suggestions.length > 0 && (
         <>
           {sectionLabel("Suggestions")}
           {suggestions.map((c) => (

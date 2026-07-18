@@ -48,7 +48,10 @@ serde_json = "1"
 #            holding a tokio::sync::Mutex across .await would silently violate
 #            the CLAUDE.md "no DbState across await" invariant)
 #   rt     — runtime handle access for cooperative cancellation
-tokio = { version = "1", features = ["time", "macros", "sync", "rt"] }
+#   process — tokio::process::Child for the bundled llama-server sidecar
+#            (engine/mod.rs spawns + reaps it asynchronously)
+#   io-util — AsyncBufReadExt::lines for the engine's log-tail pump
+tokio = { version = "1", features = ["time", "macros", "sync", "rt", "process", "io-util"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 # Background watch pipeline (Watch tab):
 #   pdf-extract — extract text from PDFs landing in watched folders

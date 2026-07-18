@@ -4,20 +4,25 @@
 //! dispatch).
 //!
 //! The UI and internal pipelines (watch summaries, attachment embeddings)
-//! speak ONLY this surface. As of Phase 1 it dispatches between two
+//! speak ONLY this surface. As of Phase 2 it dispatches between three
 //! adapters in `providers/`:
 //!
-//!   - **Ollama** (default) — `providers/ollama.rs`, the local engine.
+//!   - **Ollama** (default) — `providers/ollama.rs`, the external local
+//!     engine.
 //!   - **OpenAI-compatible** — `providers/openai_compat.rs`, any server
 //!     speaking the /v1 dialect (LM Studio, llama-server, vLLM, …).
+//!   - **Bundled engine** — `providers/engine.rs`, Ekorbia's own
+//!     supervised `llama-server` sidecar (src/engine/); no external
+//!     install at all. Wire work delegates to the openai_compat layer.
 //!
 //! Backend selection lives in the settings table and in-memory here:
 //!
-//!   - `llm_backend`  — "ollama" (default) | "openai"
+//!   - `llm_backend`  — "ollama" (default) | "openai" | "engine"
 //!   - `llm_base_url` — Ollama: optional base override (Phase 0 semantics).
 //!     OpenAI: REQUIRED endpoint base, normalized (no trailing slash, no
-//!     trailing /v1).
-//!   - `llm_api_key`  — optional bearer token (OpenAI backend only).
+//!     trailing /v1). Engine: ignored.
+//!   - `llm_api_key`  — optional bearer token (OpenAI backend only; the
+//!     engine generates its own per-process keys).
 //!
 //! Loaded once at startup (`load_backend_config`, called from lib.rs
 //! setup) and updated live by `llm_backend_config_set` — the next request
@@ -55,6 +60,8 @@ pub(crate) struct EmbeddingModelCheck {
 pub(crate) enum BackendKind {
     Ollama,
     OpenAiCompat,
+    /// Bundled llama-server sidecar, supervised in-process (Phase 2).
+    Engine,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +111,7 @@ pub(crate) fn normalize_base_url(raw: &str) -> Option<String> {
 fn parse_kind(raw: Option<&str>) -> BackendKind {
     match raw {
         Some("openai") => BackendKind::OpenAiCompat,
+        Some("engine") => BackendKind::Engine,
         _ => BackendKind::Ollama,
     }
 }
@@ -112,6 +120,7 @@ fn kind_str(kind: BackendKind) -> &'static str {
     match kind {
         BackendKind::Ollama => "ollama",
         BackendKind::OpenAiCompat => "openai",
+        BackendKind::Engine => "engine",
     }
 }
 
@@ -123,7 +132,9 @@ fn apply_config(cfg: BackendConfig) {
         BackendKind::Ollama => {
             crate::providers::ollama::set_base_url_override(cfg.base_url.clone())
         }
-        BackendKind::OpenAiCompat => crate::providers::ollama::set_base_url_override(None),
+        BackendKind::OpenAiCompat | BackendKind::Engine => {
+            crate::providers::ollama::set_base_url_override(None)
+        }
     }
     if let Ok(mut w) = backend().write() {
         *w = cfg;
@@ -165,6 +176,7 @@ fn endpoint_cfg(cfg: &BackendConfig) -> Result<EndpointCfg, String> {
 ///   {"type":"toolCalls","calls":[{…, function:{name, arguments:{OBJECT}}}]}
 ///   {"type":"done","promptTokens":N,"outputTokens":N}
 ///   {"type":"error","message":"…"}
+///   {"type":"status","message":"…"}
 ///
 /// Contract guarantees, owned by EVERY adapter (pinned by their golden
 /// tests):
@@ -175,6 +187,11 @@ fn endpoint_cfg(cfg: &BackendConfig) -> Result<EndpointCfg, String> {
 ///     omits them).
 ///   - in-band provider errors surface as an `error` event; transport
 ///     failures still reject the invoke promise as before.
+///   - `status` (Phase 2) is OPTIONAL pre-content progress ("loading
+///     gemma…", "waiting for model…") — only the engine adapter emits
+///     it today. Zero or more may arrive, always BEFORE the first
+///     `delta`; consumers render it as ephemeral placeholder text and
+///     must never treat it as content.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type")]
 pub(crate) enum StreamEvent {
@@ -189,6 +206,8 @@ pub(crate) enum StreamEvent {
     },
     #[serde(rename = "error")]
     Error { message: String },
+    #[serde(rename = "status")]
+    Status { message: String },
 }
 
 // ── Internal delegators (watch + attachment pipelines) ─────────────────────
@@ -201,6 +220,7 @@ pub(crate) async fn chat(model: &str, system: &str, user: &str) -> Result<String
         BackendKind::OpenAiCompat => {
             crate::providers::openai_compat::chat(&endpoint_cfg(&cfg)?, model, system, user).await
         }
+        BackendKind::Engine => crate::providers::engine::chat(model, system, user).await,
     }
 }
 
@@ -212,6 +232,7 @@ pub(crate) async fn embed(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>
         BackendKind::OpenAiCompat => {
             crate::providers::openai_compat::embed(&endpoint_cfg(&cfg)?, model, texts).await
         }
+        BackendKind::Engine => crate::providers::engine::embed(model, texts).await,
     }
 }
 
@@ -223,6 +244,7 @@ pub(crate) async fn model_has_vision(model: &str) -> Result<bool, String> {
         BackendKind::OpenAiCompat => {
             Ok(crate::providers::openai_compat::capabilities(model).vision)
         }
+        BackendKind::Engine => Ok(crate::providers::engine::model_has_vision(model)),
     }
 }
 
@@ -239,11 +261,13 @@ pub(crate) async fn llm_list_models() -> Result<serde_json::Value, String> {
         BackendKind::OpenAiCompat => {
             crate::providers::openai_compat::list_models(&endpoint_cfg(&cfg)?).await
         }
+        BackendKind::Engine => crate::providers::engine::list_models().await,
     }
 }
 
 /// Currently-loaded models (status bar polling). Empty on BYO — no
-/// portable equivalent exists across OpenAI-compatible servers.
+/// portable equivalent exists across OpenAI-compatible servers. The
+/// engine answers from its own supervisor state.
 #[tauri::command]
 pub(crate) async fn llm_loaded_models() -> Result<serde_json::Value, String> {
     let cfg = current_config();
@@ -252,10 +276,13 @@ pub(crate) async fn llm_loaded_models() -> Result<serde_json::Value, String> {
         BackendKind::OpenAiCompat => {
             crate::providers::openai_compat::loaded_models(&endpoint_cfg(&cfg)?).await
         }
+        BackendKind::Engine => crate::providers::engine::loaded_models().await,
     }
 }
 
-/// Fire-and-forget warm-up — forces a model into RAM.
+/// Fire-and-forget warm-up — forces a model into RAM. On the engine this
+/// is ensure-spawned + health-checked (a real warm-up, not a 1-token
+/// generation).
 #[tauri::command]
 pub(crate) async fn llm_warmup(body: serde_json::Value) -> Result<(), String> {
     let cfg = current_config();
@@ -264,18 +291,22 @@ pub(crate) async fn llm_warmup(body: serde_json::Value) -> Result<(), String> {
         BackendKind::OpenAiCompat => {
             crate::providers::openai_compat::warmup(&endpoint_cfg(&cfg)?, body).await
         }
+        BackendKind::Engine => crate::providers::engine::warmup(body).await,
     }
 }
 
 /// Vision / tools / thinking capability probe. Ollama: cached /api/show.
 /// BYO: static optimistic defaults (tools on, vision/thinking off) — no
 /// portable probe exists; see the adapter docs for the reasoning.
+/// Engine: real answers (tools on via --jinja, vision = mmproj sibling
+/// present, thinking suppressed server-side).
 #[tauri::command]
 pub(crate) async fn llm_capabilities(model: String) -> Result<ModelCapabilities, String> {
     let cfg = current_config();
     match cfg.kind {
         BackendKind::Ollama => crate::providers::ollama::capabilities(model).await,
         BackendKind::OpenAiCompat => Ok(crate::providers::openai_compat::capabilities(&model)),
+        BackendKind::Engine => Ok(crate::providers::engine::capabilities(&model)),
     }
 }
 
@@ -292,6 +323,7 @@ pub(crate) async fn llm_embed_model_check(
             Ok(ep) => crate::providers::openai_compat::embed_model_installed(&ep, &model).await,
             Err(_) => false,
         },
+        BackendKind::Engine => crate::providers::engine::embed_model_installed(&model),
     };
     Ok(EmbeddingModelCheck { installed, model })
 }
@@ -318,6 +350,9 @@ pub(crate) async fn llm_chat_stream(
                 on_chunk,
             )
             .await
+        }
+        BackendKind::Engine => {
+            crate::providers::engine::chat_stream(request_id, body, on_chunk).await
         }
     }
 }
@@ -361,6 +396,7 @@ pub(crate) fn llm_backend_config_set(
     let kind = match backend_kind.as_str() {
         "ollama" => BackendKind::Ollama,
         "openai" => BackendKind::OpenAiCompat,
+        "engine" => BackendKind::Engine,
         other => return Err(format!("unknown backend: {other}")),
     };
     let base_url = base_url.as_deref().and_then(normalize_base_url);
@@ -463,6 +499,18 @@ mod tests {
         assert_eq!(parse_kind(Some("ollama")), BackendKind::Ollama);
         assert_eq!(parse_kind(Some("garbage")), BackendKind::Ollama);
         assert_eq!(parse_kind(Some("openai")), BackendKind::OpenAiCompat);
+        assert_eq!(parse_kind(Some("engine")), BackendKind::Engine);
+    }
+
+    #[test]
+    fn kind_str_roundtrips() {
+        for k in [
+            BackendKind::Ollama,
+            BackendKind::OpenAiCompat,
+            BackendKind::Engine,
+        ] {
+            assert_eq!(parse_kind(Some(kind_str(k))), k);
+        }
     }
 
     #[test]

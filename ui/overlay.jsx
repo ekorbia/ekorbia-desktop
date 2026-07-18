@@ -116,6 +116,18 @@ function QuickQuery() {
   const [availableModels, setAvailableModels] = qS(null);
   const [modelsError, setModelsError] = qS(null);
 
+  // Active backend kind — the failure messaging below is Ollama-specific
+  // ("run ollama serve") and must not lie on the engine / custom-endpoint
+  // backends, whose errors are already user-directed.
+  const [backendKind, setBackendKind] = qS('ollama');
+  qE(() => {
+    const inv = getInvoke();
+    if (!inv) return;
+    inv('llm_backend_config_get')
+      .then((c) => setBackendKind((c && c.backend) || 'ollama'))
+      .catch(() => {});
+  }, []);
+
   // ── Prompt library + single-prompt attachment ──────────────────────────────
   // Single-select keeps the overlay focused: the whole point of this panel is
   // "one query, one answer, dismiss". Multi-attach is for the main composer.
@@ -454,6 +466,12 @@ function QuickQuery() {
         if (ev?.type === 'delta') {
           acc += ev.text;
           setResponse(acc);
+        } else if (ev?.type === 'status') {
+          // Engine backend: pre-content progress ("loading gemma…").
+          // Show it in the response area until the first delta replaces
+          // it — an overlay query that has to cold-load a model would
+          // otherwise look hung.
+          if (!acc) setResponse(ev.message || '');
         } else if (ev?.type === 'error') {
           inBandError = ev.message || 'The model server reported an error.';
         }
@@ -485,10 +503,15 @@ function QuickQuery() {
       // A user-cancelled stream returns Ok by design, so reaching here with
       // no output is a real failure. Distinguish "model not available" (the
       // overlay keeps its own model pref, which may not be pulled) from a
-      // genuine "Ollama is down" — they point at different fixes.
+      // genuine "Ollama is down" — they point at different fixes. On the
+      // engine / custom-endpoint backends the Rust error already names the
+      // real problem ("model file not found: …", endpoint + status) — show
+      // it as-is instead of blaming Ollama.
       if (!acc) {
         const msg = String(e || "");
-        if (/40\d|not found|no such model|try pulling|unknown model/i.test(msg)) {
+        if (backendKind !== 'ollama') {
+          setResponse(msg ? `⚠️ ${msg}` : '⚠️ The model backend reported an error. Check Settings → Backend in the main window.');
+        } else if (/40\d|not found|no such model|try pulling|unknown model/i.test(msg)) {
           setResponse(
             `Model "${modelId}" isn't available in Ollama. Pick a pulled model from the list below.`,
           );

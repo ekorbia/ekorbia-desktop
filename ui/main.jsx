@@ -1883,6 +1883,16 @@ function App() {
             // SSE error payload on BYO backends). Captured here and
             // surfaced after the loop if the turn produced no text.
             streamErrorMsg = ev.message || 'The model server reported an error.';
+          } else if (ev.type === 'status') {
+            // Engine-backend progress ("loading gemma…", "waiting for
+            // model…") — ephemeral placeholder text on the streaming
+            // bubble, never content. Cleared by the first delta.
+            const note = ev.message || '';
+            setChat(c => {
+              const msgs = [...c.messages];
+              msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], statusText: note };
+              return { ...c, messages: msgs };
+            });
           } else if (ev.type === 'delta') {
             turnContent += ev.text;
             accumulated += ev.text;
@@ -1890,7 +1900,7 @@ function App() {
             const snap = accumulated;
             setChat(c => {
               const msgs = [...c.messages];
-              msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: snap };
+              msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: snap, statusText: undefined };
               return { ...c, messages: msgs };
             });
           } else if (ev.type === 'toolCalls') {
@@ -2009,7 +2019,14 @@ function App() {
       const err = streamTransportError || '';
       const looksLikeConnRefused =
         /request failed|error sending request|connection refused|tcp connect|11434/i.test(err);
-      if (backendKind === 'openai') {
+      if (backendKind === 'engine') {
+        // The engine's errors are already user-directed ("model file not
+        // found: x.gguf (looked in …)", "failed to start 3 times…") —
+        // show them as-is with a pointer at the models folder.
+        accumulated = err
+          ? `⚠️ ${err}`
+          : `⚠️ The bundled engine couldn't run "${modelId}". Check Settings → Backend for the models folder and engine status.`;
+      } else if (backendKind === 'openai') {
         accumulated = err
           ? `⚠️ Couldn't complete the request against your custom endpoint:\n\n${err}`
           : `⚠️ Couldn't reach your custom endpoint. Check Settings → Backend (server running? model "${modelId}" loaded?).`;
@@ -2038,6 +2055,7 @@ function App() {
         ...msgs[msgs.length - 1],
         content: finalContent || msgs[msgs.length - 1].content,
         streaming: false,
+        statusText: undefined, // transient engine progress — never persists
         tokens: finalTokens,
         // toolResults drives the saved-file chips above the assistant text
         // in chat.jsx Message. undefined when the model didn't use tools
@@ -2225,13 +2243,21 @@ function App() {
       const Channel = getChannel();
       const channel = new Channel();
       // Neutral stream contract (Phase 0 provider seam): the channel
-      // carries {type: delta|toolCalls|done|error} events — see
+      // carries {type: delta|toolCalls|done|error|status} events — see
       // StreamEvent in src-tauri/src/llm.rs. Compare columns render
       // prose only, so toolCalls/error events are ignored here (errors
       // with no output already surface via the empty-column state).
       channel.onmessage = (ev) => {
         if (!ev) return;
-        if (ev.type === 'delta') {
+        if (ev.type === 'status') {
+          // Engine backend: on a single-process engine the columns fill
+          // SEQUENTIALLY — the supervisor swaps models between columns
+          // (plan doc "Option 2, serialized"). Surface the wait as
+          // italic placeholder text in the live column. Render-only:
+          // multiStreamAccumRef (what finalize persists) is untouched,
+          // and the first real delta overwrites the placeholder.
+          if (!accumulated) onChunk?.(asstId, `*${ev.message}*`);
+        } else if (ev.type === 'delta') {
           accumulated += ev.text;
           multiStreamAccumRef.current.set(asstId, accumulated);
           onChunk?.(asstId, accumulated);
@@ -3901,16 +3927,16 @@ function App() {
   };
 
   const [ollamaModalOpen, setOllamaModalOpen] = useS(true);
-  // BYO backends (Settings → Backend → custom endpoint) must never see
-  // the OllamaGate — its "install/start Ollama" flow is a dead-end lie
-  // when Ollama isn't the engine. The gate defaults open and self-
-  // dismisses when Ollama responds; on the openai backend we dismiss it
+  // Non-Ollama backends (custom endpoint OR the bundled engine) must
+  // never see the OllamaGate — its "install/start Ollama" flow is a
+  // dead-end lie when Ollama isn't serving. The gate defaults open and
+  // self-dismisses when Ollama responds; on other backends we dismiss it
   // up front instead. (Effect body runs post-render — safe re: the
   // var-hoisting gotcha; the dep array is static.)
   useE(() => {
     invoke('llm_backend_config_get')
       .then((c) => {
-        if (c?.backend === 'openai') setOllamaModalOpen(false);
+        if (c && c.backend && c.backend !== 'ollama') setOllamaModalOpen(false);
       })
       .catch(() => {});
   }, []);

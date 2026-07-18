@@ -18,7 +18,8 @@
 //! - `prompts`       — file-system prompt store + commands
 //! - `settings`      — generic `setting_get`/`setting_set`
 //! - `llm`           — provider-neutral surface: `llm_*` commands, StreamEvent contract, backend config/dispatch
-//! - `providers::`   — adapters: `ollama` (default engine + lifecycle), `openai_compat` (BYO /v1 servers); shared cancel registry
+//! - `providers::`   — adapters: `ollama` (default engine + lifecycle), `openai_compat` (BYO /v1 servers), `engine` (bundled llama-server); shared cancel registry
+//! - `engine::`      — bundled llama-server sidecar: spawn/watchdog/kill-switch (mod.rs) + slot scheduler (supervisor.rs)
 //! - `overlay`       — overlay window + hotkey commands
 //! - `attachments::` — types, config, cancel registry, pipeline, folder, commands
 //! - `watch::`       — types, commands, pipeline, folder/rss/url runners, HTTP
@@ -27,6 +28,7 @@
 mod attachments;
 mod chat;
 mod db;
+mod engine;
 mod files;
 mod llm;
 mod log;
@@ -147,6 +149,8 @@ pub fn run() {
             llm::llm_backend_config_get,
             llm::llm_backend_config_set,
             llm::llm_backend_test,
+            providers::engine::engine_status,
+            providers::engine::engine_models_dir_reveal,
             system::system_profile,
             // Voice commands — macOS only (see `mod voice`). generate_handler!
             // honours per-entry cfg attributes, so on Linux/Windows these are
@@ -281,6 +285,11 @@ pub fn run() {
             // state. Ollama stays the default; Settings → Backend switches
             // live without a relaunch (this load covers launches).
             llm::load_backend_config(&conn);
+
+            // Bundled engine (Phase 2): models dir + binary override +
+            // idle-unload reaper. Cheap no-op state setup — no process
+            // spawns until the engine backend actually serves a request.
+            engine::init(app.handle(), &conn);
 
             // Backfill the FTS index for any messages that pre-date the
             // virtual table. The sync triggers keep new inserts indexed
@@ -491,6 +500,16 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error running Ekorbia");
+        .build(tauri::generate_context!())
+        .expect("error running Ekorbia")
+        // Engine kill switch (Phase 2, layer 1 of the no-orphans stack):
+        // TERM→KILL every live llama-server process group on app exit.
+        // RunEvent::Exit fires on Cmd+Q / exit(0) / last-window-close
+        // paths; kill -9 and Force-Quit are covered by the watchdog
+        // wrapper each spawn carries (see engine/mod.rs docs).
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                engine::shutdown_sync();
+            }
+        });
 }
