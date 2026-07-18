@@ -53,6 +53,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+// A note on the `cfg_attr(not(unix), allow(dead_code))` markers below:
+// the engine's spawn path is unix-only (`spawn_real` is a stub error on
+// other platforms — the bundled backend is macOS-first, plan Phase 6
+// adds the rest). Everything reachable only through that path is dead
+// code to Windows' clippy, which CI runs with `-D warnings`. The allows
+// are scoped to non-unix so unix builds still catch REAL dead code.
+
 /// Context window for chat spawns. llama-server's `-c 0` ("use the
 /// model's native ctx") would allocate a 128K-token KV cache for models
 /// like Gemma — multiple GB of RAM for headroom chats never use. 8192
@@ -60,6 +67,7 @@ use std::time::Duration;
 /// chats are short-context). Embed spawns pass no `-c` at all: embedding
 /// models declare small native contexts, and chunk sizes must fit the
 /// model's real window anyway.
+#[cfg_attr(not(unix), allow(dead_code))]
 const CHAT_CTX: u32 = 8192;
 
 /// How long a spawn may take to reach `/health` = 200 before we give up.
@@ -68,11 +76,13 @@ const CHAT_CTX: u32 = 8192;
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Grace between SIGTERM and SIGKILL when stopping a process.
+#[cfg_attr(not(unix), allow(dead_code))]
 const TERM_GRACE: Duration = Duration::from_millis(1500);
 
 /// Last N log lines kept per process (ring buffer) — surfaced in spawn
 /// failures ("model keeps crashing") so the user sees llama-server's
 /// actual complaint instead of a bare timeout.
+#[cfg_attr(not(unix), allow(dead_code))]
 const LOG_TAIL: usize = 120;
 
 // ── App-wide engine context (set once in lib.rs setup) ─────────────────────
@@ -302,6 +312,7 @@ pub(crate) enum SlotKind {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(not(unix), allow(dead_code))] // fields read only by the unix spawn path
 pub(crate) struct SpawnSpec {
     pub(crate) kind: SlotKind,
     pub(crate) model: String,
@@ -321,6 +332,7 @@ pub(crate) struct SpawnSpec {
 /// flag). `-np 1` = one server slot: the full 8K ctx serves one stream;
 /// a second same-model stream queues server-side (same behavior users
 /// get from default Ollama).
+#[cfg_attr(not(unix), allow(dead_code))] // called only by the unix spawn path
 pub(crate) fn build_args(spec: &SpawnSpec) -> Vec<String> {
     let mut args = vec![
         "-m".into(),
@@ -416,6 +428,7 @@ fn pgids() -> &'static Mutex<std::collections::HashSet<i32>> {
     PGIDS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
 }
 
+#[cfg_attr(not(unix), allow(dead_code))] // registrations happen in the unix spawn path
 fn register_pgid(pgid: i32) {
     if let Ok(mut s) = pgids().lock() {
         s.insert(pgid);

@@ -43,7 +43,10 @@ const FAIL_PAUSE: Duration = Duration::from_secs(60);
 // ── Process handle (enum dispatch: real vs. test fake) ─────────────────────
 
 pub(crate) enum Handle {
-    Real(RealHandle),
+    // Boxed: RealHandle is ~300 bytes (tokio Child + log ring Arc + …)
+    // vs the tiny test fake — clippy's large_enum_variant is right that
+    // every Proc shouldn't carry the max size inline.
+    Real(Box<RealHandle>),
     #[cfg(test)]
     Fake(fake::FakeHandle),
 }
@@ -109,7 +112,7 @@ impl SpawnerImpl {
                     model: model.to_string(),
                     port,
                     api_key,
-                    handle: Handle::Real(handle),
+                    handle: Handle::Real(Box::new(handle)),
                 })
             }
             #[cfg(test)]
