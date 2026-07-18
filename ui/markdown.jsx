@@ -28,6 +28,7 @@
 // inside an idempotent guard because Babel script-tag re-execution would
 // otherwise re-register on every component mount in dev mode (no actual
 // harm — marked.use is additive — but cleaner this way).
+'use strict';
 function ensureMarkedConfigured() {
   if (typeof marked === 'undefined') return false;
   if (window.__ekMarkedConfigured) return true;

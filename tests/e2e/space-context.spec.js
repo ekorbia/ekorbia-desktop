@@ -6,7 +6,7 @@
 //
 // What's NOT covered here (would require a full App mount with mocked
 // invoke responses for db_load_chats / space_list / prompts_list /
-// memory_read / ollama_chat_stream — heavy lift for one assertion):
+// memory_read / llm_chat_stream — heavy lift for one assertion):
 //   • newTab inside a Space inheriting Space.defaultModel.
 //   • New chat inside a Space auto-attaching pinned prompt slugs into
 //     attachedPromptsByChat.

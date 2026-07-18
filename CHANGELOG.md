@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Custom inference backends.** Point Ekorbia at any OpenAI-compatible
+  server (LM Studio, llama.cpp's llama-server, vLLM) in Settings →
+  Backend; Ollama is now optional.
+
 ### Changed
 
 - **Visual refresh**, with the default **One Dark** theme using a slate
@@ -25,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full-bleed (oversized, with visible corners against the Dock's icon
   style); the icon set is rebuilt on Apple's standard icon grid with
   correct margins and transparent corners.
+- **Model-written files now save reliably** — previously a save could
+  fail with a foreign-key error even though the file was already on disk.
+- **Capability badges (TOOL/VISION) now appear reliably** — a startup
+  race could leave them, and tool use, switched off for a capable model.
 
 ## [0.5.0] - 2026-07-03
 

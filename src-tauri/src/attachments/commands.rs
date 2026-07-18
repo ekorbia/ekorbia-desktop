@@ -26,8 +26,8 @@ use crate::attachments::types::{
     PreparedHit, RetrievedChunk, ATTACHMENT_COLUMNS, ATTACHMENT_MAX_BYTES, SMALL_TEXT_THRESHOLD,
 };
 use crate::db::{ensure_chat_row, nanos_since_epoch, now_unix, DbState};
+use crate::llm::model_has_vision;
 use crate::log::log_warn;
-use crate::ollama::model_has_vision;
 use crate::text_extract::extract_text_from_file;
 use serde::Serialize;
 use std::path::Path;

@@ -27,13 +27,13 @@ test.beforeEach(async ({ page }) => {
   // "alpha") aren't real models anyway. We override the invoke mock
   // here to return EVERY model name any test uses, so by default the
   // missing-banner doesn't fire. Tests that DO want to exercise the
-  // missing-banner path override __INVOKE_RESPONSES.ollama_tags
+  // missing-banner path override __INVOKE_RESPONSES.llm_list_models
   // per-test before calling __TEST_MOUNT — that wins because their
   // override is set after this beforeEach finishes.
   //
-  // (Phase B.1 moved this call from direct fetch() to invoke('ollama_tags').
+  // (Phase B.1 moved this call from direct fetch() to invoke('llm_list_models').
   // The fixture's mock-tauri intercepts invoke; we just need to swap
-  // its canned response for ollama_tags.)
+  // its canned response for llm_list_models.)
   await page.evaluate(() => {
     const allKnown = [
       "a", "b", "c",
@@ -42,7 +42,7 @@ test.beforeEach(async ({ page }) => {
       "gemma4:latest", "gemma4:e2b", "granite4.1:8b",
       "qwen3.5:4b", "qwen3.5:latest", "qwen3.6:27b",
     ];
-    window.__INVOKE_RESPONSES.ollama_tags = () => ({
+    window.__INVOKE_RESPONSES.llm_list_models = () => ({
       models: allKnown.map((name) => ({ name })),
     });
   });
@@ -373,10 +373,10 @@ test.describe("Phase 5: missing-model banner", () => {
     page,
   }) => {
     await page.evaluate(() => {
-      // Override the ollama_tags invoke response to a fixed list that's
+      // Override the llm_list_models invoke response to a fixed list that's
       // MISSING one of the chat's models. Test isolation is per-page so
       // mutating __INVOKE_RESPONSES here doesn't bleed into other tests.
-      window.__INVOKE_RESPONSES.ollama_tags = () => ({
+      window.__INVOKE_RESPONSES.llm_list_models = () => ({
         models: [{ name: "alpha" }, { name: "beta" }],
       });
       window.__TEST_MOUNT("CompareChatPane", {
@@ -409,7 +409,7 @@ test.describe("Phase 5: missing-model banner", () => {
     page,
   }) => {
     await page.evaluate(() => {
-      window.__INVOKE_RESPONSES.ollama_tags = () => ({
+      window.__INVOKE_RESPONSES.llm_list_models = () => ({
         models: [{ name: "alpha" }, { name: "beta" }, { name: "gamma" }],
       });
       window.__TEST_MOUNT("CompareChatPane", {

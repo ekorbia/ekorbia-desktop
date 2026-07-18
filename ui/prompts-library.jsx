@@ -8,6 +8,7 @@
 //     toggles it as a filter (OR semantics — prompts with any selected tag)
 //   • Right-click a row to assign/clear a Favorite without opening the editor
 //   • Sort by Recent / A→Z / Z→A / Favorite
+'use strict';
 function PromptLibrary({
   prompts,
   selectedId,

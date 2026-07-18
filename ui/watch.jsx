@@ -3,6 +3,7 @@
 //   WatchModal (create/edit, all three kinds), interval defaults.
 // Depends on: tokens, atoms, icons.
 
+'use strict';
 function WatchField({
   label,
   value,

@@ -1,5 +1,6 @@
 // main.jsx — Ekorbia top-level
 
+'use strict';
 const { useState: useS, useEffect: useE, useRef: useR } = React;
 
 // Theme palettes. Each theme defines all tokens that can plausibly invert
@@ -504,7 +505,7 @@ function App() {
   const [chatAttachments, setChatAttachments] = useS({});
   const attachments = chatAttachments[activeTab] || [];
   // In-memory caches of model → capability bits. Populated by
-  // model_capabilities; gate the "VISION" / "TOOL" badges and are
+  // llm_capabilities; gate the "VISION" / "TOOL" badges and are
   // checked before encoding base64 / enabling write_file tool injection
   // (the Rust side double-checks anyway).
   const [modelVisionMap, setModelVisionMap] = useS({});
@@ -514,8 +515,11 @@ function App() {
   // keep chat snappy. The map gates that flag: sending `think` to a
   // non-thinking model is a 400 error, so we ONLY set it when true here.
   const [modelThinkingMap, setModelThinkingMap] = useS({});
-  const activeModelHasVision = !!modelVisionMap[modelId];
-  const activeModelHasTools = !!modelToolsMap[modelId];
+  // NOTE: the derived `activeModelHasVision` / `activeModelHasTools`
+  // reads live BELOW the `modelId` declaration — see the Babel-var-
+  // hoisting gotcha in CLAUDE.md. Putting them here (above modelId)
+  // silently reads `modelToolsMap[undefined]` on every render instead
+  // of crashing, and the capability badges go permanently dark.
 
   // Permission-modal state for the write_file tool. Set when Rust emits
   // chat:needs_output_dir (the model tried to write but the chat has no
@@ -611,7 +615,7 @@ function App() {
       const needsIndex = (added || []).some((a) => a.status === 'indexing');
       if (needsIndex) {
         try {
-          const check = await invoke('embedding_model_check');
+          const check = await invoke('llm_embed_model_check');
           if (check && !check.installed) {
             window.ekToast?.({
               kind: 'warn',
@@ -657,7 +661,7 @@ function App() {
       // Embedding-model check (same as onAttachFile). Folders always need
       // the model — there's no small-file fast path here.
       try {
-        const check = await invoke('embedding_model_check');
+        const check = await invoke('llm_embed_model_check');
         if (check && !check.installed) {
           window.ekToast?.({
             kind: 'warn',
@@ -880,7 +884,8 @@ function App() {
   // is treated as no-capabilities — we don't want a transient error to
   // block image attachments or disable tool use forever, so the cache only
   // records *successful* lookups. Rust still gates the actual usage.
-  const probeModelCapabilities = async (model) => {
+  const capsRetryRef = useR(null);
+  const probeModelCapabilities = async (model, attempt = 0) => {
     if (!model) return;
     if (
       modelVisionMap[model] !== undefined &&
@@ -888,15 +893,31 @@ function App() {
       modelThinkingMap[model] !== undefined
     ) return;
     try {
-      const caps = await invoke('model_capabilities', { model });
+      const caps = await invoke('llm_capabilities', { model });
       setModelVisionMap((m) => ({ ...m, [model]: !!caps?.vision }));
       setModelToolsMap((m) => ({ ...m, [model]: !!caps?.tools }));
       setModelThinkingMap((m) => ({ ...m, [model]: !!caps?.thinking }));
     } catch (e) {
-      // Silent — badges just won't show. Rust still gates encoding/tooling.
+      // Ollama is often not up yet when this first fires — the app
+      // itself starts Ollama AFTER mount (gate / start_ollama), so a
+      // single mount-time probe loses the race and the TOOL/VISION
+      // badges (plus tool injection and think:false gating) silently
+      // stay off until the user switches models away and back. Retry
+      // with backoff while the capability is unknown; the send path
+      // also does a just-in-time probe as the last line of defense.
+      if (attempt < 10) {
+        clearTimeout(capsRetryRef.current);
+        capsRetryRef.current = setTimeout(
+          () => probeModelCapabilities(model, attempt + 1),
+          4000,
+        );
+      }
     }
   };
-  useE(() => { probeModelCapabilities(modelId); }, [modelId]);
+  // (The mount-probe effect for probeModelCapabilities lives below the
+  // `modelId` declaration — same Babel-var-hoisting gotcha as above: an
+  // effect declared here evaluates its dep array as [undefined] forever,
+  // so the probe would fire once with no model and never again.)
 
   // Chat state — keyed by tab/chat id
   const [chats, setChats] = useS(() => ({
@@ -971,6 +992,32 @@ function App() {
   const [modelId, setModelId] = useS(readPersistedComposerModel);
   // Build a display object — fall back to a minimal stub for models not in the static list
   const model = MODELS_BY_ID[modelId] || { id: modelId, name: modelId, color: T.green };
+  // Active inference backend ('ollama' | 'openai'). Declared HIGH in App()
+  // (above handleSend) so the stream-failure message can be backend-aware
+  // without tripping the var-hoisting gotcha — a read below this line sees
+  // the real value, a read above would silently see undefined. Fetched
+  // once at mount; Settings → Backend applies changes live, so a config
+  // switch is reflected on the next relaunch for this UI-side copy (Rust
+  // dispatch is already live). See CLAUDE.md forward-reference gotcha.
+  const [backendKind, setBackendKind] = useS('ollama');
+  useE(() => {
+    invoke('llm_backend_config_get')
+      .then((c) => { if (c) setBackendKind(c.backend || 'ollama'); })
+      .catch(() => {});
+  }, []);
+  // Derived capability bits + the mount probe. These MUST sit below the
+  // `modelId` declaration: Babel-standalone downlevels `const` to `var`,
+  // so a read above the declaration doesn't throw (no TDZ) — it silently
+  // evaluates with modelId === undefined on every render. That exact bug
+  // kept the TOOL/VISION badges permanently dark and the mount probe
+  // inert (dep array stuck at [undefined]) from the day they shipped —
+  // see the CLAUDE.md gotcha before "cleaning up" this ordering.
+  const activeModelHasVision = !!modelVisionMap[modelId];
+  const activeModelHasTools = !!modelToolsMap[modelId];
+  useE(() => {
+    probeModelCapabilities(modelId);
+    return () => clearTimeout(capsRetryRef.current);
+  }, [modelId]);
   const [streaming, setStreaming] = useS(false);
   const [ramUsed, setRamUsed] = useS(28);
 
@@ -1291,11 +1338,11 @@ function App() {
   // Failures are silent: if Ollama is down, the StatusBar surfaces it and
   // the user can fix the model later via the picker.
   useE(() => {
-    // Routed through the Rust `ollama_tags` command rather than direct
+    // Routed through the Rust `llm_list_models` command rather than direct
     // fetch — see ollama.rs comment block for the WebView2 PNA story.
     // 3s timeout is now applied Rust-side; failures throw an IPC error
     // which we swallow (the StatusBar shows the real "not running" state).
-    invoke('ollama_tags')
+    invoke('llm_list_models')
       .then((data) => {
         const pulled = (data.models || []).map((m) => m.name);
         if (pulled.length === 0) return;
@@ -1630,9 +1677,17 @@ function App() {
         };
         setHistory(hs => prependChatToToday(hs, newItem));
       }
-      persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs, ...multiFieldsForChat(activeTab) }).catch(console.error);
-    } else {
-      persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs, ...multiFieldsForChat(activeTab) }).catch(console.error);
+    }
+    // Awaited (was fire-and-forget): the assistant placeholder persist
+    // below runs immediately after and carries a messages.chat_id FK to
+    // this row — on a brand-new chat, firing both without ordering lets
+    // the placeholder INSERT race ahead of the chats INSERT and fail.
+    // The chats upsert is a single tiny statement; awaiting it costs
+    // nothing perceptible before a multi-second stream.
+    try {
+      await persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs, ...multiFieldsForChat(activeTab) });
+    } catch (e) {
+      console.error('chat persist failed:', e);
     }
 
     const seq = priorMessages.length;
@@ -1644,16 +1699,54 @@ function App() {
       seq,
     }).catch(console.error);
 
-    // Phase B.2: streaming runs through Rust's ollama_chat_stream rather
+    // Persist an assistant PLACEHOLDER row up front — same id and seq the
+    // final post-stream persist uses, so db_upsert_message's ON CONFLICT
+    // path converges on one row (its SET clause overwrites every field).
+    //
+    // Required by the tool loop: tool_write_file inserts chat_files rows
+    // with message_id = asstId WHILE the stream is still running, and
+    // chat_files.message_id carries an enforced FK to messages(id)
+    // (SCHEMA opens with PRAGMA foreign_keys = ON). Without this row the
+    // first model-initiated save of a send fails with "FOREIGN KEY
+    // constraint failed" AFTER the file already hit disk — file present,
+    // no chip, scary toast. Manual Save buttons never hit this because
+    // they run on already-persisted messages.
+    //
+    // Awaited (unlike the fire-and-forget persists around it): the write
+    // must be durably in `messages` before any tool call can race it.
+    // Cost is one tiny pre-stream INSERT; ephemeral chats no-op inside
+    // persistMessage exactly like every other persist on this path.
+    try {
+      await persistMessage({
+        id: asstId, chatId: activeTab, role: 'assistant',
+        content: '',
+        model: modelId, time: now(),
+        tokensIn: null, tokensOut: null, tokensMs: null,
+        promptsJson: null, sourcesJson: null, toolCallsJson: null,
+        toolCallId: null,
+        seq: seq + 1,
+      });
+    } catch (e) {
+      console.error('assistant placeholder persist failed:', e);
+    }
+
+    // Phase B.2: streaming runs through Rust's llm_chat_stream rather
     // than a direct fetch (WebView2 PNA gate on Windows blocks the
     // browser-side request). `abortRef` now holds the in-flight request
     // id rather than an AbortController; handleStop translates a click
-    // into an invoke('ollama_chat_stream_cancel') call.
+    // into an invoke('llm_chat_stream_cancel') call.
     abortRef.current = asstId;
 
     let accumulated = '';
     let tokensIn = 0, tokensOut = 0, startMs = Date.now();
     let ollamaOk = false;
+    // In-band provider error message (StreamEvent type:'error'). Distinct
+    // from transport failure (!ollamaOk): the HTTP exchange succeeded but
+    // the provider said no — model not loaded, bad request, etc.
+    let streamErrorMsg = null;
+    // Transport-failure message captured from the invoke rejection (the
+    // real Rust error string). Surfaced backend-aware in the fallback.
+    let streamTransportError = null;
 
     // Tool-use loop. When the active model supports tools (modelHasTools)
     // and the user hasn't blocked file saves on this chat (output_dir !== ''),
@@ -1675,16 +1768,41 @@ function App() {
       userMessage.images = attachPayload.images;
     }
 
+    // JIT capability resolve — the mount-time probe can lose the race
+    // against Ollama's own startup (see probeModelCapabilities), which
+    // would silently disable tool injection AND think:false gating for
+    // this send even though the model supports both. Mirrors the
+    // screenshot path's vision JIT probe. Cheap in steady state: the
+    // maps are populated, so this is a lookup; the extra /api/show on
+    // the unknown path is cached per model on the Rust side.
+    let modelHasToolsNow = modelToolsMap[modelId];
+    let modelThinkingNow = modelThinkingMap[modelId];
+    if (modelHasToolsNow === undefined || modelThinkingNow === undefined) {
+      try {
+        const caps = await invoke('llm_capabilities', { model: modelId });
+        modelHasToolsNow = !!caps?.tools;
+        modelThinkingNow = !!caps?.thinking;
+        setModelVisionMap((m) => ({ ...m, [modelId]: !!caps?.vision }));
+        setModelToolsMap((m) => ({ ...m, [modelId]: modelHasToolsNow }));
+        setModelThinkingMap((m) => ({ ...m, [modelId]: modelThinkingNow }));
+      } catch (_) {
+        // Probe failed (Ollama down?) — proceed without tools/thinking;
+        // the stream call below surfaces the real connectivity error.
+        modelHasToolsNow = false;
+        modelThinkingNow = false;
+      }
+    }
+
     // Resolve current output_dir up front: lets us skip including tools at
     // all when the user has explicitly blocked saves (output_dir === '').
     // NULL/undefined means "never asked" — we still pass tools through and
     // the modal fires on the first tool_call.
     let currentOutputDir = null;
-    if (activeModelHasTools) {
+    if (modelHasToolsNow) {
       try { currentOutputDir = await invoke('chat_output_dir', { chatId: activeTab }); }
       catch (_) { currentOutputDir = null; }
     }
-    const includeTools = activeModelHasTools && currentOutputDir !== '';
+    const includeTools = modelHasToolsNow && currentOutputDir !== '';
     if (includeTools && !toolSchemasRef.current) {
       try { toolSchemasRef.current = (await invoke('chat_tool_schemas')) || []; }
       catch (_) { toolSchemasRef.current = []; }
@@ -1740,21 +1858,34 @@ function App() {
         // so the chat looks frozen for seconds before the answer. Force it
         // off for snappy replies (helper no-ops for non-thinking models;
         // sending `think` to them is a 400).
-        applyThinkPref(body, modelThinkingMap[modelId]);
+        // Uses the JIT-resolved value, not the render-scope map — a state
+        // update from the probe above wouldn't be visible to this closure
+        // until the next render, i.e. AFTER this send.
+        applyThinkPref(body, modelThinkingNow);
 
         let turnContent = '';
         let turnToolCalls = [];
-        // Channel<serde_json::Value>: Rust's ollama_chat_stream parses
-        // each NDJSON line from Ollama into an object and forwards it
-        // here. The UI's per-chunk handling is unchanged from when this
-        // was inline JSON.parse() — just receives pre-parsed objects.
+        // Channel<StreamEvent>: the neutral stream contract (Phase 0
+        // provider seam — see src-tauri/src/llm.rs). The adapter owns
+        // every provider quirk: toolCalls arrive AT MOST ONCE (before
+        // done) with `function.arguments` guaranteed to be an object,
+        // and done carries promptTokens/outputTokens. In-band provider
+        // errors arrive as {type:'error'}; we deliberately keep the
+        // pre-seam behaviour for them (stream just ends; transport
+        // failures still reject the invoke below) — surfacing them
+        // inline is a Phase 1 polish item, not a Phase 0 change.
         const Channel = getChannel();
         const channel = new Channel();
-        const consumeChunk = (obj) => {
-          if (!obj) return;
-          if (obj.message?.content) {
-            turnContent += obj.message.content;
-            accumulated += obj.message.content;
+        const consumeChunk = (ev) => {
+          if (!ev) return;
+          if (ev.type === 'error') {
+            // In-band provider error ({"error": …} with HTTP 200, or an
+            // SSE error payload on BYO backends). Captured here and
+            // surfaced after the loop if the turn produced no text.
+            streamErrorMsg = ev.message || 'The model server reported an error.';
+          } else if (ev.type === 'delta') {
+            turnContent += ev.text;
+            accumulated += ev.text;
             streamAccumulatedRef.current = accumulated;
             const snap = accumulated;
             setChat(c => {
@@ -1762,32 +1893,34 @@ function App() {
               msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: snap };
               return { ...c, messages: msgs };
             });
-          }
-          if (obj.message?.tool_calls?.length) {
-            turnToolCalls = turnToolCalls.concat(obj.message.tool_calls);
-          }
-          if (obj.done) {
+          } else if (ev.type === 'toolCalls') {
+            turnToolCalls = turnToolCalls.concat(ev.calls);
+          } else if (ev.type === 'done') {
             // tokensIn is the prompt-eval count of the LATEST request —
             // it grows each iteration as we append tool responses, so
             // overwriting (not summing) gives a meaningful total.
-            tokensIn = obj.prompt_eval_count ?? tokensIn;
-            tokensOut += obj.eval_count ?? 0;
+            tokensIn = ev.promptTokens ?? tokensIn;
+            tokensOut += ev.outputTokens ?? 0;
           }
         };
         channel.onmessage = consumeChunk;
 
         try {
-          await invoke('ollama_chat_stream', {
+          await invoke('llm_chat_stream', {
             requestId: asstId,
             body,
             onChunk: channel,
           });
           ollamaOk = true;
         } catch (e) {
-          // Rust returns Err when Ollama is unreachable / non-2xx. We
-          // surface the same "ollama not running" UX the old fetch
-          // failure produced — set the flag and break the tool loop.
+          // Rust returns Err when the backend is unreachable / non-2xx.
+          // CAPTURE the real message — it names the actual failure (e.g.
+          // "Endpoint /v1/chat/completions returned 400: …" on a BYO
+          // server). The post-loop fallback used to discard this and
+          // always blame Ollama, which lied on the openai backend AND
+          // hid the reason. Set the flag and break the tool loop.
           ollamaOk = false;
+          streamTransportError = String(e?.message || e || '');
           break;
         }
 
@@ -1810,11 +1943,10 @@ function App() {
         for (const call of turnToolCalls) {
           const callId = call.id || call.function?.name || `call_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
           const name = call.function?.name;
-          let args = call.function?.arguments;
-          if (typeof args === 'string') {
-            try { args = JSON.parse(args); } catch (_) { args = {}; }
-          }
-          args = args || {};
+          // The provider seam guarantees `function.arguments` is always an
+          // object (the object-vs-JSON-string model quirk is absorbed in
+          // the Rust adapter's normalizer — see StreamNorm in ollama.rs).
+          const args = call.function?.arguments || {};
 
           let result;
           if (name !== 'write_file') {
@@ -1867,7 +1999,32 @@ function App() {
     }
 
     if (!ollamaOk && streamingRef.current) {
-      accumulated = `Ollama isn't running on localhost:11434. Start it with \`ollama serve\` and make sure the model "${modelId}" is pulled (\`ollama pull ${modelId}\`).`;
+      // Transport failure. The real Rust error (streamTransportError) is
+      // authoritative — show it. Only synthesize the friendly
+      // "start ollama serve" hint for the Ollama backend when the error
+      // looks like a connection failure (its own /api/chat endpoint,
+      // localhost:11434, or a bare connect error); otherwise the captured
+      // message is more useful. On the BYO backend the captured message
+      // already names the endpoint + status, so never mention Ollama.
+      const err = streamTransportError || '';
+      const looksLikeConnRefused =
+        /request failed|error sending request|connection refused|tcp connect|11434/i.test(err);
+      if (backendKind === 'openai') {
+        accumulated = err
+          ? `⚠️ Couldn't complete the request against your custom endpoint:\n\n${err}`
+          : `⚠️ Couldn't reach your custom endpoint. Check Settings → Backend (server running? model "${modelId}" loaded?).`;
+      } else if (!err || looksLikeConnRefused) {
+        accumulated = `Ollama isn't running on localhost:11434. Start it with \`ollama serve\` and make sure the model "${modelId}" is pulled (\`ollama pull ${modelId}\`).`;
+      } else {
+        accumulated = `⚠️ ${err}`;
+      }
+      streamAccumulatedRef.current = accumulated;
+    } else if (ollamaOk && !accumulated.trim() && streamErrorMsg && streamingRef.current) {
+      // Provider-reported error with no output (Phase 1 polish): before
+      // this, an in-band error ended the stream silently — empty bubble,
+      // no explanation. Common on BYO backends (model not loaded in
+      // LM Studio, tool-incapable model given tools, …).
+      accumulated = `⚠️ The model server reported an error: ${streamErrorMsg}`;
       streamAccumulatedRef.current = accumulated;
     }
 
@@ -2055,7 +2212,7 @@ function App() {
     // Phase B.2: per-column controllers map now stores the requestId
     // (asstId, which is already unique per column) rather than an
     // AbortController. handleStopMultiModel translates a stop into a
-    // Rust-side cancel via invoke('ollama_chat_stream_cancel').
+    // Rust-side cancel via invoke('llm_chat_stream_cancel').
     multiStreamControllersRef.current.set(asstId, asstId);
     multiStreamAccumRef.current.set(asstId, '');
 
@@ -2067,26 +2224,30 @@ function App() {
     try {
       const Channel = getChannel();
       const channel = new Channel();
-      channel.onmessage = (obj) => {
-        if (!obj) return;
-        if (obj.message?.content) {
-          accumulated += obj.message.content;
+      // Neutral stream contract (Phase 0 provider seam): the channel
+      // carries {type: delta|toolCalls|done|error} events — see
+      // StreamEvent in src-tauri/src/llm.rs. Compare columns render
+      // prose only, so toolCalls/error events are ignored here (errors
+      // with no output already surface via the empty-column state).
+      channel.onmessage = (ev) => {
+        if (!ev) return;
+        if (ev.type === 'delta') {
+          accumulated += ev.text;
           multiStreamAccumRef.current.set(asstId, accumulated);
           onChunk?.(asstId, accumulated);
-        }
-        if (obj.done) {
-          // tokensIn is the prompt-eval count of the latest /api/chat
-          // response. Compare-mode currently issues one fetch per
-          // column (no tool loop), so this is final by definition.
-          tokensIn = obj.prompt_eval_count ?? tokensIn;
-          tokensOut += obj.eval_count ?? 0;
+        } else if (ev.type === 'done') {
+          // promptTokens is the prompt-eval count of the latest request.
+          // Compare-mode currently issues one fetch per column (no tool
+          // loop), so this is final by definition.
+          tokensIn = ev.promptTokens ?? tokensIn;
+          tokensOut += ev.outputTokens ?? 0;
         }
       };
 
       // Snappy compare columns too — force thinking off for reasoning
       // models (helper gates it; `think` on a non-thinking model is a 400).
       const body = applyThinkPref({ model, messages, stream: true }, modelThinkingMap[model]);
-      await invoke('ollama_chat_stream', {
+      await invoke('llm_chat_stream', {
         requestId: asstId,
         body,
         onChunk: channel,
@@ -2372,20 +2533,20 @@ function App() {
   const handleStopMultiModel = (asstId) => {
     // Phase B.2: per-column "controllers" are now request IDs that
     // the Rust streaming command registered against. Cancellation is
-    // an IPC ping to ollama_chat_stream_cancel; the running task
+    // an IPC ping to llm_chat_stream_cancel; the running task
     // notices the flag at its next chunk boundary and exits cleanly.
     const map = multiStreamControllersRef.current;
     if (asstId) {
       const reqId = map.get(asstId);
       if (reqId) {
-        invoke('ollama_chat_stream_cancel', { requestId: reqId })
+        invoke('llm_chat_stream_cancel', { requestId: reqId })
           .catch(() => {});
         map.delete(asstId);
       }
       return;
     }
     for (const [, reqId] of map) {
-      invoke('ollama_chat_stream_cancel', { requestId: reqId })
+      invoke('llm_chat_stream_cancel', { requestId: reqId })
         .catch(() => {});
     }
     map.clear();
@@ -2493,7 +2654,7 @@ function App() {
     // each chunk boundary and exits cleanly. The await in handleSend
     // resolves, the Stopped marker gets applied below as before.
     if (abortRef.current) {
-      invoke('ollama_chat_stream_cancel', { requestId: abortRef.current })
+      invoke('llm_chat_stream_cancel', { requestId: abortRef.current })
         .catch(() => {});
     }
     abortRef.current = null;
@@ -2596,7 +2757,7 @@ function App() {
     if (abortRef.current) {
       // Cancel any in-flight Rust streaming chat — same channel-based
       // path as handleStop (Phase B.2).
-      invoke('ollama_chat_stream_cancel', { requestId: abortRef.current })
+      invoke('llm_chat_stream_cancel', { requestId: abortRef.current })
         .catch(() => {});
       abortRef.current = null;
     }
@@ -3444,7 +3605,7 @@ function App() {
     let activeHasVision = modelVisionMap[modelId];
     if (activeHasVision === undefined) {
       try {
-        const caps = await invoke('model_capabilities', { model: modelId });
+        const caps = await invoke('llm_capabilities', { model: modelId });
         activeHasVision = !!caps?.vision;
         // Cache the probe result for next time and so other code paths
         // (the composer's vision badge, etc.) reflect it immediately.
@@ -3740,6 +3901,19 @@ function App() {
   };
 
   const [ollamaModalOpen, setOllamaModalOpen] = useS(true);
+  // BYO backends (Settings → Backend → custom endpoint) must never see
+  // the OllamaGate — its "install/start Ollama" flow is a dead-end lie
+  // when Ollama isn't the engine. The gate defaults open and self-
+  // dismisses when Ollama responds; on the openai backend we dismiss it
+  // up front instead. (Effect body runs post-render — safe re: the
+  // var-hoisting gotcha; the dep array is static.)
+  useE(() => {
+    invoke('llm_backend_config_get')
+      .then((c) => {
+        if (c?.backend === 'openai') setOllamaModalOpen(false);
+      })
+      .catch(() => {});
+  }, []);
   const [modelWarming, setModelWarming] = useS(false);
   // In-app model download/delete modal — opened via
   // window.ekOpenModelManager() (registered in the effect near the
@@ -3778,11 +3952,11 @@ function App() {
   const warmModel = async (id) => {
     setModelWarming(true);
     try {
-      // Routed through the Rust `ollama_generate` command — same
+      // Routed through the Rust `llm_warmup` command — same
       // payload as the previous direct fetch, just wrapped in
       // invoke(). Response body is discarded on both sides; we
       // only need the side effect of forcing the model into RAM.
-      await invoke('ollama_generate', {
+      await invoke('llm_warmup', {
         body: {
           model: id,
           prompt: 'hi',

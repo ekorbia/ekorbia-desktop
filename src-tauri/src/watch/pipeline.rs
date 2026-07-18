@@ -8,8 +8,8 @@
 //! - dispatcher (`run_watch`) + outer loop (`run_all_watches_inner`, `watch_poller`)
 
 use crate::db::{now_unix, DbState};
+use crate::llm::chat as llm_chat;
 use crate::log::log_warn;
-use crate::ollama::ollama_chat;
 use crate::prompts::{parse_prompt_file, resolve_prompts_dir};
 use crate::watch::cancel::register_cancel;
 use crate::watch::folder::run_folder_watch;
@@ -508,7 +508,7 @@ pub(crate) async fn process_item(
         text.as_str()
     };
 
-    let summary = match ollama_chat(&watch.model, system_msg, snippet).await {
+    let summary = match llm_chat(&watch.model, system_msg, snippet).await {
         Ok(s) => s,
         Err(e) => {
             insert_event(app, &event_id, &watch.id, item_id, "error", None, Some(&e))?;

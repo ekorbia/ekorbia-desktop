@@ -17,7 +17,8 @@
 //! - `search`        — FTS5 chat search
 //! - `prompts`       — file-system prompt store + commands
 //! - `settings`      — generic `setting_get`/`setting_set`
-//! - `ollama`        — process startup, `/api/chat`, `/api/embed`, vision capability
+//! - `llm`           — provider-neutral surface: `llm_*` commands, StreamEvent contract, backend config/dispatch
+//! - `providers::`   — adapters: `ollama` (default engine + lifecycle), `openai_compat` (BYO /v1 servers); shared cancel registry
 //! - `overlay`       — overlay window + hotkey commands
 //! - `attachments::` — types, config, cancel registry, pipeline, folder, commands
 //! - `watch::`       — types, commands, pipeline, folder/rss/url runners, HTTP
@@ -27,11 +28,12 @@ mod attachments;
 mod chat;
 mod db;
 mod files;
+mod llm;
 mod log;
 mod memory;
-mod ollama;
 mod overlay;
 mod prompts;
+mod providers;
 mod screenshot;
 mod search;
 mod settings;
@@ -133,15 +135,18 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            ollama::start_ollama,
-            ollama::ollama_tags,
-            ollama::ollama_ps,
-            ollama::ollama_generate,
-            ollama::ollama_chat_stream,
-            ollama::ollama_chat_stream_cancel,
-            ollama::ollama_pull,
-            ollama::ollama_pull_cancel,
-            ollama::ollama_delete,
+            providers::ollama::start_ollama,
+            providers::ollama::ollama_pull,
+            providers::ollama::ollama_pull_cancel,
+            providers::ollama::ollama_delete,
+            llm::llm_list_models,
+            llm::llm_loaded_models,
+            llm::llm_warmup,
+            llm::llm_chat_stream,
+            llm::llm_chat_stream_cancel,
+            llm::llm_backend_config_get,
+            llm::llm_backend_config_set,
+            llm::llm_backend_test,
             system::system_profile,
             // Voice commands — macOS only (see `mod voice`). generate_handler!
             // honours per-entry cfg attributes, so on Linux/Windows these are
@@ -202,11 +207,11 @@ pub fn run() {
             attachments::commands::attachment_prepare_for_send,
             attachments::pipeline::attachment_reindex,
             attachments::commands::attachment_reindex_stale,
-            ollama::embedding_model_check,
+            llm::llm_embed_model_check,
             attachments::commands::embedding_stale_count,
             settings::setting_get,
             settings::setting_set,
-            ollama::model_capabilities,
+            llm::llm_capabilities,
             prompts::prompts_dir_get,
             prompts::prompts_dir_set,
             prompts::prompts_dir_reveal,
@@ -270,6 +275,12 @@ pub fn run() {
             // the full migration list and the rule on where to add new
             // ones.
             apply_migrations(&conn).expect("failed to apply database migrations");
+
+            // Backend config (no-Ollama plan, Phase 1): llm_backend /
+            // llm_base_url / llm_api_key settings → in-memory dispatch
+            // state. Ollama stays the default; Settings → Backend switches
+            // live without a relaunch (this load covers launches).
+            llm::load_backend_config(&conn);
 
             // Backfill the FTS index for any messages that pre-date the
             // virtual table. The sync triggers keep new inserts indexed

@@ -144,7 +144,7 @@ test("modal: fetches pinned prompts + pinned attachments on mount", async ({ pag
 
 // ── Default-model dropdown ───────────────────────────────────────────────
 
-test("modal: default-model dropdown is populated from ollama_tags", async ({ page }) => {
+test("modal: default-model dropdown is populated from llm_list_models", async ({ page }) => {
   // Replaces the old free-text input — installed Ollama models surface
   // as <option>s. The list is alphabetised; "Inherit global default"
   // (value="") is always present at the top.
@@ -152,7 +152,7 @@ test("modal: default-model dropdown is populated from ollama_tags", async ({ pag
     responses: {
       space_prompts_list: [],
       space_attachments_list: [],
-      ollama_tags: { models: [{ name: "llama3:70b" }, { name: "gemma4:latest" }, { name: "qwen2.5:32b" }] },
+      llm_list_models: { models: [{ name: "llama3:70b" }, { name: "gemma4:latest" }, { name: "qwen2.5:32b" }] },
     },
     // Override the default space row so the saved defaultModel matches
     // one of the installed names — confirms the option renders without
@@ -195,7 +195,7 @@ test("modal: saved defaultModel that isn't installed renders as '(not installed)
     responses: {
       space_prompts_list: [],
       space_attachments_list: [],
-      ollama_tags: { models: [{ name: "llama3:70b" }, { name: "qwen2.5:32b" }] },
+      llm_list_models: { models: [{ name: "llama3:70b" }, { name: "qwen2.5:32b" }] },
     },
     space: {
       id: "s1",
@@ -233,7 +233,7 @@ test("modal: selecting 'Inherit global default' clears the saved value on Save",
     responses: {
       space_prompts_list: [],
       space_attachments_list: [],
-      ollama_tags: { models: [{ name: "llama3:70b" }] },
+      llm_list_models: { models: [{ name: "llama3:70b" }] },
     },
   });
   await page.locator("[data-space-settings-default-model]").selectOption("");
@@ -248,7 +248,7 @@ test("modal: picking a different installed model round-trips on Save", async ({ 
     responses: {
       space_prompts_list: [],
       space_attachments_list: [],
-      ollama_tags: { models: [{ name: "llama3:70b" }, { name: "gemma4:latest" }] },
+      llm_list_models: { models: [{ name: "llama3:70b" }, { name: "gemma4:latest" }] },
     },
   });
   await page.locator("[data-space-settings-default-model]").selectOption("llama3:70b");

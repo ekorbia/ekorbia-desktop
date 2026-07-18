@@ -18,6 +18,7 @@
 // utils.js (unit-testable, shared with WatchPanel). The wrapper here
 // keeps the empty-savedAt → "" short-circuit so absent timestamps don't
 // render as "just now" (which would lie to the user).
+'use strict';
 function ekFilesAgeLabel(savedAt) {
   if (!savedAt) return '';
   return relativeTime(savedAt, { verbose: true });

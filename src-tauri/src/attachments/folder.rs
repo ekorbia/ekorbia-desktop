@@ -18,8 +18,8 @@ use crate::attachments::pipeline::{
 };
 use crate::attachments::types::{AttachmentRow, ATTACHMENT_MAX_BYTES, FOLDER_MAX_FILES};
 use crate::db::{ensure_chat_row, gen_id, mtime_unix_from_meta, now_unix, DbState};
+use crate::llm::embed as llm_embed;
 use crate::log::log_warn;
-use crate::ollama::ollama_embed;
 use crate::text_extract::extract_text_from_file;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -599,7 +599,7 @@ async fn process_file_batch(
     boundaries.push(texts.len()); // sentinel — boundaries[i+1] is end-exclusive
 
     // 3. One /api/embed round-trip for the whole batch.
-    let embeddings = match ollama_embed(embed_model, &texts).await {
+    let embeddings = match llm_embed(embed_model, &texts).await {
         Ok(v) => v,
         Err(e) => return (0, Some(e)),
     };

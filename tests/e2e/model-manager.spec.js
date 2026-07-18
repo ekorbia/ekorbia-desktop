@@ -3,7 +3,7 @@
 //
 // Covers the mount-level contracts:
 //   1. Installed list renders names + parameter size + on-disk size from
-//      the mocked ollama_tags shape.
+//      the mocked llm_list_models shape.
 //   2. Delete shows the ConfirmDialog and records an `ollama_delete`
 //      invoke on confirm.
 //   3. Pull drives a Channel-streamed progress bar (chunks delivered via
@@ -39,7 +39,7 @@ test.beforeEach(async ({ page }) => {
 test.describe("ModelManagerPanel", () => {
   test("renders installed models with sizes; active model badged", async ({ page }) => {
     await page.evaluate((tags) => {
-      window.__INVOKE_RESPONSES.ollama_tags = () => tags;
+      window.__INVOKE_RESPONSES.llm_list_models = () => tags;
       window.__TEST_MOUNT("ModelManagerPanel", { activeModel: "gemma4:e4b" });
     }, TAGS_TWO_MODELS);
 
@@ -53,7 +53,7 @@ test.describe("ModelManagerPanel", () => {
 
   test("delete flows through ConfirmDialog and records ollama_delete", async ({ page }) => {
     await page.evaluate((tags) => {
-      window.__INVOKE_RESPONSES.ollama_tags = () => tags;
+      window.__INVOKE_RESPONSES.llm_list_models = () => tags;
       window.__TEST_MOUNT("ModelManagerPanel", { activeModel: "gemma4:e4b" });
     }, TAGS_TWO_MODELS);
 
@@ -74,7 +74,7 @@ test.describe("ModelManagerPanel", () => {
 
   test("pull streams progress chunks into the bar and records ollama_pull", async ({ page }) => {
     await page.evaluate(() => {
-      window.__INVOKE_RESPONSES.ollama_tags = () => ({ models: [] });
+      window.__INVOKE_RESPONSES.llm_list_models = () => ({ models: [] });
       // Keep the pull pending so the Downloading row stays mounted; stash
       // the channel + resolver so the spec can drive it.
       window.__INVOKE_RESPONSES.ollama_pull = (args) => {
@@ -110,7 +110,7 @@ test.describe("ModelManagerPanel", () => {
 
   test("cancel records ollama_pull_cancel with the pull's request id", async ({ page }) => {
     await page.evaluate(() => {
-      window.__INVOKE_RESPONSES.ollama_tags = () => ({ models: [] });
+      window.__INVOKE_RESPONSES.llm_list_models = () => ({ models: [] });
       window.__INVOKE_RESPONSES.ollama_pull = (args) => {
         window.__PULL_CHANNEL = args.onProgress;
         return new Promise((res) => { window.__PULL_RESOLVE = res; });
@@ -142,7 +142,7 @@ test.describe("ModelManagerPanel", () => {
 
   test("empty installed list shows curated suggestions", async ({ page }) => {
     await page.evaluate(() => {
-      window.__INVOKE_RESPONSES.ollama_tags = () => ({ models: [] });
+      window.__INVOKE_RESPONSES.llm_list_models = () => ({ models: [] });
       window.__TEST_MOUNT("ModelManagerPanel", { activeModel: null });
     });
     const root = page.locator("#test-root");
@@ -155,7 +155,7 @@ test.describe("ModelManagerPanel", () => {
   test("already-installed models are excluded from the suggestions", async ({ page }) => {
     // The user's complaint: suggestions shouldn't re-offer models you have.
     await page.evaluate((tags) => {
-      window.__INVOKE_RESPONSES.ollama_tags = () => tags;
+      window.__INVOKE_RESPONSES.llm_list_models = () => tags;
       window.__TEST_MOUNT("ModelManagerPanel", { activeModel: "gemma4:e4b" });
     }, TAGS_TWO_MODELS); // gemma4:e4b + nomic-embed-text installed
 
@@ -176,7 +176,7 @@ test.describe("ModelManagerPanel", () => {
 
   test("download box has an offline type-ahead datalist (curated + installed)", async ({ page }) => {
     await page.evaluate((tags) => {
-      window.__INVOKE_RESPONSES.ollama_tags = () => tags;
+      window.__INVOKE_RESPONSES.llm_list_models = () => tags;
       window.__TEST_MOUNT("ModelManagerPanel", { activeModel: "gemma4:e4b" });
     }, TAGS_TWO_MODELS);
 
@@ -196,7 +196,7 @@ test.describe("ModelManagerPanel", () => {
 test.describe("ModelManagerModal", () => {
   test("mounts at zIndex 9999 and closes via the ✕ button", async ({ page }) => {
     await page.evaluate(() => {
-      window.__INVOKE_RESPONSES.ollama_tags = () => ({ models: [] });
+      window.__INVOKE_RESPONSES.llm_list_models = () => ({ models: [] });
       window.__TEST_MOUNT("ModelManagerModal", { open: true, activeModel: null });
     });
     const zIndex = await page

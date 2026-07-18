@@ -1,6 +1,7 @@
 // tokens.jsx -- React hook destructure + design tokens (T).
 // Loads before all other UI component scripts; T is referenced everywhere.
 
+'use strict';
 const { useState, useEffect, useRef, useMemo, Fragment } = React;
 
 // ─── Tokens ─────────────────────────────────────────────────

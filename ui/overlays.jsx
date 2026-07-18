@@ -7,6 +7,7 @@
 // Brand accent set (matches THEMES.one_dark / ekorbia.com) plus two
 // extenders so eight models hash to distinct dots. Static hexes by design:
 // a model keeps its color across theme switches.
+'use strict';
 const MODEL_COLORS = [
   "#f0934a",
   "#5fb0ff",
@@ -30,9 +31,9 @@ function ModelPicker({ active, onPick, onClose }) {
   const invoke = getInvoke();
 
   useEffect(() => {
-    // Rust-side `ollama_tags` (Phase B.1 proxy) — see ollama.rs for why.
+    // Rust-side `llm_list_models` (Phase B.1 proxy) — see ollama.rs for why.
     if (!invoke) { setModels([]); setError("Ollama not running"); return; }
-    invoke('ollama_tags')
+    invoke('llm_list_models')
       .then((data) => {
         // Sort alphabetically by name. /api/tags returns modified_at DESC
         // which is unstable across launches and surprising in a picker
@@ -289,9 +290,9 @@ function CompareModelPickerModal({ open, onClose, onConfirm }) {
     setSelected(new Set());
     setError("");
     setModels(null);
-    // Rust-side `ollama_tags` (Phase B.1 proxy) — see ollama.rs for why.
+    // Rust-side `llm_list_models` (Phase B.1 proxy) — see ollama.rs for why.
     if (!invoke) { setModels([]); setError("Ollama not running"); return; }
-    invoke('ollama_tags')
+    invoke('llm_list_models')
       .then((data) => {
         // Same alphabetical sort as the single-model ModelPicker so
         // both pickers feel consistent. Embed models (nomic-embed-text
@@ -863,9 +864,9 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
   const checkOllama = async () => {
     if (!invoke) return "not-running";
     try {
-      // Rust-side `ollama_tags` (Phase B.1 proxy). The IPC throw on
+      // Rust-side `llm_list_models` (Phase B.1 proxy). The IPC throw on
       // failure replaces the previous `!resp.ok` + catch combo.
-      const data = await invoke('ollama_tags');
+      const data = await invoke('llm_list_models');
       const names = (data.models || []).map((m) => m.name);
       const found = names.some(
         (n) => n === modelId || n.startsWith(modelId.split(":")[0]),
@@ -940,7 +941,7 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
   // by version and a cached re-pull can finish before we latch `done`.
   const isModelInstalled = async (name) => {
     try {
-      const data = await invoke("ollama_tags");
+      const data = await invoke("llm_list_models");
       return (data.models || []).some((m) => m.name === name);
     } catch {
       return false;

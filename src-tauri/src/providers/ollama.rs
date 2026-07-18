@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: MIT
 
-//! Ollama integration: process startup, HTTP helpers (`ollama_chat`,
-//! `ollama_embed`), and capability probes (`model_has_vision`,
-//! `model_has_tools`, `model_capabilities`).
+//! The Ollama ADAPTER (no-Ollama plan, Phase 0): every byte of Ollama HTTP
+//! lives in this file and nowhere else. The rest of the app speaks the
+//! provider-neutral surface in `llm.rs` — this module implements it:
+//! `chat` / `embed` / `chat_stream` (normalized via [`StreamNorm`] to the
+//! neutral StreamEvent contract) / `list_models` / `loaded_models` /
+//! `warmup` / `capabilities` + probes / `embed_model_check`.
+//!
+//! Ollama-*lifecycle* commands stay here under their own names —
+//! `start_ollama`, `ollama_pull(_cancel)`, `ollama_delete` manage the
+//! engine install itself, not "an LLM".
 //!
 //! `start_ollama` is a defensive multi-layer launcher: on macOS it first
 //! tries `open -g -a Ollama` (uses the menu-bar app's GPU/env setup); if
@@ -10,9 +17,9 @@
 //! list of known binary paths. The fallback uses `setsid()` on Unix so
 //! Tauri exiting doesn't SIGHUP the child.
 
-use serde::Serialize;
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -32,7 +39,33 @@ const OLLAMA_ADDR: &str = "127.0.0.1:11434";
 /// Use `ollama_url(path)` to build endpoint URLs.
 const OLLAMA_BASE: &str = "http://127.0.0.1:11434";
 
+/// Optional base-URL override, loaded from the settings key `llm_base_url`
+/// at startup (lib.rs `setup()`; Phase 0 of the no-Ollama plan). `None` =
+/// use the `OLLAMA_BASE` default. Empty/whitespace values normalize to
+/// `None` and trailing slashes are stripped so `ollama_url("/api/…")`
+/// never doubles a separator. No settings UI writes this until Phase 1 —
+/// power users can set it via the generic `setting_set` command.
+static BASE_URL_OVERRIDE: OnceLock<std::sync::RwLock<Option<String>>> = OnceLock::new();
+
+fn base_url_override() -> &'static std::sync::RwLock<Option<String>> {
+    BASE_URL_OVERRIDE.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+pub(crate) fn set_base_url_override(url: Option<String>) {
+    let cleaned = url
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty());
+    if let Ok(mut w) = base_url_override().write() {
+        *w = cleaned;
+    }
+}
+
 fn ollama_url(path: &str) -> String {
+    if let Ok(r) = base_url_override().read() {
+        if let Some(base) = r.as_ref() {
+            return format!("{base}{path}");
+        }
+    }
     format!("{OLLAMA_BASE}{path}")
 }
 
@@ -154,20 +187,12 @@ pub(crate) async fn model_has_thinking(model: &str) -> Result<bool, String> {
     Ok(has)
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ModelCapabilities {
-    vision: bool,
-    tools: bool,
-    thinking: bool,
-}
-
-#[tauri::command]
-pub(crate) async fn model_capabilities(model: String) -> Result<ModelCapabilities, String> {
+/// Adapter impl behind the neutral `llm_capabilities` command (llm.rs).
+pub(crate) async fn capabilities(model: String) -> Result<crate::llm::ModelCapabilities, String> {
     let vision = model_has_vision(&model).await.unwrap_or(false);
     let tools = model_has_tools(&model).await.unwrap_or(false);
     let thinking = model_has_thinking(&model).await.unwrap_or(false);
-    Ok(ModelCapabilities {
+    Ok(crate::llm::ModelCapabilities {
         vision,
         tools,
         thinking,
@@ -180,7 +205,7 @@ pub(crate) async fn model_capabilities(model: String) -> Result<ModelCapabilitie
 /// and return the assistant's response. Using /api/chat (not /api/generate)
 /// lets us pass an explicit `system` role for the user-selected prompt and
 /// matches what the main composer does.
-pub(crate) async fn ollama_chat(model: &str, system: &str, user: &str) -> Result<String, String> {
+pub(crate) async fn chat(model: &str, system: &str, user: &str) -> Result<String, String> {
     let mut body = serde_json::json!({
         "model": model,
         "messages": [
@@ -220,7 +245,7 @@ pub(crate) async fn ollama_chat(model: &str, system: &str, user: &str) -> Result
 /// in the same order. Falls back to /api/embeddings (older, single-input)
 /// if the newer endpoint returns 404 — keeps us compatible with older
 /// Ollama installs without a version probe.
-pub(crate) async fn ollama_embed(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+pub(crate) async fn embed(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
     if texts.is_empty() {
         return Ok(Vec::new());
     }
@@ -284,24 +309,15 @@ pub(crate) async fn ollama_embed(model: &str, texts: &[String]) -> Result<Vec<Ve
     ))
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct EmbeddingModelCheck {
-    installed: bool,
-    model: String,
-}
-
 /// Probe whether the configured embedding model is pulled. Used by the UI
 /// to show a helpful "ollama pull nomic-embed-text" hint before the user
 /// tries to attach a large file. The check is just `/api/show` — if Ollama
 /// returns 200 the model exists; 404 means not pulled; anything else (e.g.
 /// connection refused) is treated as "unknown" → installed: false.
-#[tauri::command]
-pub(crate) async fn embedding_model_check(
-    app: tauri::AppHandle,
-) -> Result<EmbeddingModelCheck, String> {
-    let model = crate::attachments::config::current_embedding_model(&app);
-    let body = serde_json::json!({ "model": &model });
+/// Adapter impl behind the neutral `llm_embed_model_check` command (llm.rs
+/// resolves the configured model name and builds the response struct).
+pub(crate) async fn embed_model_installed(model: &str) -> bool {
+    let body = serde_json::json!({ "model": model });
     // UI feedback probe — override the shared client's generous default to
     // 3s. reqwest applies min(client_timeout, request_timeout), so this
     // short-circuits when Ollama isn't responding instead of stalling the
@@ -312,8 +328,7 @@ pub(crate) async fn embedding_model_check(
         .json(&body)
         .send()
         .await;
-    let installed = matches!(r, Ok(ref resp) if resp.status().is_success());
-    Ok(EmbeddingModelCheck { installed, model })
+    matches!(r, Ok(ref resp) if resp.status().is_success())
 }
 
 // ── UI-facing proxies for Ollama HTTP endpoints (Phase B.1) ────────────────
@@ -341,8 +356,8 @@ pub(crate) async fn embedding_model_check(
 /// `serde_json::Value` so the UI can keep accessing `.models` the same
 /// way it did when this was a `fetch().json()` call. 3-second per-request
 /// timeout matches the previous `AbortSignal.timeout(3000)`.
-#[tauri::command]
-pub(crate) async fn ollama_tags() -> Result<serde_json::Value, String> {
+/// Adapter impl behind the neutral `llm_list_models` command (llm.rs).
+pub(crate) async fn list_models() -> Result<serde_json::Value, String> {
     let resp = ollama_client()
         .get(ollama_url("/api/tags"))
         .timeout(Duration::from_secs(3))
@@ -361,8 +376,8 @@ pub(crate) async fn ollama_tags() -> Result<serde_json::Value, String> {
 /// the previous UI behaviour; this endpoint is called from the status
 /// bar's polling loop, so a tighter ceiling keeps the UI responsive when
 /// Ollama is unreachable.
-#[tauri::command]
-pub(crate) async fn ollama_ps() -> Result<serde_json::Value, String> {
+/// Adapter impl behind the neutral `llm_loaded_models` command (llm.rs).
+pub(crate) async fn loaded_models() -> Result<serde_json::Value, String> {
     let resp = ollama_client()
         .get(ollama_url("/api/ps"))
         .timeout(Duration::from_secs(2))
@@ -383,8 +398,8 @@ pub(crate) async fn ollama_ps() -> Result<serde_json::Value, String> {
 /// payload without a Rust change. Response body is intentionally
 /// discarded; the caller only cares that the request reached Ollama
 /// (which forces the model into RAM as a side effect).
-#[tauri::command]
-pub(crate) async fn ollama_generate(body: serde_json::Value) -> Result<(), String> {
+/// Adapter impl behind the neutral `llm_warmup` command (llm.rs).
+pub(crate) async fn warmup(body: serde_json::Value) -> Result<(), String> {
     let resp = ollama_client()
         .post(ollama_url("/api/generate"))
         .json(&body)
@@ -419,83 +434,116 @@ pub(crate) async fn ollama_generate(body: serde_json::Value) -> Result<(), Strin
 // between two emitted tokens). For a more aggressive interrupt we'd need
 // `tokio::select!` against a Notify — overkill for B.2 v1.
 
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-
-static CHAT_CANCELS: OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>,
-> = OnceLock::new();
-
-fn chat_cancel_registry(
-) -> &'static std::sync::Mutex<std::collections::HashMap<String, Arc<AtomicBool>>> {
-    CHAT_CANCELS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+/// Normalizer for Ollama's chat-stream chunks → the neutral
+/// [`crate::llm::StreamEvent`] contract. This is where the adapter absorbs
+/// every Ollama quirk so the UI never sees them:
+///
+///   - `message.tool_calls` may arrive on any chunk but in practice only on
+///     the `done: true` chunk. We ACCUMULATE across chunks and emit ONE
+///     `toolCalls` event right before `done` — post-stream reads were
+///     already the documented contract (never stream tool_calls
+///     progressively), now it's structural.
+///   - `function.arguments` arrives as an object OR a JSON-encoded string
+///     depending on the model. Normalized to always-an-object;
+///     unparseable strings become `{}` (the tool executor's existing
+///     defensive default).
+///   - In-band errors (`{"error": "…"}`, HTTP 200) become an `error`
+///     event.
+///   - `prompt_eval_count` / `eval_count` map to promptTokens /
+///     outputTokens on `done`, defaulting to 0 when absent.
+pub(crate) struct StreamNorm {
+    tool_calls: Vec<serde_json::Value>,
 }
 
-/// RAII guard for a registered chat-cancel slot. Holding this keeps the
-/// flag's Arc alive in the registry. Drop removes the entry — runs on
-/// normal return, early-break, AND panic-unwind, so the map can't leak.
-/// Mirrors the `CancelToken` in attachments/cancel.rs.
-struct ChatCancelToken {
-    id: String,
-    flag: Arc<AtomicBool>,
-}
-
-impl Drop for ChatCancelToken {
-    fn drop(&mut self) {
-        if let Ok(mut m) = chat_cancel_registry().lock() {
-            m.remove(&self.id);
+impl StreamNorm {
+    pub(crate) fn new() -> Self {
+        Self {
+            tool_calls: Vec::new(),
         }
     }
-}
 
-fn register_chat_cancel(id: &str) -> ChatCancelToken {
-    let flag = Arc::new(AtomicBool::new(false));
-    if let Ok(mut m) = chat_cancel_registry().lock() {
-        m.insert(id.to_string(), flag.clone());
-    }
-    ChatCancelToken {
-        id: id.to_string(),
-        flag,
-    }
-}
-
-/// Flip the cancel flag for `request_id`. The running stream picks it up
-/// at the next chunk boundary and exits cleanly, the Tauri command
-/// returns Ok, and the JS-side `invoke` promise resolves. Safe to call
-/// when no stream is registered — the lookup just no-ops.
-#[tauri::command]
-pub(crate) fn ollama_chat_stream_cancel(request_id: String) {
-    if let Ok(m) = chat_cancel_registry().lock() {
-        if let Some(flag) = m.get(&request_id) {
-            flag.store(true, Ordering::Relaxed);
+    pub(crate) fn ingest(&mut self, raw: &serde_json::Value) -> Vec<crate::llm::StreamEvent> {
+        use crate::llm::StreamEvent as E;
+        let mut out = Vec::new();
+        if let Some(msg) = raw.get("error").and_then(|v| v.as_str()) {
+            out.push(E::Error {
+                message: msg.to_string(),
+            });
+            return out;
         }
+        if let Some(text) = raw.pointer("/message/content").and_then(|v| v.as_str()) {
+            if !text.is_empty() {
+                out.push(E::Delta {
+                    text: text.to_string(),
+                });
+            }
+        }
+        if let Some(calls) = raw
+            .pointer("/message/tool_calls")
+            .and_then(|v| v.as_array())
+        {
+            for c in calls {
+                self.tool_calls.push(normalize_tool_call(c));
+            }
+        }
+        if raw.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if !self.tool_calls.is_empty() {
+                out.push(E::ToolCalls {
+                    calls: std::mem::take(&mut self.tool_calls),
+                });
+            }
+            out.push(E::Done {
+                prompt_tokens: raw
+                    .get("prompt_eval_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                output_tokens: raw.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0),
+            });
+        }
+        out
     }
+}
+
+/// Coerce one tool call's `function.arguments` to always-an-object.
+fn normalize_tool_call(call: &serde_json::Value) -> serde_json::Value {
+    let mut c = call.clone();
+    let normalized = match c.pointer("/function/arguments") {
+        Some(serde_json::Value::String(s)) => serde_json::from_str::<serde_json::Value>(s)
+            .ok()
+            .filter(|v| v.is_object())
+            .unwrap_or_else(|| serde_json::json!({})),
+        Some(v) if v.is_object() => return c,
+        _ => serde_json::json!({}),
+    };
+    if let Some(f) = c.get_mut("function") {
+        f["arguments"] = normalized;
+    }
+    c
 }
 
 /// Stream `/api/chat`'s NDJSON response to the JS caller via a Tauri
-/// Channel.
+/// Channel, normalized to the neutral [`crate::llm::StreamEvent`] shape.
+/// Adapter impl behind the neutral `llm_chat_stream` command (llm.rs).
 ///
 /// `request_id` is the UI's logical identifier for this stream — typically
 /// the assistant message id. The UI uses the same id to cancel via
-/// `ollama_chat_stream_cancel`.
+/// `llm_chat_stream_cancel`.
 ///
 /// `body` is forwarded verbatim to Ollama. We don't validate it because
 /// the UI assembles different shapes (tools array present or absent, image
 /// attachments, etc.) and any breaking change to that shape would be a
-/// UI-side bug regardless of what Rust does.
+/// UI-side bug regardless of what Rust does. (Neutralizing the REQUEST
+/// shape is Phase 1 scope — the OpenAI-compat adapter will translate.)
 ///
-/// `on_chunk` receives one parsed `serde_json::Value` per complete NDJSON
-/// line. The final chunk carries `done: true` plus token counts. If JS
-/// drops the channel (window closes, user navigates away), `on_chunk.send`
-/// returns Err on the next chunk and we treat it as a graceful cancel.
-#[tauri::command]
-pub(crate) async fn ollama_chat_stream(
+/// If JS drops the channel (window closes, user navigates away),
+/// `on_chunk.send` returns Err on the next event and we treat it as a
+/// graceful cancel.
+pub(crate) async fn chat_stream(
     request_id: String,
     body: serde_json::Value,
-    on_chunk: tauri::ipc::Channel<serde_json::Value>,
+    on_chunk: tauri::ipc::Channel<crate::llm::StreamEvent>,
 ) -> Result<(), String> {
-    let token = register_chat_cancel(&request_id);
+    let token = crate::providers::register_cancel(&request_id);
     let cancel = token.flag.clone();
 
     let mut resp = ollama_client()
@@ -508,6 +556,7 @@ pub(crate) async fn ollama_chat_stream(
         return Err(format!("Ollama /api/chat returned {}", resp.status()));
     }
 
+    let mut norm = StreamNorm::new();
     let mut buf: Vec<u8> = Vec::new();
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -541,12 +590,14 @@ pub(crate) async fn ollama_chat_stream(
             }
             match serde_json::from_str::<serde_json::Value>(s) {
                 Ok(obj) => {
-                    // Channel send failure = JS handle dropped (user
-                    // closed the window or component unmounted). Treat
-                    // as cancellation — return Ok so the caller sees a
-                    // clean resolution rather than an error.
-                    if on_chunk.send(obj).is_err() {
-                        return Ok(());
+                    for ev in norm.ingest(&obj) {
+                        // Channel send failure = JS handle dropped (user
+                        // closed the window or component unmounted). Treat
+                        // as cancellation — return Ok so the caller sees a
+                        // clean resolution rather than an error.
+                        if on_chunk.send(ev).is_err() {
+                            return Ok(());
+                        }
                     }
                 }
                 Err(_) => continue, // malformed line, keep going
@@ -562,7 +613,9 @@ pub(crate) async fn ollama_chat_stream(
             let s = s.trim();
             if !s.is_empty() {
                 if let Ok(obj) = serde_json::from_str::<serde_json::Value>(s) {
-                    let _ = on_chunk.send(obj);
+                    for ev in norm.ingest(&obj) {
+                        let _ = on_chunk.send(ev);
+                    }
                 }
             }
         }
@@ -612,7 +665,7 @@ pub(crate) async fn ollama_pull(
     model: String,
     on_progress: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<(), String> {
-    let token = register_chat_cancel(&request_id);
+    let token = crate::providers::register_cancel(&request_id);
     let cancel = token.flag.clone();
 
     let mut resp = ollama_client()
@@ -696,7 +749,7 @@ pub(crate) async fn ollama_pull(
 /// collide with chat message ids. No-op for unknown ids.
 #[tauri::command]
 pub(crate) fn ollama_pull_cancel(request_id: String) {
-    ollama_chat_stream_cancel(request_id);
+    crate::providers::cancel(&request_id);
 }
 
 /// Remove a pulled model from Ollama's local store via DELETE /api/delete.
@@ -879,60 +932,202 @@ mod tests {
         assert_eq!(OLLAMA_ADDR, "127.0.0.1:11434");
     }
 
-    /// Same intent for the URL builder.
+    /// Same intent for the URL builder — plus the Phase 0 settings
+    /// override behaviour. Default, override, and reset assertions live in
+    /// ONE test because the override is a process-global: splitting them
+    /// across tests would race under cargo's parallel test runner.
     #[test]
-    fn ollama_url_concatenates_base_and_path() {
+    fn ollama_url_default_override_and_reset() {
         assert_eq!(ollama_url("/api/tags"), "http://127.0.0.1:11434/api/tags");
         assert_eq!(ollama_url(""), "http://127.0.0.1:11434");
+
+        // Override honored; trailing slash + whitespace normalized.
+        set_base_url_override(Some("  http://192.168.1.50:11434/  ".to_string()));
+        assert_eq!(
+            ollama_url("/api/tags"),
+            "http://192.168.1.50:11434/api/tags"
+        );
+
+        // Empty/whitespace values normalize to "no override".
+        set_base_url_override(Some("   ".to_string()));
+        assert_eq!(ollama_url("/api/tags"), "http://127.0.0.1:11434/api/tags");
+
+        // Explicit reset returns to the IPv4 default.
+        set_base_url_override(Some("http://10.0.0.9:8080".to_string()));
+        set_base_url_override(None);
+        assert_eq!(ollama_url("/api/tags"), "http://127.0.0.1:11434/api/tags");
+    }
+
+    // ── StreamNorm golden tests: raw Ollama NDJSON → neutral events ────────
+
+    use crate::llm::StreamEvent as E;
+
+    fn ingest_all(lines: &[&str]) -> Vec<E> {
+        let mut norm = StreamNorm::new();
+        lines
+            .iter()
+            .flat_map(|l| norm.ingest(&serde_json::from_str(l).unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn norm_content_chunks_become_deltas_and_done_carries_counts() {
+        let evs = ingest_all(&[
+            r#"{"message":{"role":"assistant","content":"Hel"},"done":false}"#,
+            r#"{"message":{"role":"assistant","content":"lo"},"done":false}"#,
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":12,"eval_count":34}"#,
+        ]);
+        assert_eq!(
+            evs,
+            vec![
+                E::Delta { text: "Hel".into() },
+                E::Delta { text: "lo".into() },
+                E::Done {
+                    prompt_tokens: 12,
+                    output_tokens: 34
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn norm_missing_counts_default_to_zero() {
+        let evs = ingest_all(&[r#"{"message":{"content":""},"done":true}"#]);
+        assert_eq!(
+            evs,
+            vec![E::Done {
+                prompt_tokens: 0,
+                output_tokens: 0
+            }]
+        );
+    }
+
+    #[test]
+    fn norm_tool_calls_in_done_chunk_emit_once_before_done() {
+        // The documented Ollama shape: tool_calls arrive ON the done chunk.
+        let evs = ingest_all(&[
+            r#"{"message":{"content":"thinking"},"done":false}"#,
+            r#"{"message":{"content":"","tool_calls":[{"function":{"name":"write_file","arguments":{"path":"a.txt","contents":"x"}}}]},"done":true,"eval_count":5}"#,
+        ]);
+        assert_eq!(evs.len(), 3);
+        assert_eq!(
+            evs[0],
+            E::Delta {
+                text: "thinking".into()
+            }
+        );
+        match &evs[1] {
+            E::ToolCalls { calls } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0]["function"]["arguments"]["path"], "a.txt");
+            }
+            other => panic!("expected toolCalls, got {other:?}"),
+        }
+        assert_eq!(
+            evs[2],
+            E::Done {
+                prompt_tokens: 0,
+                output_tokens: 5
+            }
+        );
+    }
+
+    #[test]
+    fn norm_tool_calls_accumulate_across_chunks_and_emit_at_done() {
+        // Defensive: if a model DOES stream calls early, they still arrive
+        // as one toolCalls event at done — never progressively.
+        let evs = ingest_all(&[
+            r#"{"message":{"content":"","tool_calls":[{"function":{"name":"write_file","arguments":{"path":"1"}}}]},"done":false}"#,
+            r#"{"message":{"content":"","tool_calls":[{"function":{"name":"write_file","arguments":{"path":"2"}}}]},"done":true}"#,
+        ]);
+        assert_eq!(evs.len(), 2, "one toolCalls + one done, no early emit");
+        match &evs[0] {
+            E::ToolCalls { calls } => {
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0]["function"]["arguments"]["path"], "1");
+                assert_eq!(calls[1]["function"]["arguments"]["path"], "2");
+            }
+            other => panic!("expected toolCalls, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn norm_string_args_parse_to_object_and_garbage_becomes_empty() {
+        // The object-or-JSON-string quirk is absorbed HERE — JS never sees
+        // a string-typed arguments field again.
+        let evs = ingest_all(&[r#"{"message":{"content":"","tool_calls":[
+                {"function":{"name":"write_file","arguments":"{\"path\":\"x.md\",\"contents\":\"hi\"}"}},
+                {"function":{"name":"write_file","arguments":"not json"}},
+                {"function":{"name":"write_file"}}
+            ]},"done":true}"#]);
+        match &evs[0] {
+            E::ToolCalls { calls } => {
+                assert_eq!(calls[0]["function"]["arguments"]["path"], "x.md");
+                assert!(calls[1]["function"]["arguments"].is_object());
+                assert_eq!(calls[1]["function"]["arguments"], serde_json::json!({}));
+                assert_eq!(calls[2]["function"]["arguments"], serde_json::json!({}));
+            }
+            other => panic!("expected toolCalls, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn norm_error_chunk_becomes_error_event() {
+        let evs = ingest_all(&[r#"{"error":"model 'nope' not found"}"#]);
+        assert_eq!(
+            evs,
+            vec![E::Error {
+                message: "model 'nope' not found".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn norm_empty_content_and_thinking_fields_emit_nothing() {
+        // Reasoning models stream a `thinking` field we don't render;
+        // empty content chunks must not produce empty deltas.
+        let evs =
+            ingest_all(&[r#"{"message":{"content":"","thinking":"step 1..."},"done":false}"#]);
+        assert!(evs.is_empty());
+    }
+
+    #[test]
+    fn stream_event_wire_shape_is_stable() {
+        // The UI's consumeChunk switches on these exact strings — pin them.
+        assert_eq!(
+            serde_json::to_value(E::Delta { text: "x".into() }).unwrap(),
+            serde_json::json!({"type":"delta","text":"x"})
+        );
+        assert_eq!(
+            serde_json::to_value(E::Done {
+                prompt_tokens: 1,
+                output_tokens: 2
+            })
+            .unwrap(),
+            serde_json::json!({"type":"done","promptTokens":1,"outputTokens":2})
+        );
+        assert_eq!(
+            serde_json::to_value(E::Error {
+                message: "m".into()
+            })
+            .unwrap(),
+            serde_json::json!({"type":"error","message":"m"})
+        );
+        let tc = serde_json::to_value(E::ToolCalls { calls: vec![] }).unwrap();
+        assert_eq!(tc["type"], "toolCalls");
     }
 
     /// Cancel registry happy path: register inserts an entry whose
     /// flag is initially false; explicit cancel flips the flag to
     /// true and removes the entry.
-    #[test]
-    fn chat_cancel_registry_register_and_cancel() {
-        let id = "test-cancel-happy";
-        let token = register_chat_cancel(id);
-        assert!(!token.flag.load(Ordering::Relaxed));
-        // Registry entry exists while the token is alive.
-        {
-            let m = chat_cancel_registry().lock().unwrap();
-            assert!(m.contains_key(id));
-        }
-        // Explicit cancel flips the shared flag.
-        ollama_chat_stream_cancel(id.to_string());
-        assert!(token.flag.load(Ordering::Relaxed));
-        // Drop cleanup happens at end of scope below.
-        drop(token);
-    }
 
     /// Cancel registry drop semantics: the registry slot is removed
     /// when the token is dropped (normal scope exit). The Arc<AtomicBool>
     /// the spawned task may still hold via clone() is independent — it
     /// just stops being reachable through the registry.
-    #[test]
-    fn chat_cancel_registry_drop_removes_entry() {
-        let id = "test-cancel-drop";
-        {
-            let _token = register_chat_cancel(id);
-            let m = chat_cancel_registry().lock().unwrap();
-            assert!(m.contains_key(id));
-        }
-        // _token dropped — registry entry should be gone.
-        let m = chat_cancel_registry().lock().unwrap();
-        assert!(!m.contains_key(id));
-    }
 
     /// `ollama_chat_stream_cancel` is safe to call for an unknown id —
     /// no panic, no error. Matches the attachments cancel registry's
-    /// "lookup misses are silent" contract.
-    #[test]
-    fn chat_cancel_unknown_id_is_no_op() {
-        // No panic, no side effect we can observe (since there's no
-        // registered entry). Just call it.
-        ollama_chat_stream_cancel("never-registered".to_string());
-    }
-
     /// /api/pull body must carry BOTH `model` (current Ollama) and `name`
     /// (older builds) plus `stream: true`. Sending both keys is the
     /// version-compatibility hedge — if someone "cleans up" the duplicate
@@ -943,27 +1138,5 @@ mod tests {
         assert_eq!(body["model"], "gemma4:e4b");
         assert_eq!(body["name"], "gemma4:e4b");
         assert_eq!(body["stream"], true);
-    }
-
-    /// Pull ids share the chat-cancel registry but are namespaced
-    /// (`pull:<model>:<nonce>`), so a pull cancel must not touch a chat
-    /// stream's flag and vice versa.
-    #[test]
-    fn pull_and_chat_cancel_ids_are_independent() {
-        let chat = register_chat_cancel("msg-abc");
-        let pull = register_chat_cancel("pull:gemma4:e4b:x1");
-
-        ollama_pull_cancel("pull:gemma4:e4b:x1".to_string());
-        assert!(pull.flag.load(Ordering::Relaxed), "pull flag should flip");
-        assert!(
-            !chat.flag.load(Ordering::Relaxed),
-            "chat flag must be untouched by a pull cancel"
-        );
-
-        drop(pull);
-        // Dropping the pull token must not remove the chat entry.
-        let m = chat_cancel_registry().lock().unwrap();
-        assert!(m.contains_key("msg-abc"));
-        assert!(!m.contains_key("pull:gemma4:e4b:x1"));
     }
 }

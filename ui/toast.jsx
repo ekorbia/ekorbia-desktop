@@ -5,6 +5,7 @@
 // already on screen (e.g. the exported file lands on disk before the toast
 // even appears). `error` is long so the user has time to read the message
 // before it auto-dismisses; the X dismiss is always available regardless.
+'use strict';
 const TOAST_DURATION_MS = { success: 4000, info: 6000, warn: 9000, error: 15000 };
 
 function ToastHost() {

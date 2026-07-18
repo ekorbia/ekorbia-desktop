@@ -19,6 +19,7 @@
 // scope (not inside ChatPane) so its identity is stable across renders —
 // per CLAUDE.md, components-inside-render-functions cause focus loss /
 // re-mount churn. Trivial styling so the menu reads as a quiet OS list.
+'use strict';
 function ExportMenuItem({ label, onClick }) {
   const [hover, setHover] = useState(false);
   return (

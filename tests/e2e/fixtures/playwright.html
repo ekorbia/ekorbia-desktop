@@ -130,26 +130,29 @@
 <script src="/ui/vendor/highlight.min.js"></script>
 <script src="/ui/vendor/purify.min.js"></script>
 
-<!-- ─── Production code under test, in the same order as /ui/index.html ─ -->
+<!-- ─── Production code under test, in the same order as /ui/index.html ─
+     data-presets="react" mirrors production (JSX-only transpile, real
+     const/let/TDZ semantics) — keep in sync with the tag block and the
+     explanatory comment in ui/index.html. -->
 <script src="/ui/utils.js"></script>
-<script type="text/babel" src="/ui/tweaks-panel.jsx"></script>
-<script type="text/babel" src="/ui/data.jsx"></script>
-<script type="text/babel" src="/ui/icons.jsx"></script>
-<script type="text/babel" src="/ui/tokens.jsx"></script>
-<script type="text/babel" src="/ui/atoms.jsx"></script>
-<script type="text/babel" src="/ui/shell.jsx"></script>
-<script type="text/babel" src="/ui/markdown.jsx"></script>
-<script type="text/babel" src="/ui/chat.jsx"></script>
-<script type="text/babel" src="/ui/compare-chat.jsx"></script>
-<script type="text/babel" src="/ui/overlays.jsx"></script>
-<script type="text/babel" src="/ui/model-manager.jsx"></script>
-<script type="text/babel" src="/ui/voice.jsx"></script>
-<script type="text/babel" src="/ui/prompts-library.jsx"></script>
-<script type="text/babel" src="/ui/watch.jsx"></script>
-<script type="text/babel" src="/ui/files.jsx"></script>
-<script type="text/babel" src="/ui/settings.jsx"></script>
-<script type="text/babel" src="/ui/onboarding.jsx"></script>
-<script type="text/babel" src="/ui/toast.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/tweaks-panel.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/data.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/icons.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/tokens.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/atoms.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/shell.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/markdown.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/chat.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/compare-chat.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/overlays.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/model-manager.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/voice.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/prompts-library.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/watch.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/files.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/settings.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/onboarding.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/toast.jsx"></script>
 
 <!-- ─── Readiness flag.
      Babel-standalone processes text/babel scripts in order, asynchronously.
@@ -157,7 +160,7 @@
      page.waitForFunction(() => window.__JSX_READY) gates every test on
      "all components are on window". This is the equivalent of an
      end-of-stream signal — much more reliable than waiting for `load`. -->
-<script type="text/babel">
+<script type="text/babel" data-presets="react">
   window.__JSX_READY = true;
 </script>
 </body>

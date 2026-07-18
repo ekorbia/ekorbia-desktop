@@ -1,5 +1,6 @@
 // icons.jsx — minimal stroke-icon set, Zed-style 16x16
 
+'use strict';
 const Icon = ({ d, size = 14, stroke = 'currentColor', sw = 1.5, fill = 'none', style = {} }) => (
   <svg width={size} height={size} viewBox="0 0 16 16" fill={fill} stroke={stroke} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, ...style }}>
     {typeof d === 'string' ? <path d={d} /> : d}

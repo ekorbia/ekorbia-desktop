@@ -56,9 +56,9 @@
     // consumed `data.models` etc. doesn't change). Defaults keep mounts
     // silent on tests that don't care about Ollama state; tests that
     // assert on tags/ps behaviour override via __INVOKE_RESPONSES.
-    ollama_tags: () => ({ models: [] }),
-    ollama_ps: () => ({ models: [] }),
-    ollama_generate: () => undefined,
+    llm_list_models: () => ({ models: [] }),
+    llm_loaded_models: () => ({ models: [] }),
+    llm_warmup: () => undefined,
     // Model manager (in-app pull/delete). The default ollama_pull resolves
     // immediately without delivering progress chunks — tests that exercise
     // the progress path override it and drive the Channel via
@@ -68,7 +68,7 @@
     ollama_delete: () => undefined,
     // Capability probe (vision / tools / thinking). Default to a plain
     // model with no special capabilities; tests that care override it.
-    model_capabilities: () => ({ vision: false, tools: false, thinking: false }),
+    llm_capabilities: () => ({ vision: false, tools: false, thinking: false }),
     // System profile for the guided first-run flow. Default: a 16 GiB
     // Apple Silicon Mac; tests override totalRamBytes to exercise tiers.
     system_profile: () => ({ totalRamBytes: 17179869184, platform: "macos", arch: "aarch64" }),
@@ -104,6 +104,12 @@
     voice_record_stop: () => ({ text: "", captured: false, audioSecs: 0 }),
     voice_record_cancel: () => undefined,
     voice_prewarm: () => undefined,
+
+    // Backend config (no-Ollama plan, Phase 1). Defaults = stock Ollama;
+    // specs override to exercise the custom-endpoint states.
+    llm_backend_config_get: () => ({ backend: "ollama", baseUrl: null, apiKey: null }),
+    llm_backend_config_set: () => undefined,
+    llm_backend_test: () => ({ ok: false, models: 0, error: "not mocked" }),
   };
 
   const invoke = function (cmd, args) {

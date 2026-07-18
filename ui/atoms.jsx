@@ -3,6 +3,7 @@
 // Depends on: tokens.jsx (T), icons.jsx (I.*).
 
 // ─── Tiny atoms ─────────────────────────────────────────────
+'use strict';
 function TrafficLights({ onRed, onYellow }) {
   const dot = (bg, key, click) => (
     <button

@@ -59,7 +59,7 @@ test("WatchModal pre-fills from a Downloads recipe template", async ({ page }) =
 
 test("WatchModal model field is an install-aware picker, not gemma4:latest", async ({ page }) => {
   await page.evaluate(() => {
-    window.__INVOKE_RESPONSES.ollama_tags = () => ({
+    window.__INVOKE_RESPONSES.llm_list_models = () => ({
       models: [{ name: "llama3.2:3b" }, { name: "qwen3.5:9b" }],
     });
     window.__TEST_MOUNT("WatchModal", {

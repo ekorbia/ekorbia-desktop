@@ -6,6 +6,7 @@
 // Window is configured with titleBarStyle: "Overlay" + hiddenTitle: true —
 // macOS draws native traffic lights overlaying our toolbar's top-left. We
 // leave an ~88px gutter for them so the Sidebar button has breathing room.
+'use strict';
 const TRAFFIC_LIGHT_GUTTER = 88;
 
 function TitleBar({
@@ -1580,10 +1581,10 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
         const [prompts, attaches, tags] = await Promise.all([
           invoke("space_prompts_list", { spaceId: space.id }),
           invoke("space_attachments_list", { spaceId: space.id }),
-          // ollama_tags can throw on IPC failure (Ollama down) — wrap
+          // llm_list_models can throw on IPC failure (Ollama down) — wrap
           // separately so it doesn't take down the prompt/attachment
           // loads with it. Treats absence as "no models available."
-          invoke("ollama_tags").catch(() => null),
+          invoke("llm_list_models").catch(() => null),
         ]);
         if (cancelled) return;
         const slugList = (prompts || []).map((p) => p.promptSlug).filter(Boolean);
@@ -1891,7 +1892,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
           </div>
 
           {/* ── 2. Default model ──
-              Native <select> populated from `ollama_tags` (installed
+              Native <select> populated from `llm_list_models` (installed
               local models). Falls back gracefully when Ollama is down
               or the fetch failed — the dropdown still renders with
               "Inherit global default" + the currently-saved value (if
@@ -3607,6 +3608,17 @@ function RightPanelTabs({ tab, onTab, onClose }) {
 }
 function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) {
   const [ollamaUp, setOllamaUp] = useState(false);
+  // Active backend kind ('ollama' | 'openai') — drives the down-state
+  // label and whether clicking the pill opens the OllamaGate (never on a
+  // BYO endpoint; the gate's start/install flow doesn't apply there).
+  const [backendKind, setBackendKind] = useState("ollama");
+  useEffect(() => {
+    const inv = getInvoke();
+    if (!inv) return;
+    inv("llm_backend_config_get")
+      .then((c) => setBackendKind(c?.backend || "ollama"))
+      .catch(() => {});
+  }, []);
   const [pulled, setPulled] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -3632,11 +3644,11 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
         return;
       }
       // Two Rust-side proxies (Phase B.1) — see ollama.rs. An IPC throw
-      // from `ollama_tags` is the canonical "Ollama unreachable" signal
+      // from `llm_list_models` is the canonical "Ollama unreachable" signal
       // now; we don't need a separate `.ok` check the way the old
       // fetch path did.
       try {
-        const tagsData = await invoke('ollama_tags');
+        const tagsData = await invoke('llm_list_models');
         if (cancelled) return;
         setOllamaUp(true);
         setPulled((tagsData.models || []).some((m) => matchesModel(m.name)));
@@ -3650,7 +3662,7 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
       }
       try {
         // /api/ps is the only honest source for "loaded into memory".
-        const psData = await invoke('ollama_ps');
+        const psData = await invoke('llm_loaded_models');
         if (cancelled) return;
         setLoaded((psData.models || []).some((m) => matchesModel(m.name)));
       } catch {
@@ -3670,14 +3682,15 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
     };
   }, [model.id, warming]);
 
+  const byo = backendKind === "openai";
   let dotColor, label, dim;
   if (!ollamaUp) {
     dotColor = T.fg3;
-    label = "ollama not running";
+    label = byo ? "endpoint unreachable — check Settings → Backend" : "ollama not running";
     dim = true;
   } else if (!pulled) {
     dotColor = T.amber;
-    label = `${model.name} not pulled`;
+    label = byo ? `${model.name} not on the endpoint` : `${model.name} not pulled`;
     dim = true;
   } else if (warming) {
     // `warming` MUST be checked before `loaded`: /api/ps flips to loaded
@@ -3718,7 +3731,7 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) 
       }}
     >
       <span
-        onClick={!ollamaUp ? onOllamaClick : undefined}
+        onClick={!ollamaUp && !byo ? onOllamaClick : undefined}
         style={{
           display: "inline-flex",
           alignItems: "center",

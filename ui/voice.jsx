@@ -17,6 +17,7 @@
 // Curated English models (Phase 1). `approx` is the download size, shown to
 // set expectations. base.en is the recommended default — the Phase 0 spike
 // measured ~150 ms for 11 s of audio on an M1 Max with near-perfect accuracy.
+'use strict';
 const VOICE_MODELS = [
   // English-only — smaller + a touch faster; they ignore language/translate.
   {

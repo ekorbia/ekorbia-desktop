@@ -15,6 +15,7 @@
 // amber and blue respectively. Existing prompts that still reference
 // 'yellow' or 'teal' silently fall back to "no favorite" on load
 // (FAVORITE_COLORS.find → undefined → null), no migration needed.
+'use strict';
 const FAVORITE_COLORS = [
   { id: 'amber',  color: '#f0934a' },
   { id: 'blue',   color: '#5fb0ff' },

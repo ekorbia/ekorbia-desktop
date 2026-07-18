@@ -14,8 +14,8 @@ use crate::attachments::types::{
     SMALL_TEXT_THRESHOLD,
 };
 use crate::db::DbState;
+use crate::llm::embed as llm_embed;
 use crate::log::log_warn;
-use crate::ollama::ollama_embed;
 use crate::text_extract::extract_text_from_file;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -404,7 +404,7 @@ pub(crate) async fn index_attachment(
     // 4. Embed all chunks in one batched call.
     let texts: Vec<String> = chunks.iter().map(|(_, _, s)| s.clone()).collect();
     let embed_model = current_embedding_model(&app);
-    let embeddings = match ollama_embed(&embed_model, &texts).await {
+    let embeddings = match llm_embed(&embed_model, &texts).await {
         Ok(v) => v,
         Err(e) => {
             check_cancelled!();
@@ -525,7 +525,7 @@ pub(crate) async fn retrieve_chunks(
     // Embed the query and precompute its squared norm. The norm goes into
     // every cosine call below; computing it once here saves N×D float ops
     // across the loop.
-    let q_embed = match ollama_embed(&embed_model, &[query.to_string()]).await {
+    let q_embed = match llm_embed(&embed_model, &[query.to_string()]).await {
         Ok(mut v) => v.pop().ok_or("Empty query embedding")?,
         Err(e) => return Err(e),
     };

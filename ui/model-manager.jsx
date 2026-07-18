@@ -25,6 +25,7 @@
 // is a no-op returning the existing promise) — this also sidesteps the
 // cancel-registry id-collision hazard documented in ollama.rs.
 
+'use strict';
 const EK_ACTIVE_PULLS = new Map();
 const EK_PULL_LISTENERS = new Set();
 const EK_PULL_PROMISES = new Map(); // model -> in-flight promise
@@ -167,10 +168,23 @@ function ModelManagerPanel({ activeModel }) {
   const [, setPullTick] = useState(0);
   const prevPullingRef = useRef(new Set());
   const invoke = getInvoke();
+  // BYO backend (Settings -> Backend -> custom endpoint): pull/delete are
+  // Ollama-lifecycle operations, meaningless against an OpenAI-compatible
+  // server -- the endpoint owns its model store. Hide those affordances
+  // and show a hint instead (the installed list still works: it reads
+  // llm_list_models, which the adapter maps from /v1/models).
+  const [byoBackend, setByoBackend] = useState(false);
+  useEffect(() => {
+    if (!invoke) return;
+    invoke("llm_backend_config_get")
+      .then((c) => setByoBackend(c?.backend === "openai"))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
+  }, []);
 
   const refreshModels = () => {
     if (!invoke) { setModels([]); setLoadError("Ollama not running"); return; }
-    invoke("ollama_tags")
+    invoke("llm_list_models")
       .then((data) => {
         const sorted = (data.models || []).slice().sort((a, b) =>
           (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }),
@@ -315,6 +329,7 @@ function ModelManagerPanel({ activeModel }) {
                 </div>
               )}
             </div>
+            {!byoBackend && (
             <button
               onClick={() => setConfirmDelete(m.name)}
               title={`Delete ${m.name} from Ollama`}
@@ -328,6 +343,7 @@ function ModelManagerPanel({ activeModel }) {
             >
               Delete
             </button>
+            )}
           </div>
         );
       })}
@@ -376,7 +392,22 @@ function ModelManagerPanel({ activeModel }) {
         </div>
       ))}
 
-      {sectionLabel("Download a model")}
+      {byoBackend && (
+        <div
+          data-byo-hint
+          style={{
+            fontFamily: T.sans, fontSize: 11, color: T.fg3,
+            lineHeight: 1.5, marginTop: 10,
+          }}
+        >
+          Models are managed by your endpoint server (LM Studio,
+          llama-server, ...). Load or download models there; this list
+          mirrors what it reports at /v1/models.
+        </div>
+      )}
+      {!byoBackend && sectionLabel("Download a model")}
+      {!byoBackend && (
+      <>
       <div style={{ display: "flex", gap: 6, padding: "0 2px" }}>
         <input
           value={pullInput}
@@ -417,7 +448,10 @@ function ModelManagerPanel({ activeModel }) {
         Browse the full library at ollama.com/library
       </div>
 
-      {suggestions.length > 0 && (
+      </>
+      )}
+
+      {!byoBackend && suggestions.length > 0 && (
         <>
           {sectionLabel("Suggestions")}
           {suggestions.map((c) => (

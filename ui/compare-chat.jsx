@@ -23,6 +23,7 @@
 // Don't add ES `import`/`export` — Babel-standalone, no bundler. Top-
 // level `function` declarations land on `window` (see CLAUDE.md).
 
+'use strict';
 function CompareChatPane({
   chat,
   isStreaming,
@@ -56,10 +57,10 @@ function CompareChatPane({
   React.useEffect(() => {
     if (!models.length) return;
     let cancelled = false;
-    // Rust-side `ollama_tags` (Phase B.1 proxy) — see ollama.rs.
+    // Rust-side `llm_list_models` (Phase B.1 proxy) — see ollama.rs.
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('ollama_tags')
+    invoke('llm_list_models')
       .then((data) => {
         if (cancelled) return;
         const installed = new Set(

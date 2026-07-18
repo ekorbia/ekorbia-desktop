@@ -4,6 +4,7 @@
 // when its window's label is "overlay". The same trick keeps main.jsx
 // from rendering <App /> here (see the bottom of main.jsx).
 
+'use strict';
 const { useState: qS, useEffect: qE, useRef: qR } = React;
 
 // Fallback model for the very first overlay open, before we've validated
@@ -96,7 +97,7 @@ function QuickQuery() {
   qE(() => {
     const inv = getInvoke();
     if (!inv) return;
-    inv("ollama_tags")
+    inv("llm_list_models")
       .then((data) => {
         const names = (data?.models || []).map((m) => m.name);
         if (!names.length || names.includes(modelId)) return;
@@ -185,8 +186,8 @@ function QuickQuery() {
     if (picker !== "model") return;
     setAvailableModels(null);
     setModelsError(null);
-    // Rust-side `ollama_tags` (Phase B.1 proxy) — see ollama.rs for why.
-    invoke('ollama_tags')
+    // Rust-side `llm_list_models` (Phase B.1 proxy) — see ollama.rs for why.
+    invoke('llm_list_models')
       .then((data) => setAvailableModels(data.models || []))
       .catch(() => {
         setAvailableModels([]);
@@ -201,7 +202,7 @@ function QuickQuery() {
     // exits cleanly. We fire-and-forget; whether the cancel reaches
     // an active stream or no-ops on a finished one is fine.
     if (abortRef.current) {
-      invoke('ollama_chat_stream_cancel', { requestId: abortRef.current })
+      invoke('llm_chat_stream_cancel', { requestId: abortRef.current })
         .catch(() => {});
     }
     abortRef.current = null;
@@ -426,7 +427,7 @@ function QuickQuery() {
     // The `text` value is captured in this closure for the messages array
     // below — clearing the state doesn't affect what gets sent.
     setText("");
-    // Phase B.2: cancellation now goes through ollama_chat_stream_cancel.
+    // Phase B.2: cancellation now goes through llm_chat_stream_cancel.
     // abortRef holds the requestId (the overlay reuses a single id since
     // it only ever has one in-flight stream — a submit while another
     // streams is gated by the `streaming` state above).
@@ -444,17 +445,24 @@ function QuickQuery() {
     try {
       const Channel = getChannel();
       const channel = new Channel();
-      channel.onmessage = (obj) => {
-        if (obj?.message?.content) {
-          acc += obj.message.content;
+      // Neutral stream contract (Phase 0 provider seam — StreamEvent in
+      // src-tauri/src/llm.rs). The overlay renders prose only; toolCalls
+      // never occur here (no tools field in the body) and error events
+      // fall through to the existing no-output messaging below.
+      let inBandError = null;
+      channel.onmessage = (ev) => {
+        if (ev?.type === 'delta') {
+          acc += ev.text;
           setResponse(acc);
+        } else if (ev?.type === 'error') {
+          inBandError = ev.message || 'The model server reported an error.';
         }
       };
       // Gate thinking off for reasoning models (cached per model).
       let thinkCapable = thinkCapRef.current[modelId];
       if (thinkCapable === undefined) {
         try {
-          const caps = await invoke('model_capabilities', { model: modelId });
+          const caps = await invoke('llm_capabilities', { model: modelId });
           thinkCapable = !!caps?.thinking;
         } catch (_) {
           thinkCapable = false;
@@ -462,11 +470,16 @@ function QuickQuery() {
         thinkCapRef.current[modelId] = thinkCapable;
       }
       const body = applyThinkPref({ model: modelId, messages, stream: true }, thinkCapable);
-      await invoke('ollama_chat_stream', {
+      await invoke('llm_chat_stream', {
         requestId,
         body,
         onChunk: channel,
       });
+      // In-band provider error with no output (Phase 1 polish): the
+      // invoke resolves Ok, so the catch below never sees it.
+      if (!acc && inBandError) {
+        setResponse(`⚠️ ${inBandError}`);
+      }
     } catch (e) {
       // Rust returns Err for connection-refused / non-2xx / parse errors.
       // A user-cancelled stream returns Ok by design, so reaching here with

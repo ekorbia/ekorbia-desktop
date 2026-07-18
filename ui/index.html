@@ -379,38 +379,47 @@
      for node:test). -->
 <script src="utils.js"></script>
 
-<script type="text/babel" src="tweaks-panel.jsx"></script>
-<script type="text/babel" src="data.jsx"></script>
-<script type="text/babel" src="icons.jsx"></script>
+<!-- data-presets="react" = JSX-only transpile. Without the attribute,
+     Babel-standalone defaults to ["react","env"], and untargeted env
+     downlevels const/let to var — which is what turned forward-reference
+     bugs into silent `undefined` reads instead of loud TDZ ReferenceErrors
+     (see the CLAUDE.md gotcha). The WebKit floor (macOS 11 / Safari 14)
+     runs the un-lowered syntax natively. EVERY text/babel tag needs the
+     attribute — a tag without it silently reverts that file to var
+     semantics. Keep in sync with tests/e2e/fixtures/playwright.html,
+     which mirrors these tags. -->
+<script type="text/babel" data-presets="react" src="tweaks-panel.jsx"></script>
+<script type="text/babel" data-presets="react" src="data.jsx"></script>
+<script type="text/babel" data-presets="react" src="icons.jsx"></script>
 <!-- Domain-split UI scripts. components.jsx (the old ~6.6k-line monolith) was
      split into these nine files in May 2026; each script registers its
      functions on the global scope, so cross-file references work as long as
      every script has run before main.jsx mounts the React tree. -->
-<script type="text/babel" src="tokens.jsx"></script>
-<script type="text/babel" src="atoms.jsx"></script>
-<script type="text/babel" src="shell.jsx"></script>
+<script type="text/babel" data-presets="react" src="tokens.jsx"></script>
+<script type="text/babel" data-presets="react" src="atoms.jsx"></script>
+<script type="text/babel" data-presets="react" src="shell.jsx"></script>
 <!-- markdown.jsx must load before chat.jsx so MarkdownMessage is on
      window when chat.jsx's Message component references it. -->
-<script type="text/babel" src="markdown.jsx"></script>
-<script type="text/babel" src="chat.jsx"></script>
+<script type="text/babel" data-presets="react" src="markdown.jsx"></script>
+<script type="text/babel" data-presets="react" src="chat.jsx"></script>
 <!-- compare-chat.jsx defines CompareChatPane (multi-model comparison panel).
      Must load after chat.jsx (shares the Composer / Message render style)
      and before main.jsx, which references the component when routing a
      tabType='multi-pending' tab. -->
-<script type="text/babel" src="compare-chat.jsx"></script>
-<script type="text/babel" src="overlays.jsx"></script>
-<script type="text/babel" src="model-manager.jsx"></script>
-<script type="text/babel" src="voice.jsx"></script>
-<script type="text/babel" src="prompts-library.jsx"></script>
-<script type="text/babel" src="watch.jsx"></script>
-<script type="text/babel" src="files.jsx"></script>
-<script type="text/babel" src="settings.jsx"></script>
+<script type="text/babel" data-presets="react" src="compare-chat.jsx"></script>
+<script type="text/babel" data-presets="react" src="overlays.jsx"></script>
+<script type="text/babel" data-presets="react" src="model-manager.jsx"></script>
+<script type="text/babel" data-presets="react" src="voice.jsx"></script>
+<script type="text/babel" data-presets="react" src="prompts-library.jsx"></script>
+<script type="text/babel" data-presets="react" src="watch.jsx"></script>
+<script type="text/babel" data-presets="react" src="files.jsx"></script>
+<script type="text/babel" data-presets="react" src="settings.jsx"></script>
 <!-- onboarding.jsx references HOTKEY_LS_KEY / SCREENSHOT_HOTKEY_LS_KEY +
      formatHotkey from settings.jsx, so it must load after it. main.jsx
      uses <OnboardingTour /> in its render, so it must load before main. -->
-<script type="text/babel" src="onboarding.jsx"></script>
-<script type="text/babel" src="toast.jsx"></script>
-<script type="text/babel" src="main.jsx"></script>
-<script type="text/babel" src="overlay.jsx"></script>
+<script type="text/babel" data-presets="react" src="onboarding.jsx"></script>
+<script type="text/babel" data-presets="react" src="toast.jsx"></script>
+<script type="text/babel" data-presets="react" src="main.jsx"></script>
+<script type="text/babel" data-presets="react" src="overlay.jsx"></script>
 </body>
 </html>

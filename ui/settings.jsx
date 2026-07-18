@@ -12,6 +12,7 @@
 // Alt+Space — the convention used by PowerToys Run / Raycast Windows /
 // ChatGPT Desktop. macOS and Linux keep Cmd/Super+Shift+Space; on Linux
 // the Settings row is hidden anyway (overlay deferred to Phase L2).
+'use strict';
 const HOTKEY_DEFAULT = IS_WIN ? "Alt+Space" : "Super+Shift+Space";
 const HOTKEY_LS_KEY = "ekorbia.overlay.hotkey";
 // Second slot: screenshot capture hotkey (Phase 5). Default
@@ -162,11 +163,11 @@ function AttachmentsSettings() {
   const refreshPulledModels = async () => {
     if (!invoke) return;
     try {
-      // Routed through Rust `ollama_tags` (see ollama.rs for the
+      // Routed through Rust `llm_list_models` (see ollama.rs for the
       // WebView2 PNA story). 3s timeout enforced Rust-side; an IPC
       // error here just leaves the dropdown empty — the user can fall
       // back to custom-input mode if needed.
-      const data = await invoke("ollama_tags");
+      const data = await invoke("llm_list_models");
       const names = (data.models || [])
         .map((m) => m.name)
         .filter(isEmbeddingModelName)
@@ -181,7 +182,7 @@ function AttachmentsSettings() {
   const recheckModel = async () => {
     if (!invoke) return;
     try {
-      const r = await invoke("embedding_model_check");
+      const r = await invoke("llm_embed_model_check");
       setModelStatus(r);
     } catch {
       setModelStatus(null);
@@ -986,6 +987,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
           {[
             { id: "general", label: "General" },
             { id: "models", label: "Models" },
+            { id: "backend", label: "Backend" },
             // Voice input is macOS-only (the Whisper backend is macOS-gated).
             ...(IS_MAC ? [{ id: "voice", label: "Voice" }] : []),
             { id: "prompts", label: "Prompts" },
@@ -1358,6 +1360,14 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
             />
           )}
 
+          {/* ── Backend tab (no-Ollama plan, Phase 1 / L1) ────────── */}
+          {activeTab === "backend" && (
+            <>
+              <SectionLabel label="Inference backend" />
+              <BackendSettings />
+            </>
+          )}
+
           {/* ── Voice tab ─────────────────────────────────────────── */}
           {activeTab === "voice" && (
             <>
@@ -1419,5 +1429,221 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
       onCancel={() => { if (!clearBusy) setClearConfirmOpen(false); }}
     />
     </>
+  );
+}
+
+// ── Backend settings (no-Ollama plan, Phase 1 / L1) ─────────────────────────
+// Chooses which engine serves LLM traffic: Ollama (default) or any
+// OpenAI-compatible server (LM Studio, llama-server, vLLM, …). Saving
+// applies live via llm_backend_config_set — the next send uses the new
+// backend, no relaunch. "Test connection" validates the CANDIDATE URL/key
+// via /v1/models before anything is saved, so a typo can't strand the app
+// on a dead endpoint.
+function BackendSettings() {
+  const invoke = getInvoke();
+  const [backendKind, setBackendKind] = useState("ollama");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [testState, setTestState] = useState(null); // null | 'testing' | {ok, models, error}
+  const [saveState, setSaveState] = useState(null); // null | 'saved' | error string
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    invoke("llm_backend_config_get")
+      .then((c) => {
+        if (c) {
+          setBackendKind(c.backend || "ollama");
+          setBaseUrl(c.baseUrl || "");
+          setApiKey(c.apiKey || "");
+        }
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
+  }, []);
+
+  const save = async () => {
+    setSaveState(null);
+    try {
+      await invoke("llm_backend_config_set", {
+        backendKind,
+        baseUrl: baseUrl.trim() || null,
+        apiKey: apiKey.trim() || null,
+      });
+      setSaveState("saved");
+      setTimeout(() => setSaveState(null), 2500);
+    } catch (e) {
+      setSaveState(String(e));
+    }
+  };
+
+  const test = async () => {
+    setTestState("testing");
+    try {
+      const r = await invoke("llm_backend_test", {
+        baseUrl,
+        apiKey: apiKey.trim() || null,
+      });
+      setTestState(r || { ok: false, models: 0, error: "no response" });
+    } catch (e) {
+      setTestState({ ok: false, models: 0, error: String(e) });
+    }
+  };
+
+  const optionCard = (id, title, blurb) => {
+    const selected = backendKind === id;
+    return (
+      <button
+        data-backend-option={id}
+        onClick={() => setBackendKind(id)}
+        style={{
+          flex: 1,
+          textAlign: "left",
+          background: selected ? T.bg2 : "transparent",
+          border: `1px solid ${selected ? "var(--ek-accent)" : T.border}`,
+          borderRadius: 8,
+          padding: "10px 12px",
+          cursor: "pointer",
+          display: "flex",
+          flexDirection: "column",
+          gap: 3,
+        }}
+      >
+        <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.fg }}>
+          {title}
+        </span>
+        <span style={{ fontFamily: T.sans, fontSize: 11, color: T.fg2, lineHeight: 1.45 }}>
+          {blurb}
+        </span>
+      </button>
+    );
+  };
+
+  const inputStyle = {
+    width: "100%",
+    background: T.bg1,
+    color: T.fg,
+    border: `1px solid ${T.border}`,
+    borderRadius: 7,
+    padding: "7px 10px",
+    fontFamily: T.mono,
+    fontSize: 12,
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", gap: 8 }}>
+        {optionCard(
+          "ollama",
+          "Ollama (default)",
+          "The local engine Ekorbia manages for you — model downloads, warm-up, and capability detection all built in.",
+        )}
+        {optionCard(
+          "openai",
+          "Custom endpoint",
+          "Any OpenAI-compatible server: LM Studio, llama-server, vLLM… Ekorbia talks to its /v1 API.",
+        )}
+      </div>
+
+      {backendKind === "openai" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <label style={{ fontFamily: T.sans, fontSize: 11.5, color: T.fg2 }}>
+            Base URL
+          </label>
+          <input
+            data-backend-url
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="http://127.0.0.1:1234"
+            spellCheck={false}
+            style={inputStyle}
+          />
+          <label style={{ fontFamily: T.sans, fontSize: 11.5, color: T.fg2 }}>
+            API key (optional)
+          </label>
+          <input
+            data-backend-key
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="Only if your server requires one"
+            style={inputStyle}
+          />
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button
+              data-backend-test
+              onClick={test}
+              disabled={testState === "testing"}
+              style={{
+                background: T.bg2,
+                color: T.fg,
+                border: `1px solid ${T.border}`,
+                borderRadius: 7,
+                padding: "6px 12px",
+                fontFamily: T.sans,
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              {testState === "testing" ? "Testing…" : "Test connection"}
+            </button>
+            {testState && testState !== "testing" && (
+              <span
+                data-backend-test-result
+                style={{
+                  fontFamily: T.mono,
+                  fontSize: 11,
+                  color: testState.ok ? T.green : T.red,
+                }}
+              >
+                {testState.ok
+                  ? `✓ Reachable — ${testState.models} model${testState.models === 1 ? "" : "s"}`
+                  : `✗ ${testState.error || "Unreachable"}`}
+              </span>
+            )}
+          </div>
+          <div style={{ fontFamily: T.sans, fontSize: 10.5, color: T.fg3, lineHeight: 1.5 }}>
+            The model picker lists whatever your server reports at /v1/models.
+            In-app model downloads and deletes are managed by your server, so
+            they're hidden on this backend — and capability badges use
+            optimistic defaults (tools on, vision off), since there's no
+            portable way to probe them.
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button
+          data-backend-save
+          onClick={save}
+          className="ek-btn-primary"
+          style={{
+            background: "var(--ek-accent)",
+            color: "var(--ek-accent-ink)",
+            border: "none",
+            borderRadius: 7,
+            padding: "7px 16px",
+            fontFamily: T.sans,
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          Save
+        </button>
+        {saveState === "saved" && (
+          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.green }}>
+            ✓ Applied — takes effect on the next message
+          </span>
+        )}
+        {saveState && saveState !== "saved" && (
+          <span data-backend-save-error style={{ fontFamily: T.mono, fontSize: 11, color: T.red }}>
+            {saveState}
+          </span>
+        )}
+      </div>
+    </div>
   );
 }

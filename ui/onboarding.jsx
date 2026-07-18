@@ -26,6 +26,7 @@
 // effect can reference it without depending on the inline `slides` array
 // (which is rebuilt every render with JSX inside, blowing up effect deps
 // and forcing a re-binding on every prop change).
+'use strict';
 const ONBOARDING_SLIDE_COUNT = 5;
 
 // Rules-of-Hooks reminder: every hook in this component MUST be called
