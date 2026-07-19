@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "gemma4-e2b",
+      "label": "Gemma 4 E2B",
+      "blurb": "Google's efficient small model \u2014 snappy on any Apple-Silicon Mac. Official QAT 4-bit build with vision.",
+      "purpose": "chat",
+      "minRamGb": 8,
+      "caps": {
+        "vision": true,
+        "tools": true
+      },
+      "license": "apache-2.0",
+      "source": "google/gemma-4-E2B-it-qat-q4_0-gguf",
+      "files": [
+        {
+          "url": "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf",
+          "sha256": "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634",
+          "bytes": 3349516256,
+          "dest": "gemma4-e2b.gguf"
+        },
+        {
+          "url": "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B-it-mmproj.gguf",
+          "sha256": "021059cce659fe7f9170d5599761d7bbaf644b798dab9503aca30dc43e6beb14",
+          "bytes": 986833664,
+          "dest": "gemma4-e2b.mmproj.gguf"
+        }
+      ]
+    },
+    {
+      "id": "gemma4-e4b",
+      "label": "Gemma 4 E4B",
+      "blurb": "The sweet spot for 8\u201316 GB Macs \u2014 noticeably stronger than E2B, still fast. Official QAT 4-bit build with vision.",
+      "purpose": "chat",
+      "minRamGb": 8,
+      "caps": {
+        "vision": true,
+        "tools": true
+      },
+      "license": "apache-2.0",
+      "source": "google/gemma-4-E4B-it-qat-q4_0-gguf",
+      "files": [
+        {
+          "url": "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf",
+          "sha256": "676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee",
+          "bytes": 5154941280,
+          "dest": "gemma4-e4b.gguf"
+        },
+        {
+          "url": "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B-it-mmproj.gguf",
+          "sha256": "7498a37cb619e55f2fcf87eb931f56e99389ed6d432e4c5c66110694c0d65578",
+          "bytes": 991552256,
+          "dest": "gemma4-e4b.mmproj.gguf"
+        }
+      ]
+    },
+    {
+      "id": "gemma4-12b",
+      "label": "Gemma 4 12B",
+      "blurb": "The recommended daily driver on 16 GB+ \u2014 strong reasoning, writing, and vision. Official QAT 4-bit build.",
+      "purpose": "chat",
+      "recommended": true,
+      "minRamGb": 16,
+      "caps": {
+        "vision": true,
+        "tools": true
+      },
+      "license": "apache-2.0",
+      "source": "google/gemma-4-12B-it-qat-q4_0-gguf",
+      "files": [
+        {
+          "url": "https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf/resolve/main/gemma-4-12b-it-qat-q4_0.gguf",
+          "sha256": "93567e57a8fe10b23569b9d9ec38cd005deedf71e29477c421a4b83f418a538b",
+          "bytes": 6975879296,
+          "dest": "gemma4-12b.gguf"
+        },
+        {
+          "url": "https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf/resolve/main/mmproj-gemma-4-12b-it-qat-q4_0.gguf",
+          "sha256": "cb018338a7538a9814d994bfe54644c71eb7ed54e31eae2f721e45fd3c260da7",
+          "bytes": 175115616,
+          "dest": "gemma4-12b.mmproj.gguf"
+        }
+      ]
+    },
+    {
+      "id": "gemma4-26b-a4b",
+      "label": "Gemma 4 26B (A4B)",
+      "blurb": "The power option for 32 GB+ Macs \u2014 a mixture-of-experts model with 26B knowledge at 4B speed. 4-bit build with vision.",
+      "purpose": "chat",
+      "minRamGb": 32,
+      "caps": {
+        "vision": true,
+        "tools": true
+      },
+      "license": "apache-2.0",
+      "source": "ggml-org/gemma-4-26B-A4B-it-GGUF",
+      "files": [
+        {
+          "url": "https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-Q4_0.gguf",
+          "sha256": "d208665ab1cd3a69f7a9a4bc59430e8448c8093d9b06334f566ac59d6d504a03",
+          "bytes": 14618145824,
+          "dest": "gemma4-26b-a4b.gguf"
+        },
+        {
+          "url": "https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF/resolve/main/mmproj-gemma-4-26B-A4B-it-Q8_0.gguf",
+          "sha256": "cc4e855736da450bf1e162d8cccfe0ad685727d0c9e04ef7dd8d884f3121039b",
+          "bytes": 806408320,
+          "dest": "gemma4-26b-a4b.mmproj.gguf"
+        }
+      ]
+    },
+    {
+      "id": "nomic-embed-text",
+      "label": "Nomic Embed Text v1.5",
+      "blurb": "The embedding model that powers attachments, folder chat, and watch search. Small, fast, required for RAG.",
+      "purpose": "embed",
+      "minRamGb": 8,
+      "caps": {
+        "vision": false,
+        "tools": false
+      },
+      "license": "apache-2.0",
+      "source": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+      "files": [
+        {
+          "url": "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.f16.gguf",
+          "sha256": "f7af6f66802f4df86eda10fe9bbcfc75c39562bed48ef6ace719a251cf1c2fdb",
+          "bytes": 274290560,
+          "dest": "nomic-embed-text.gguf"
+        }
+      ]
+    }
+  ]
+}

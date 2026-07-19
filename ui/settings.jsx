@@ -1557,7 +1557,7 @@ function BackendSettings() {
         {optionCard(
           "engine",
           "Bundled engine",
-          "Ekorbia runs llama.cpp itself — no Ollama, no separate install. Drop .gguf model files in the models folder and go.",
+          "Ekorbia runs llama.cpp itself — no Ollama, no separate install. Download models from the built-in catalog and go.",
         )}
         {optionCard(
           "openai",

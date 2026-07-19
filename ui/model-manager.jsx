@@ -41,22 +41,35 @@ function ekPullsSubscribe(fn) {
   return () => EK_PULL_LISTENERS.delete(fn);
 }
 
-// Start pulling `model`. Resolves { ok, error }: ok=true when Ollama
+// Start pulling `model`. Resolves { ok, error }: ok=true when the backend
 // reports {"status":"success"}; ok=false on error, cancel, or early stream
-// end, with `error` carrying the reason (Ollama's HTTP/in-band message) for
+// end, with `error` carrying the reason (the HTTP/in-band message) for
 // callers that want to surface it. opts.silent suppresses the
 // completion/error toasts (the guided first-run renders its own status).
+//
+// Backend flavors (Phase 3): the ENGINE catalog downloader emits the same
+// Ollama-pull-shaped progress chunks (that's a deliberate wire contract —
+// see engine/downloads.rs), so the whole store/progress path is shared and
+// only the invoke names differ:
+//   opts.engine    — `model` is a catalog id → engine_download
+//   opts.customUrl — best-effort custom GGUF → engine_download_custom
 async function ekPullModel(model, opts) {
   const silent = !!(opts && opts.silent);
+  const engine = !!(opts && opts.engine);
+  const customUrl = (opts && opts.customUrl) || null;
   const invoke = getInvoke();
   model = (model || "").trim();
-  if (!invoke || !model) return { ok: false, error: "Ollama is not available" };
+  if (!invoke || !model) return { ok: false, error: "The model backend is not available" };
   if (EK_PULL_PROMISES.has(model)) return EK_PULL_PROMISES.get(model);
 
-  const requestId = `pull:${model}:${genId()}`;
+  // `dl:` namespace for engine downloads, `pull:` for Ollama — same
+  // shared cancel registry on the Rust side, no id collisions.
+  const isEngineFlavor = engine || !!customUrl;
+  const requestId = `${isEngineFlavor ? "dl" : "pull"}:${model}:${genId()}`;
   const seed = accumulatePullProgress(null, null);
   seed.model = model;
   seed.requestId = requestId;
+  seed.cancelCmd = isEngineFlavor ? "engine_download_cancel" : "ollama_pull_cancel";
   EK_ACTIVE_PULLS.set(model, seed);
   ekPullsNotify();
 
@@ -69,6 +82,7 @@ async function ekPullModel(model, opts) {
       const next = accumulatePullProgress(cur, chunk);
       next.model = model;
       next.requestId = cur.requestId;
+      next.cancelCmd = cur.cancelCmd;
       EK_ACTIVE_PULLS.set(model, next);
       ekPullsNotify();
     };
@@ -76,7 +90,18 @@ async function ekPullModel(model, opts) {
 
   const run = (async () => {
     try {
-      await invoke("ollama_pull", { requestId, model, onProgress: ch });
+      if (customUrl) {
+        await invoke("engine_download_custom", {
+          url: customUrl,
+          name: model,
+          requestId,
+          onProgress: ch,
+        });
+      } else if (engine) {
+        await invoke("engine_download", { modelId: model, requestId, onProgress: ch });
+      } else {
+        await invoke("ollama_pull", { requestId, model, onProgress: ch });
+      }
       const last = EK_ACTIVE_PULLS.get(model);
       if (last && last.error) {
         if (!silent) {
@@ -124,9 +149,11 @@ function ekCancelPull(model) {
   const cur = EK_ACTIVE_PULLS.get(model);
   const invoke = getInvoke();
   if (!cur || !invoke) return;
-  // Rust flips the cancel flag; ollama_pull resolves Ok and the finally
-  // block above cleans the store. Fire-and-forget by design.
-  invoke("ollama_pull_cancel", { requestId: cur.requestId }).catch(() => {});
+  // Rust flips the cancel flag; the download command resolves Ok and the
+  // finally block above cleans the store. Fire-and-forget by design.
+  // Engine downloads keep their .partial on cancel (resume support) —
+  // the flavor is routed via the cancelCmd the seed recorded.
+  invoke(cur.cancelCmd || "ollama_pull_cancel", { requestId: cur.requestId }).catch(() => {});
 }
 
 // Window-accessible progress accessor. EK_ACTIVE_PULLS is a module-scope
@@ -181,6 +208,25 @@ function ModelManagerPanel({ activeModel }) {
   const engineBackend = backendKind === "engine";
   // engine_status snapshot for the engine hint (models folder path).
   const [engineInfo, setEngineInfo] = useState(null);
+  // Engine catalog (Phase 3): baked-in curated list + per-model install
+  // state. null = not fetched. Refreshed when a download finishes (via
+  // the pull-store subscription below) and after deletes.
+  const [engineCatalog, setEngineCatalog] = useState(null);
+  // Machine RAM (GB) for the catalog's fit badges.
+  const [ramGb, setRamGb] = useState(null);
+  // Custom-GGUF download row state.
+  const [customUrl, setCustomUrl] = useState("");
+  const [customName, setCustomName] = useState("");
+  const refreshCatalog = () => {
+    if (!invoke) return;
+    invoke("engine_catalog")
+      .then((c) => setEngineCatalog(c?.models || []))
+      .catch(() => setEngineCatalog([]));
+  };
+  // The pull-finish subscription effect below is mount-scoped; give it a
+  // ref so it can trigger catalog refreshes without re-subscribing.
+  const refreshCatalogRef = useRef(() => {});
+  refreshCatalogRef.current = engineBackend ? refreshCatalog : () => {};
   useEffect(() => {
     if (!invoke) return;
     invoke("llm_backend_config_get")
@@ -193,6 +239,13 @@ function ModelManagerPanel({ activeModel }) {
     invoke("engine_status")
       .then((s) => setEngineInfo(s || null))
       .catch(() => setEngineInfo(null));
+    refreshCatalog();
+    invoke("system_profile")
+      .then((p) => {
+        const b = p?.totalRamBytes;
+        if (b) setRamGb(Math.round(b / 1073741824));
+      })
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps -- kind-gated
   }, [engineBackend]);
 
@@ -231,7 +284,10 @@ function ModelManagerPanel({ activeModel }) {
       prev.forEach((m) => { if (!now.has(m)) someoneFinished = true; });
       prevPullingRef.current = now;
       setPullTick((t) => t + 1);
-      if (someoneFinished) refreshModels();
+      if (someoneFinished) {
+        refreshModels();
+        refreshCatalogRef.current(); // engine: flip catalog rows to Installed
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -248,15 +304,31 @@ function ModelManagerPanel({ activeModel }) {
     if (!model) return;
     setDeleteBusy(true);
     try {
-      await invoke("ollama_delete", { model });
+      if (engineBackend) {
+        // Engine models are files; Rust unloads a resident (idle) model
+        // first and refuses while it's actively streaming.
+        await invoke("engine_model_delete", { name: model });
+      } else {
+        await invoke("ollama_delete", { model });
+      }
       window.ekToast?.({ kind: "success", title: `${model} deleted` });
       refreshModels();
+      refreshCatalogRef.current();
     } catch (e) {
       window.ekToast?.({ kind: "error", title: `Could not delete ${model}`, body: String(e) });
     } finally {
       setDeleteBusy(false);
       setConfirmDelete(null);
     }
+  };
+
+  const startCustomDownload = () => {
+    const url = customUrl.trim();
+    const name = customName.trim();
+    if (!url || !name) return;
+    setCustomUrl("");
+    setCustomName("");
+    ekPullModel(name, { customUrl: url });
   };
 
   const installed = models || [];
@@ -349,10 +421,10 @@ function ModelManagerPanel({ activeModel }) {
                 </div>
               )}
             </div>
-            {!byoBackend && !engineBackend && (
+            {!byoBackend && (
             <button
               onClick={() => setConfirmDelete(m.name)}
-              title={`Delete ${m.name} from Ollama`}
+              title={engineBackend ? `Delete ${m.name} from the models folder` : `Delete ${m.name} from Ollama`}
               style={{
                 padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
                 background: "transparent", color: T.fg3, fontFamily: T.sans,
@@ -425,20 +497,163 @@ function ModelManagerPanel({ activeModel }) {
           mirrors what it reports at /v1/models.
         </div>
       )}
+      {engineBackend && engineCatalog !== null && (
+        <>
+          {sectionLabel("Model catalog")}
+          {engineCatalog.map((c) => {
+            const pull = EK_ACTIVE_PULLS.get(c.id);
+            const lowRam = ramGb !== null && ramGb < c.minRamGb;
+            return (
+              <div
+                key={c.id}
+                data-catalog-model={c.id}
+                style={{
+                  display: "grid", gridTemplateColumns: "1fr auto", gap: 8,
+                  alignItems: "center", padding: "6px 8px", borderRadius: 4,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
+                    <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500 }}>
+                      {c.label}
+                    </span>
+                    <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+                      {formatBytes(c.totalBytes)}
+                    </span>
+                    {c.recommended && (
+                      <span
+                        style={{
+                          fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                          background: T.bg2, color: "var(--ek-accent)",
+                          border: "1px solid var(--ek-accent)",
+                          textTransform: "uppercase", letterSpacing: 0.4,
+                        }}
+                      >
+                        recommended
+                      </span>
+                    )}
+                    {c.purpose === "embed" && (
+                      <span
+                        style={{
+                          fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                          background: T.blue + "26", color: T.blue,
+                          textTransform: "uppercase", letterSpacing: 0.4,
+                        }}
+                      >
+                        embeddings
+                      </span>
+                    )}
+                    {lowRam && (
+                      <span
+                        data-catalog-ram-warning
+                        style={{
+                          fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                          background: T.amber + "26", color: T.amber,
+                          textTransform: "uppercase", letterSpacing: 0.4,
+                        }}
+                        title={`This model wants ${c.minRamGb} GB of RAM; this Mac has ${ramGb} GB.`}
+                      >
+                        needs {c.minRamGb} GB RAM
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontFamily: T.sans, fontSize: 11.5, color: T.fg2, marginTop: 1 }}>
+                    {c.blurb}
+                  </div>
+                </div>
+                {c.installed ? (
+                  <span
+                    data-catalog-installed
+                    style={{ fontFamily: T.mono, fontSize: 10.5, color: T.green, whiteSpace: "nowrap" }}
+                  >
+                    ✓ installed
+                  </span>
+                ) : pull ? (
+                  <button
+                    onClick={() => ekCancelPull(c.id)}
+                    style={{
+                      padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
+                      background: "transparent", color: T.fg3, fontFamily: T.sans,
+                      fontSize: 11.5, cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                ) : (
+                  <button
+                    data-catalog-download={c.id}
+                    onClick={() => ekPullModel(c.id, { engine: true })}
+                    style={{
+                      padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
+                      background: "transparent", color: T.fg2, fontFamily: T.sans,
+                      fontSize: 11.5, cursor: "pointer",
+                    }}
+                  >
+                    Download
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+
       {engineBackend && (
         <div
           data-engine-hint
           style={{
             fontFamily: T.sans, fontSize: 11, color: T.fg3,
             lineHeight: 1.5, marginTop: 10,
-            display: "flex", flexDirection: "column", gap: 6,
+            display: "flex", flexDirection: "column", gap: 8,
           }}
         >
           <span>
-            The bundled engine runs .gguf model files from Ekorbia's
-            models folder — drop a file in and it appears here. Add a
-            matching <span style={{ fontFamily: T.mono }}>name.mmproj.gguf</span> to
-            enable vision for a model.
+            Downloads land in Ekorbia's models folder — you can also drop
+            any .gguf file in yourself (add a matching{" "}
+            <span style={{ fontFamily: T.mono }}>name.mmproj.gguf</span> to
+            enable vision). Custom models are best-effort: quality depends
+            on the file's built-in chat template.
+          </span>
+          <span style={{ display: "flex", gap: 6 }}>
+            <input
+              data-custom-gguf-url
+              value={customUrl}
+              onChange={(e) => setCustomUrl(e.target.value)}
+              placeholder="https://huggingface.co/…/model.gguf"
+              spellCheck={false}
+              autoComplete="off"
+              style={{
+                flex: 2, minWidth: 0, padding: "6px 9px", borderRadius: 6,
+                border: `1px solid ${T.border}`, background: T.bg2, color: T.fg,
+                fontFamily: T.mono, fontSize: 11, outline: "none",
+              }}
+            />
+            <input
+              data-custom-gguf-name
+              value={customName}
+              onChange={(e) => setCustomName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") startCustomDownload(); }}
+              placeholder="local name"
+              spellCheck={false}
+              autoComplete="off"
+              style={{
+                flex: 1, minWidth: 0, padding: "6px 9px", borderRadius: 6,
+                border: `1px solid ${T.border}`, background: T.bg2, color: T.fg,
+                fontFamily: T.mono, fontSize: 11, outline: "none",
+              }}
+            />
+            <button
+              data-custom-gguf-download
+              onClick={startCustomDownload}
+              disabled={!customUrl.trim() || !customName.trim()}
+              style={{
+                padding: "5px 12px", borderRadius: 6, border: `1px solid ${T.border}`,
+                background: T.bg2, color: T.fg, fontFamily: T.sans,
+                fontSize: 11.5, cursor: "pointer", flexShrink: 0,
+              }}
+            >
+              Download
+            </button>
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button
@@ -555,8 +770,10 @@ function ModelManagerPanel({ activeModel }) {
         title={`Delete ${confirmDelete || ""}?`}
         body={
           confirmDelete === activeModel
-            ? `${confirmDelete} is your ACTIVE model — chats will fall back to another installed model. The download is removed from disk; you can pull it again any time.`
-            : `This removes the model from Ollama's local store. You can pull it again any time.`
+            ? `${confirmDelete} is your ACTIVE model — chats will fall back to another installed model. The download is removed from disk; you can download it again any time.`
+            : engineBackend
+              ? `This removes the model's files from Ekorbia's models folder. You can download it again from the catalog any time.`
+              : `This removes the model from Ollama's local store. You can pull it again any time.`
         }
         confirmText="Delete"
         busy={deleteBusy}

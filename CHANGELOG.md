@@ -10,8 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Bundled inference engine.** Ekorbia can now run models itself — pick
-  "Bundled engine" in Settings → Backend, drop `.gguf` files in the
-  models folder, and chat with no Ollama or other install at all.
+  "Bundled engine" in Settings → Backend and chat with no Ollama or
+  other install at all.
+- **Built-in model catalog.** The model manager downloads curated
+  Gemma 4 models (official quantization-aware builds, vision included)
+  and the RAG embedding model in-app — checksummed, resumable, no
+  terminal required.
 - **Custom inference backends.** Point Ekorbia at any OpenAI-compatible
   server (LM Studio, llama.cpp's llama-server, vLLM) in Settings →
   Backend; Ollama is now optional.

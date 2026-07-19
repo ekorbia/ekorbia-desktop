@@ -46,6 +46,7 @@
 //! projector via sibling naming: `<stem>.mmproj.gguf` (preferred) or
 //! `mmproj-<stem>.gguf`. Plain files, symlinks, and hardlinks all work.
 
+pub(crate) mod downloads;
 pub(crate) mod supervisor;
 
 use std::collections::VecDeque;

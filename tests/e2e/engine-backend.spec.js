@@ -78,38 +78,122 @@ test.describe("BackendSettings — engine card", () => {
   });
 });
 
-test.describe("ModelManagerPanel — engine view", () => {
-  test("hides pull/delete, shows folder hint + discovered ggufs", async ({ page }) => {
-    await page.evaluate(() => {
-      window.__INVOKE_RESPONSES.llm_backend_config_get = () => ({
-        backend: "engine",
-        baseUrl: null,
-        apiKey: null,
-      });
-      window.__INVOKE_RESPONSES.engine_status = () => ({
-        binaryOk: true,
-        binaryPath: "/x/llama-server",
-        binaryError: null,
-        modelsDir: "/Users/me/models",
-        modelCount: 2,
-      });
-      window.__INVOKE_RESPONSES.llm_list_models = () => ({
-        models: [
-          { name: "gemma-3-4b", model: "gemma-3-4b", size: 3200000000 },
-          { name: "nomic-embed-text", model: "nomic-embed-text", size: 270000000 },
-        ],
-      });
-      window.__TEST_MOUNT("ModelManagerPanel", { activeModel: "gemma-3-4b" });
+// Shared mocks for the engine-backend model manager (Phase 3 catalog).
+const mountEngineManager = (overrides) =>
+  `(() => {
+    window.__INVOKE_RESPONSES.llm_backend_config_get = () => ({
+      backend: "engine", baseUrl: null, apiKey: null,
     });
+    window.__INVOKE_RESPONSES.engine_status = () => ({
+      binaryOk: true, binaryPath: "/x/llama-server", binaryError: null,
+      modelsDir: "/Users/me/models", modelCount: 1,
+    });
+    window.__INVOKE_RESPONSES.system_profile = () => ({
+      totalRamBytes: 16 * 1073741824,
+    });
+    window.__INVOKE_RESPONSES.engine_catalog = () => ({
+      version: 1,
+      models: [
+        { id: "gemma4-12b", label: "Gemma 4 12B", blurb: "Daily driver",
+          purpose: "chat", recommended: true, minRamGb: 16,
+          caps: { vision: true, tools: true }, license: "apache-2.0",
+          source: "google/x", totalBytes: 7160000000, installed: false,
+          files: [] },
+        { id: "gemma4-26b-a4b", label: "Gemma 4 26B (A4B)", blurb: "Power option",
+          purpose: "chat", recommended: false, minRamGb: 32,
+          caps: { vision: true, tools: true }, license: "apache-2.0",
+          source: "ggml-org/x", totalBytes: 15430000000, installed: false,
+          files: [] },
+        { id: "nomic-embed-text", label: "Nomic Embed Text v1.5", blurb: "RAG",
+          purpose: "embed", recommended: false, minRamGb: 8,
+          caps: { vision: false, tools: false }, license: "apache-2.0",
+          source: "nomic-ai/x", totalBytes: 274000000, installed: true,
+          files: [] },
+      ],
+    });
+    window.__INVOKE_RESPONSES.llm_list_models = () => ({
+      models: [{ name: "nomic-embed-text", model: "nomic-embed-text", size: 274000000 }],
+    });
+    ${overrides || ""}
+    window.__TEST_MOUNT("ModelManagerPanel", { activeModel: "gemma4-12b" });
+  })()`;
+
+test.describe("ModelManagerPanel — engine view", () => {
+  test("hides Ollama pull box, shows folder hint + discovered ggufs", async ({ page }) => {
+    await page.evaluate(mountEngineManager());
     const root = page.locator("#test-root");
     // Discovered models render from the dir scan…
-    await expect(root).toContainText("gemma-3-4b");
     await expect(root).toContainText("nomic-embed-text");
-    // …with the engine hint + reveal instead of Ollama affordances.
+    // …with the engine hint + reveal instead of the Ollama pull box.
     await expect(page.locator("[data-engine-hint]")).toContainText("models folder");
     await expect(page.locator("[data-engine-reveal]")).toBeVisible();
     await expect(root).not.toContainText("Download a model");
-    await expect(root.locator("button", { hasText: "Delete" })).toHaveCount(0);
+    await expect(root).not.toContainText("ollama.com/library");
+  });
+
+  test("catalog renders states: download, installed, RAM warning, chips", async ({ page }) => {
+    await page.evaluate(mountEngineManager());
+    const root = page.locator("#test-root");
+    await expect(root).toContainText("Model catalog");
+    // Fits-in-RAM chat model → plain Download button, recommended chip.
+    await expect(page.locator('[data-catalog-download="gemma4-12b"]')).toBeVisible();
+    await expect(page.locator('[data-catalog-model="gemma4-12b"]')).toContainText("recommended");
+    // 32 GB model on a 16 GB machine → amber RAM warning (still downloadable).
+    const big = page.locator('[data-catalog-model="gemma4-26b-a4b"]');
+    await expect(big.locator("[data-catalog-ram-warning]")).toContainText("32 GB");
+    await expect(page.locator('[data-catalog-download="gemma4-26b-a4b"]')).toBeVisible();
+    // Installed embed model → ✓ + embeddings chip, no Download button.
+    const nomic = page.locator('[data-catalog-model="nomic-embed-text"]');
+    await expect(nomic.locator("[data-catalog-installed]")).toContainText("installed");
+    await expect(nomic).toContainText("embeddings");
+    await expect(page.locator('[data-catalog-download="nomic-embed-text"]')).toHaveCount(0);
+  });
+
+  test("catalog Download invokes engine_download with the model id", async ({ page }) => {
+    await page.evaluate(
+      mountEngineManager(`
+        window.__INVOKE_RESPONSES.engine_download = () => null;
+      `),
+    );
+    await page.locator('[data-catalog-download="gemma4-12b"]').click();
+    await page.waitForFunction(() =>
+      window.__INVOKE_FIND(
+        "engine_download",
+        (a) => a.modelId === "gemma4-12b" && /^dl:gemma4-12b:/.test(a.requestId),
+      ),
+    );
+  });
+
+  test("custom GGUF row invokes engine_download_custom", async ({ page }) => {
+    await page.evaluate(
+      mountEngineManager(`
+        window.__INVOKE_RESPONSES.engine_download_custom = () => null;
+      `),
+    );
+    await page.locator("[data-custom-gguf-url]").fill("https://huggingface.co/x/y/resolve/main/m.gguf");
+    await page.locator("[data-custom-gguf-name]").fill("my-model");
+    await page.locator("[data-custom-gguf-download]").click();
+    await page.waitForFunction(() =>
+      window.__INVOKE_FIND(
+        "engine_download_custom",
+        (a) => a.name === "my-model" && a.url.startsWith("https://huggingface.co/"),
+      ),
+    );
+  });
+
+  test("Delete on an engine model invokes engine_model_delete", async ({ page }) => {
+    await page.evaluate(
+      mountEngineManager(`
+        window.__INVOKE_RESPONSES.engine_model_delete = () => null;
+      `),
+    );
+    await page.locator("button", { hasText: "Delete" }).first().click();
+    // ConfirmDialog → engine-specific copy → confirm.
+    await expect(page.locator("#test-root")).toContainText("models folder");
+    await page.locator("button", { hasText: /^Delete$/ }).last().click();
+    await page.waitForFunction(() =>
+      window.__INVOKE_FIND("engine_model_delete", (a) => a.name === "nomic-embed-text"),
+    );
   });
 });
 

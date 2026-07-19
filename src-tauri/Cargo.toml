@@ -68,6 +68,10 @@ dirs = "5"
 #   bytemuck — zero-copy `&[f32] ↔ &[u8]` for embedding BLOB pack/unpack
 base64 = "0.22"
 bytemuck = "1"
+# Bundled-engine model downloads (engine/downloads.rs): incremental
+# sha256 of multi-GB GGUF streams against the catalog's pinned hashes.
+# Pure Rust, no system deps.
+sha2 = "0.10"
 # Watch pipeline (RSS / URL kinds — Phase 1+):
 #   feed-rs — unified parser for RSS 1.0/2.0 + Atom feeds. Smaller surface
 #             than rss + atom_syndication separately, handles both formats.

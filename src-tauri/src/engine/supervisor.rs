@@ -383,6 +383,27 @@ impl Supervisor {
         }
     }
 
+    /// Unload `model` from whichever slot holds it, refusing while it's
+    /// actively streaming. Model deletion calls this first — a GGUF is
+    /// never yanked out from under a live server process.
+    pub(crate) async fn evict_idle_model(&self, model: &str) -> Result<(), String> {
+        for kind in [SlotKind::Chat, SlotKind::Embed] {
+            let unit = self.unit(kind);
+            let mut inner = unit.guard.lock().await;
+            if inner.proc.as_ref().is_some_and(|p| p.model == model) {
+                if unit.shared.refcount() > 0 {
+                    return Err(format!(
+                        "`{model}` is answering a request right now — wait for it to finish, then delete"
+                    ));
+                }
+                if let Some(mut p) = inner.proc.take() {
+                    p.handle.shutdown().await;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Resident models (for `llm_loaded_models` / the status bar).
     /// try_lock: a slot mid-spawn just doesn't report this tick.
     pub(crate) fn snapshot(&self) -> Vec<(String, &'static str)> {

@@ -151,6 +151,11 @@ pub fn run() {
             llm::llm_backend_test,
             providers::engine::engine_status,
             providers::engine::engine_models_dir_reveal,
+            engine::downloads::engine_catalog,
+            engine::downloads::engine_download,
+            engine::downloads::engine_download_custom,
+            engine::downloads::engine_download_cancel,
+            engine::downloads::engine_model_delete,
             system::system_profile,
             // Voice commands — macOS only (see `mod voice`). generate_handler!
             // honours per-entry cfg attributes, so on Linux/Windows these are
