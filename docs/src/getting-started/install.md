@@ -1,35 +1,29 @@
 # Install Ekorbia
 
-Ekorbia is a native macOS desktop app. Before you can run it you need two things on your machine:
+Ekorbia is a native macOS desktop app that runs AI models **on your own machine** — and it comes with everything it needs to do that built in. There's nothing else to install first.
 
-1. **[Ollama](https://ollama.com)** — the local AI model runtime
-2. **A chat model** — at least one model pulled into Ollama (covered in the [next page](./pull-a-model.md))
-
-This page walks through installing Ollama and the Ekorbia app itself.
-
-## Install Ollama
-
-Download Ollama from [ollama.com](https://ollama.com) and run the installer.
-
-After it installs, Ollama runs in the background and exposes a local API on port `11434`. Ekorbia talks to it over that port — no configuration needed on your end.
-
-You can verify Ollama is running by opening your terminal and typing:
-
-```bash
-ollama --version
-```
-
-If you see a version number, you're good. If the command isn't found, restart your terminal — the installer adds Ollama to your `PATH` but only new shells pick that up.
-
-> **Ekorbia can start Ollama for you.** When you launch Ekorbia, it checks whether Ollama is already running. If it isn't, a small banner appears offering to start it. You don't have to interact with Ollama directly day-to-day.
-
-## Install Ekorbia
+## Install the app
 
 Download the latest Ekorbia DMG from the website and drag the app to your Applications folder. The first launch may show a Gatekeeper prompt — right-click the app icon and choose **Open** if macOS won't let you double-click it.
 
 <!-- TODO: screenshot of Ekorbia in /Applications -->
 
+## First launch
+
 On first launch Ekorbia runs a brief **onboarding tour** covering the hotkeys, attachments, memory file, and prompts library. You can skip it any time with `Esc`, and re-open it later from **Settings → General → Help → Show tour again**.
+
+Right after the tour, Ekorbia helps you get a model: it recommends one sized for your Mac and downloads it with a progress bar — no terminal, no separate install. See [Choose a model](./choose-a-model.md) for the details.
+
+## How Ekorbia runs models
+
+Out of the box, Ekorbia runs models itself with a **bundled engine**. You pick a model from the built-in catalog, it downloads, and you start chatting. That's the default and the easiest path — most people never need anything else.
+
+If you'd rather bring your own runtime, Ekorbia also works with two other backends, selectable under **Settings → Backend**:
+
+- **[Ollama](https://ollama.com)** — if you already use it or prefer it. Install it separately, then pick it under Settings → Backend.
+- **A custom endpoint** — any OpenAI-compatible server (LM Studio, llama.cpp's `llama-server`, vLLM, …). Point Ekorbia at its URL under Settings → Backend.
+
+See [Choosing a backend](./choose-a-model.md#choosing-a-backend) for the trade-offs.
 
 ## What gets created on your machine
 
@@ -38,9 +32,10 @@ On first run, Ekorbia creates a few things — all on your local disk, none on a
 | What | Where | Why |
 |---|---|---|
 | App data folder | macOS: `~/Library/Application Support/com.ekorbia.desktop/`<br>Linux: `~/.local/share/com.ekorbia.desktop/`<br>Windows: `%APPDATA%\com.ekorbia.desktop\` | Chats, settings, and attachment metadata |
+| Models folder | `<app data>/models/` | GGUF model files you download for the bundled engine |
 | Prompts folder | `~/Documents/Ekorbia/Prompts/` | Your prompts library (28 built-ins shipped) |
 | Memory file | `~/Documents/Ekorbia/memory.md` | Your personal context file (empty by default) |
 
-Both the prompts folder and memory file paths are configurable in **Settings**. The app data folder is fixed by each OS's convention.
+The prompts folder and memory file paths are configurable in **Settings**. The app data and models folders are fixed by each OS's convention.
 
-## Next: [Pull your first model →](./pull-a-model.md)
+## Next: [Choose a model →](./choose-a-model.md)

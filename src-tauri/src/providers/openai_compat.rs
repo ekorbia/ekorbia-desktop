@@ -244,8 +244,17 @@ struct PartialCall {
 /// skip the terminator.
 pub(crate) struct SseNorm {
     calls: std::collections::BTreeMap<u64, PartialCall>,
+    /// Fallback for build variance: some llama.cpp builds deliver a tool
+    /// call as a COMPLETE object under `choices[0].message.tool_calls`
+    /// (non-streamed) instead of incremental `delta.tool_calls` fragments.
+    /// Captured here and used ONLY when the delta path produced nothing, so
+    /// the agentic loop doesn't silently treat a tool turn as final.
+    complete_calls: Vec<Value>,
     prompt_tokens: u64,
     output_tokens: u64,
+    /// Server-measured processing time (ms) from llama-server's `timings`
+    /// (prompt-eval + generation). 0 for servers that don't report it.
+    gen_ms: u64,
     finished: bool,
 }
 
@@ -253,8 +262,10 @@ impl SseNorm {
     pub(crate) fn new() -> Self {
         Self {
             calls: std::collections::BTreeMap::new(),
+            complete_calls: Vec::new(),
             prompt_tokens: 0,
             output_tokens: 0,
+            gen_ms: 0,
             finished: false,
         }
     }
@@ -295,6 +306,18 @@ impl SseNorm {
                 }
             }
         }
+        // Build-variance fallback: a COMPLETE tool call under
+        // `message.tool_calls` (some llama.cpp builds don't stream tool
+        // calls as `delta` fragments). Stashed for finalize, which prefers
+        // the incrementally-assembled `calls` when both are present.
+        if let Some(calls) = v
+            .pointer("/choices/0/message/tool_calls")
+            .and_then(|c| c.as_array())
+        {
+            for c in calls {
+                self.complete_calls.push(c.clone());
+            }
+        }
         // Token counts: `usage` may arrive on the final content chunk OR
         // on a dedicated post-finish chunk (OpenAI semantics with
         // include_usage). llama-server reports `timings` instead.
@@ -317,6 +340,21 @@ impl SseNorm {
                     self.output_tokens = c;
                 }
             }
+            // Server-side processing time = prompt-eval + generation, both
+            // in ms. Excludes model load (not in `timings`), so it's a
+            // truthful footer number even on a cold engine spawn.
+            let prompt_ms = timings
+                .get("prompt_ms")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(0.0);
+            let predicted_ms = timings
+                .get("predicted_ms")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(0.0);
+            let total = prompt_ms + predicted_ms;
+            if total > 0.0 {
+                self.gen_ms = total.round() as u64;
+            }
         }
         out
     }
@@ -327,8 +365,8 @@ impl SseNorm {
         }
         self.finished = true;
         let mut out = Vec::new();
-        if !self.calls.is_empty() {
-            let calls: Vec<Value> = std::mem::take(&mut self.calls)
+        let calls: Vec<Value> = if !self.calls.is_empty() {
+            std::mem::take(&mut self.calls)
                 .into_values()
                 .map(|pc| {
                     // Same always-an-object guarantee as StreamNorm.
@@ -343,15 +381,54 @@ impl SseNorm {
                         "function": { "name": pc.name, "arguments": args },
                     })
                 })
-                .collect();
+                .collect()
+        } else {
+            // Delta path produced nothing — fall back to any complete
+            // `message.tool_calls` we saw (build variance). Same object /
+            // id-fallback guarantees.
+            std::mem::take(&mut self.complete_calls)
+                .into_iter()
+                .filter_map(|c| normalize_complete_call(&c))
+                .collect()
+        };
+        if !calls.is_empty() {
             out.push(StreamEvent::ToolCalls { calls });
         }
         out.push(StreamEvent::Done {
             prompt_tokens: self.prompt_tokens,
             output_tokens: self.output_tokens,
+            gen_ms: self.gen_ms,
         });
         out
     }
+}
+
+/// Normalize a COMPLETE (non-streamed) `message.tool_calls` entry into the
+/// neutral contract shape: `function.arguments` always an object (a
+/// JSON-encoded string is parsed, garbage → `{}`), `id` falling back to the
+/// function name (matches the UI's callId fallback). Returns None when the
+/// entry carries no function name — nothing callable.
+fn normalize_complete_call(c: &Value) -> Option<Value> {
+    let name = c.pointer("/function/name").and_then(|n| n.as_str())?;
+    let raw_args = c.pointer("/function/arguments").cloned();
+    let args = match raw_args {
+        Some(Value::String(s)) => serde_json::from_str::<Value>(&s)
+            .ok()
+            .filter(|v| v.is_object())
+            .unwrap_or_else(|| json!({})),
+        Some(v) if v.is_object() => v,
+        _ => json!({}),
+    };
+    let id = c
+        .get("id")
+        .and_then(|i| i.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| name.to_string());
+    Some(json!({
+        "id": id,
+        "type": "function",
+        "function": { "name": name, "arguments": args },
+    }))
 }
 
 // ── Adapter surface (mirrors providers/ollama.rs) ──────────────────────────
@@ -741,7 +818,8 @@ mod tests {
             n.finalize(),
             vec![E::Done {
                 prompt_tokens: 12,
-                output_tokens: 34
+                output_tokens: 34,
+                gen_ms: 0
             }]
         );
         assert!(n.finalize().is_empty(), "finalize must be idempotent");
@@ -760,9 +838,84 @@ mod tests {
             n.finalize(),
             vec![E::Done {
                 prompt_tokens: 7,
-                output_tokens: 21
+                output_tokens: 21,
+                gen_ms: 0
             }]
         );
+    }
+
+    #[test]
+    fn norm_gen_ms_from_timings_ms() {
+        // llama-server reports prompt_ms + predicted_ms; gen_ms is their
+        // rounded sum (server-side processing time, excludes model load).
+        let mut n = SseNorm::new();
+        ingest_all(
+            &mut n,
+            &[
+                r#"{"choices":[{"delta":{"content":"x"}}],"usage":{"prompt_tokens":5,"completion_tokens":9},"timings":{"prompt_ms":40.4,"predicted_ms":800.9}}"#,
+            ],
+        );
+        assert_eq!(
+            n.finalize(),
+            vec![E::Done {
+                prompt_tokens: 5,
+                output_tokens: 9,
+                gen_ms: 841
+            }]
+        );
+    }
+
+    #[test]
+    fn norm_complete_message_tool_calls_fallback() {
+        // Build variance: no `delta.tool_calls`, the whole call arrives
+        // under `message.tool_calls` with a JSON-STRING arguments field.
+        // finalize must still emit exactly one toolCalls (args → object,
+        // id present) before done.
+        let mut n = SseNorm::new();
+        let evs = ingest_all(
+            &mut n,
+            &[
+                r#"{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_9","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"b.txt\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+            ],
+        );
+        assert!(evs.is_empty(), "no early emission on the message path");
+        let tail = n.finalize();
+        assert_eq!(tail.len(), 2);
+        match &tail[0] {
+            E::ToolCalls { calls } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0]["id"], "call_9");
+                assert_eq!(calls[0]["function"]["name"], "write_file");
+                assert_eq!(calls[0]["function"]["arguments"]["path"], "b.txt");
+                assert!(calls[0]["function"]["arguments"].is_object());
+            }
+            other => panic!("expected toolCalls, got {other:?}"),
+        }
+        assert!(matches!(tail[1], E::Done { .. }));
+    }
+
+    #[test]
+    fn norm_delta_tool_calls_win_over_message_fallback() {
+        // If BOTH a streamed delta call and a complete message call appear,
+        // the incrementally-assembled delta path wins — the fallback must
+        // not double-emit.
+        let mut n = SseNorm::new();
+        ingest_all(
+            &mut n,
+            &[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"delta_1","function":{"name":"write_file","arguments":"{\"path\":\"d.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"message":{"tool_calls":[{"id":"msg_1","function":{"name":"write_file","arguments":"{\"path\":\"m.txt\"}"}}]}}]}"#,
+            ],
+        );
+        let tail = n.finalize();
+        match &tail[0] {
+            E::ToolCalls { calls } => {
+                assert_eq!(calls.len(), 1, "no double emission");
+                assert_eq!(calls[0]["id"], "delta_1");
+                assert_eq!(calls[0]["function"]["arguments"]["path"], "d.txt");
+            }
+            other => panic!("expected toolCalls, got {other:?}"),
+        }
     }
 
     #[test]

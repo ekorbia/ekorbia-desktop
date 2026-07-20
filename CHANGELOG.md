@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Bundled inference engine.** Ekorbia can now run models itself — pick
-  "Bundled engine" in Settings → Backend and chat with no Ollama or
-  other install at all.
+- **Ekorbia runs models itself — no Ollama, no terminal.** A bundled
+  inference engine ships with the app and is the default for new installs.
+  First launch recommends a model sized for your Mac and downloads it with
+  one click; you're chatting in a couple of minutes. (Already using Ollama?
+  Nothing breaks — you get a one-time offer to keep it or switch, and it
+  stays available under Settings → Backend.)
 - **Built-in model catalog.** The model manager downloads curated
   Gemma 4 models (official quantization-aware builds, vision included)
   and the RAG embedding model in-app — checksummed, resumable, no
@@ -22,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Switching inference backend re-checks your document embeddings.** A
+  different engine produces different vectors, so Ekorbia now flags
+  attachments indexed on your previous backend and offers the usual
+  one-click re-index — keeping document search accurate after a switch.
 - **Visual refresh**, with the default **One Dark** theme using a slate
   palette and brighter accents (the old look is still available as a new
   **Warm Dark** theme).
@@ -31,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The message footer's response time is now the model's actual
+  generation time.** It's read from the server's own timings, so a first
+  message that had to load the model no longer shows an inflated number.
 - **No more light/dark flash at startup.** The window backing and the
   first painted frame now match your saved theme — previously the app
   could flash between light and dark while loading.

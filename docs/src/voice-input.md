@@ -79,7 +79,7 @@ models always produce English.
   download from Hugging Face; after that, voice input works with the network
   off.
 - Dictation works in private chats too — it's just another way to enter text.
-- Speech models are separate from your chat (Ollama) models: the model picker
+- Speech models are separate from your chat models: the model picker
   in the composer chooses which LLM answers; the voice model only turns your
   speech into text.
 - If you see "No audio captured," the microphone permission likely isn't

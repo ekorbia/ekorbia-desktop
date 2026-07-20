@@ -174,7 +174,7 @@ fn endpoint_cfg(cfg: &BackendConfig) -> Result<EndpointCfg, String> {
 /// Serialized shape (what `consumeChunk` in main.jsx / overlay.jsx sees):
 ///   {"type":"delta","text":"…"}
 ///   {"type":"toolCalls","calls":[{…, function:{name, arguments:{OBJECT}}}]}
-///   {"type":"done","promptTokens":N,"outputTokens":N}
+///   {"type":"done","promptTokens":N,"outputTokens":N,"genMs":N}
 ///   {"type":"error","message":"…"}
 ///   {"type":"status","message":"…"}
 ///
@@ -184,7 +184,11 @@ fn endpoint_cfg(cfg: &BackendConfig) -> Result<EndpointCfg, String> {
 ///   - every call's `function.arguments` is ALWAYS a JSON object — never a
 ///     JSON-encoded string, never null (unparseable args become `{}`).
 ///   - `done` carries the request's token counts (0 when the provider
-///     omits them).
+///     omits them) and `genMs`, the SERVER-measured processing time in
+///     milliseconds (prompt-eval + generation, excluding model load; 0
+///     when the provider reports no timings). The UI prefers it over its
+///     own wall-clock so a cold engine spawn's load time doesn't inflate
+///     the footer.
 ///   - in-band provider errors surface as an `error` event; transport
 ///     failures still reject the invoke promise as before.
 ///   - `status` (Phase 2) is OPTIONAL pre-content progress ("loading
@@ -203,6 +207,10 @@ pub(crate) enum StreamEvent {
     Done {
         prompt_tokens: u64,
         output_tokens: u64,
+        /// Server-measured processing time (ms): prompt-eval + generation,
+        /// excluding model-load latency. 0 when the provider reports no
+        /// timings (the UI then falls back to its own wall-clock).
+        gen_ms: u64,
     },
     #[serde(rename = "error")]
     Error { message: String },
@@ -233,6 +241,34 @@ pub(crate) async fn embed(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>
             crate::providers::openai_compat::embed(&endpoint_cfg(&cfg)?, model, texts).await
         }
         BackendKind::Engine => crate::providers::engine::embed(model, texts).await,
+    }
+}
+
+/// Backend-qualified provenance tag for STORED embeddings.
+///
+/// This is deliberately NOT the wire model name — that stays bare (it's
+/// what we POST to `/v1/embeddings` and, on the engine, resolve to a GGUF
+/// stem). This is the string persisted in `attachment_chunks.embed_model`
+/// and compared for staleness. Qualifying it by backend makes the SAME
+/// embed model on a different runtime a different vector space: switching
+/// Ollama → bundled engine (or → a BYO endpoint) invalidates prior vectors,
+/// so the existing stale-embeddings banner fires and its one-click reindex
+/// becomes the migration (no dimension guard would catch it — Ollama's and
+/// the engine's nomic are both 768-dim). Ollama keeps the BARE name for
+/// back-compat: released installs wrote it bare and must never see a
+/// spurious reindex on upgrade.
+pub(crate) fn embed_identity(model: &str) -> String {
+    embed_identity_for(current_config().kind, model)
+}
+
+/// Pure mapping behind [`embed_identity`] — split out so it's testable
+/// without mutating the process-global backend config (tests run in
+/// parallel threads and share it).
+fn embed_identity_for(kind: BackendKind, model: &str) -> String {
+    match kind {
+        BackendKind::Ollama => model.to_string(),
+        BackendKind::OpenAiCompat => format!("openai:{model}"),
+        BackendKind::Engine => format!("engine:{model}"),
     }
 }
 
@@ -511,6 +547,37 @@ mod tests {
         ] {
             assert_eq!(parse_kind(Some(kind_str(k))), k);
         }
+    }
+
+    #[test]
+    fn embed_identity_qualifies_non_ollama_backends() {
+        // Ollama stays bare (back-compat — released chunks were written
+        // bare and must not go stale on upgrade).
+        assert_eq!(
+            embed_identity_for(BackendKind::Ollama, "nomic-embed-text"),
+            "nomic-embed-text"
+        );
+        // Engine + BYO are namespaced so a backend switch invalidates
+        // prior vectors → stale banner → reindex.
+        assert_eq!(
+            embed_identity_for(BackendKind::Engine, "nomic-embed-text"),
+            "engine:nomic-embed-text"
+        );
+        assert_eq!(
+            embed_identity_for(BackendKind::OpenAiCompat, "nomic-embed-text"),
+            "openai:nomic-embed-text"
+        );
+        // The three namespaces are mutually distinct for the same model —
+        // any switch among them fires the banner.
+        let ids = [
+            embed_identity_for(BackendKind::Ollama, "m"),
+            embed_identity_for(BackendKind::Engine, "m"),
+            embed_identity_for(BackendKind::OpenAiCompat, "m"),
+        ];
+        assert_eq!(
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            3
+        );
     }
 
     #[test]

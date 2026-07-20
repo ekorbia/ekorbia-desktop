@@ -23,6 +23,7 @@ const {
   formatClock,
   applyThinkPref,
   recommendGemmaModel,
+  recommendEngineModel,
   recipeToFormDefaults,
   buildTodayDigest,
   ekFilesGroupByPath,
@@ -839,6 +840,59 @@ test("recommendGemmaModel: every result carries a download size + reason", () =>
     const r = recommendGemmaModel(gib * GiB);
     assert.match(r.approx, /\d/);
     assert.ok(r.reason && r.reason.length > 0);
+  }
+});
+
+// ── recommendEngineModel ─────────────────────────────────────────────────
+
+// Fixture mirroring the shape of the engine_catalog payload (catalog.json
+// floors: e2b/e4b=8, 12b=16 [recommended], 26b-a4b=32).
+const ENGINE_CATALOG = [
+  { id: "gemma4-e2b", label: "Gemma 4 E2B", purpose: "chat", minRamGb: 8, totalBytes: 4.3e9, caps: { vision: true }, recommended: false },
+  { id: "gemma4-e4b", label: "Gemma 4 E4B", purpose: "chat", minRamGb: 8, totalBytes: 6.1e9, caps: { vision: true }, recommended: false },
+  { id: "gemma4-12b", label: "Gemma 4 12B", purpose: "chat", minRamGb: 16, totalBytes: 7.2e9, caps: { vision: true }, recommended: true },
+  { id: "gemma4-26b-a4b", label: "Gemma 4 26B-A4B", purpose: "chat", minRamGb: 32, totalBytes: 15.4e9, caps: { vision: true }, recommended: false },
+  { id: "nomic-embed-text", label: "Nomic Embed", purpose: "embed", minRamGb: 8, totalBytes: 0.27e9, caps: { vision: false }, recommended: false },
+];
+
+test("recommendEngineModel: empty / no-chat catalog → null", () => {
+  assert.equal(recommendEngineModel([], 32 * GiB), null);
+  assert.equal(recommendEngineModel(null, 32 * GiB), null);
+  assert.equal(
+    recommendEngineModel([{ id: "nomic", purpose: "embed", minRamGb: 8 }], 32 * GiB),
+    null,
+  );
+});
+
+test("recommendEngineModel: unknown RAM → catalog's recommended pick, flagged", () => {
+  for (const v of [null, undefined, 0]) {
+    const r = recommendEngineModel(ENGINE_CATALOG, v);
+    assert.equal(r.id, "gemma4-12b"); // the `recommended: true` entry
+    assert.equal(r.unknownRam, true);
+    assert.equal(r.lowRam, false);
+  }
+});
+
+test("recommendEngineModel: picks the LARGEST model whose floor fits RAM", () => {
+  assert.equal(recommendEngineModel(ENGINE_CATALOG, 8 * GiB).id, "gemma4-e4b"); // both 8-floor fit; larger wins
+  assert.equal(recommendEngineModel(ENGINE_CATALOG, 16 * GiB).id, "gemma4-12b");
+  assert.equal(recommendEngineModel(ENGINE_CATALOG, 32 * GiB).id, "gemma4-26b-a4b");
+  assert.equal(recommendEngineModel(ENGINE_CATALOG, 64 * GiB).id, "gemma4-26b-a4b");
+});
+
+test("recommendEngineModel: below every floor → smallest with lowRam flag", () => {
+  const r = recommendEngineModel(ENGINE_CATALOG, 4 * GiB);
+  assert.equal(r.id, "gemma4-e2b"); // smallest by (floor, size)
+  assert.equal(r.lowRam, true);
+});
+
+test("recommendEngineModel: every result carries id/label/approx/reason + vision", () => {
+  for (const gib of [4, 8, 16, 32, 64]) {
+    const r = recommendEngineModel(ENGINE_CATALOG, gib * GiB);
+    assert.ok(r.id && r.label);
+    assert.match(r.approx, /\d.*GB/);
+    assert.ok(r.reason && r.reason.length > 0);
+    assert.equal(r.vision, true);
   }
 });
 

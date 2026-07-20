@@ -8,7 +8,7 @@
 //! embedding packing, cosine search) used by both.
 
 use crate::attachments::cancel::register_cancel;
-use crate::attachments::config::current_embedding_model;
+use crate::attachments::config::{current_embedding_identity, current_embedding_model};
 use crate::attachments::types::{
     AttachmentStatusEvent, RetrievedChunk, CHUNK_OVERLAP_CHARS, CHUNK_TARGET_CHARS,
     SMALL_TEXT_THRESHOLD,
@@ -404,6 +404,9 @@ pub(crate) async fn index_attachment(
     // 4. Embed all chunks in one batched call.
     let texts: Vec<String> = chunks.iter().map(|(_, _, s)| s.clone()).collect();
     let embed_model = current_embedding_model(&app);
+    // Wire name (`embed_model`) is sent to the provider; the backend-qualified
+    // identity is what we STORE + compare for staleness. See embed_identity.
+    let embed_identity = current_embedding_identity(&app);
     let embeddings = match llm_embed(&embed_model, &texts).await {
         Ok(v) => v,
         Err(e) => {
@@ -446,7 +449,7 @@ pub(crate) async fn index_attachment(
                     i as i64,
                     chunk_text,
                     blob,
-                    &embed_model,
+                    &embed_identity,
                     *start as i64,
                     *end as i64,
                 ),
@@ -489,6 +492,9 @@ pub(crate) async fn retrieve_chunks(
     // — saving one full-sized allocation per row (peak DB-side memory
     // halves on a query against a folder of tens of thousands of chunks).
     let embed_model = current_embedding_model(app);
+    // Filter stored chunks by the backend-qualified identity (what was
+    // written), but embed the query with the bare wire name (below).
+    let embed_identity = current_embedding_identity(app);
     type CandidateRow = (String, Option<String>, String, Vec<u8>, i64, i64);
     let candidates: Vec<CandidateRow> = {
         let state = app.state::<DbState>();
@@ -505,7 +511,7 @@ pub(crate) async fn retrieve_chunks(
             )
             .map_err(|e| e.to_string())?;
         let it = stmt
-            .query_map((chat_id, embed_model.as_str()), |row| {
+            .query_map((chat_id, embed_identity.as_str()), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,

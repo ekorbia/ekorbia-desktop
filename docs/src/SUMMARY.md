@@ -5,7 +5,7 @@
 # Getting started
 
 - [Install Ekorbia](./getting-started/install.md)
-- [Pull your first model](./getting-started/pull-a-model.md)
+- [Choose a model](./getting-started/choose-a-model.md)
 - [Your first chat](./getting-started/first-chat.md)
 
 # Chatting

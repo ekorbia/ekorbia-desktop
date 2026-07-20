@@ -26,6 +26,15 @@ pub(crate) fn current_embedding_model(app: &tauri::AppHandle) -> String {
     DEFAULT_EMBEDDING_MODEL.to_string()
 }
 
+/// Backend-qualified identity for the active embedding model — the value
+/// written to `attachment_chunks.embed_model` and compared for staleness /
+/// reindex. NOT the wire model name: see [`crate::llm::embed_identity`] for
+/// why they differ (bare on Ollama, backend-prefixed elsewhere so a backend
+/// switch fires the stale-embeddings banner).
+pub(crate) fn current_embedding_identity(app: &tauri::AppHandle) -> String {
+    crate::llm::embed_identity(&current_embedding_model(app))
+}
+
 /// Resolve the top-k chunk count for retrieval. Settings override; default
 /// 6. Clamped to [1, 50] so a typo can't blow up the context window.
 pub(crate) fn current_top_k(app: &tauri::AppHandle) -> usize {

@@ -30,7 +30,7 @@ If your **active model** can see images, you're good — type your question, sen
 Ekorbia handles this gracefully:
 
 - **A vision model is installed but isn't your active model** — Ekorbia auto-switches the new tab to a vision-capable model and shows a toast: *"Switched to vision model: gemma3:4b"*.
-- **No vision model is installed** — A toast warns you the image will be ignored. To fix this, pull a vision model: `ollama pull gemma3:4b`, then re-attach (or recapture).
+- **No vision model is installed** — A toast warns you the image will be ignored. To fix this, download a vision model from **Settings → Models** (every catalog Gemma 4 model can see images), then re-attach (or recapture).
 
 ## Customizing the hotkey
 

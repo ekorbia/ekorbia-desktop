@@ -52,13 +52,13 @@ You can attach prompts from your [Prompts library](../prompts.md) to a compare c
 
 ## What if a model errors?
 
-Sometimes a column finishes with no content — the model might have been unloaded by Ollama, an OS-level OOM may have killed the request, or the model was deleted between when you picked it and when you sent. The column will show an italic note explaining no response came back, and its **Keep this** button stays disabled (you can't keep an empty response). Pick one of the other columns instead, or close the tab and start over.
+Sometimes a column finishes with no content — the model might have been unloaded to free memory, an OS-level OOM may have killed the request, or the model was deleted between when you picked it and when you sent. The column will show an italic note explaining no response came back, and its **Keep this** button stays disabled (you can't keep an empty response). Pick one of the other columns instead, or close the tab and start over.
 
 ## Limitations to know about
 
 - **One comparison per chat.** Once you pick a winner, the chat moves to normal mode. To compare again, start a new compare chat.
 - **No file or folder attachments.** Prompts attach; file attachments don't (yet).
-- **Compute cost.** All 2-3 models load and run on your machine. If you pick three large models that together exceed your GPU VRAM, Ollama will load them one at a time and what looked like parallel sends will feel serial. For best results, pick models that fit in memory together — `ollama ps` shows what's currently loaded and how much VRAM each is using.
+- **Compute cost.** All 2-3 models load and run on your machine. On the bundled engine, compare-mode runs the columns one after another (a single model is resident at a time), so a three-way compare is sequential by design. On other backends, picking models that together exceed your memory will also serialize as they swap in and out. For best results, keep the models modest in size.
 - **Comparison data is preserved.** Even after you pick, the unpicked responses are kept in the database (and surfaced via the **▸ N alternatives** disclosure). Exporting the chat to Markdown or JSON includes them.
 
 ## Removing the compare chat from history

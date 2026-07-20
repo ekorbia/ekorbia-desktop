@@ -112,9 +112,8 @@ function OnboardingTour({ open, onClose }) {
           </p>
           <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.6, color: T.fg2 }}>
             Your conversations, your files, your models — nothing leaves your
-            machine. Ekorbia talks to{" "}
-            <span style={{ fontFamily: T.mono, color: T.fg1 }}>ollama</span>{" "}
-            running on localhost, and that's the only network call it ever makes.
+            machine. Ekorbia runs models right on your computer; the only time
+            it touches the network is to download a model you choose.
           </p>
         </>
       ),

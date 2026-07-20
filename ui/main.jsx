@@ -992,19 +992,16 @@ function App() {
   const [modelId, setModelId] = useS(readPersistedComposerModel);
   // Build a display object — fall back to a minimal stub for models not in the static list
   const model = MODELS_BY_ID[modelId] || { id: modelId, name: modelId, color: T.green };
-  // Active inference backend ('ollama' | 'openai'). Declared HIGH in App()
-  // (above handleSend) so the stream-failure message can be backend-aware
-  // without tripping the var-hoisting gotcha — a read below this line sees
-  // the real value, a read above would silently see undefined. Fetched
-  // once at mount; Settings → Backend applies changes live, so a config
-  // switch is reflected on the next relaunch for this UI-side copy (Rust
-  // dispatch is already live). See CLAUDE.md forward-reference gotcha.
+  // Active inference backend ('ollama' | 'openai' | 'engine'). Declared HIGH
+  // in App() (above handleSend) so the stream-failure message can be
+  // backend-aware without tripping the var-hoisting gotcha — a read below
+  // this line sees the real value, a read above would silently see undefined.
+  // Set ONCE at mount by the first-run decision effect near the setup-gate
+  // state (the SOLE authority — there used to be a second config_get effect
+  // here, but it raced the decision effect and could clobber the fresh-install
+  // engine default back to ollama). Settings → Backend applies changes live
+  // in Rust; this UI-side copy updates on the next relaunch.
   const [backendKind, setBackendKind] = useS('ollama');
-  useE(() => {
-    invoke('llm_backend_config_get')
-      .then((c) => { if (c) setBackendKind(c.backend || 'ollama'); })
-      .catch(() => {});
-  }, []);
   // Derived capability bits + the mount probe. These MUST sit below the
   // `modelId` declaration: Babel-standalone downlevels `const` to `var`,
   // so a read above the declaration doesn't throw (no TDZ) — it silently
@@ -1738,7 +1735,7 @@ function App() {
     abortRef.current = asstId;
 
     let accumulated = '';
-    let tokensIn = 0, tokensOut = 0, startMs = Date.now();
+    let tokensIn = 0, tokensOut = 0, genMs = 0, startMs = Date.now();
     let ollamaOk = false;
     // In-band provider error message (StreamEvent type:'error'). Distinct
     // from transport failure (!ollamaOk): the HTTP exchange succeeded but
@@ -1911,6 +1908,10 @@ function App() {
             // overwriting (not summing) gives a meaningful total.
             tokensIn = ev.promptTokens ?? tokensIn;
             tokensOut += ev.outputTokens ?? 0;
+            // Server-measured processing time, summed across tool-loop
+            // iterations (each is its own stream). 0 when the provider
+            // reports no timings — we fall back to wall-clock below.
+            genMs += ev.genMs ?? 0;
           }
         };
         channel.onmessage = consumeChunk;
@@ -2047,7 +2048,12 @@ function App() {
 
     const elapsedMs = Date.now() - startMs;
     const finalContent = accumulated;
-    const finalTokens = (tokensIn || tokensOut) ? { in: tokensIn, out: tokensOut, ms: elapsedMs } : undefined;
+    // Prefer the server-measured processing time (excludes model-load
+    // latency, so a cold engine spawn doesn't inflate the footer); fall
+    // back to wall-clock for providers that report no timings.
+    const finalTokens = (tokensIn || tokensOut)
+      ? { in: tokensIn, out: tokensOut, ms: genMs > 0 ? genMs : elapsedMs }
+      : undefined;
 
     setChat(c => {
       const msgs = [...c.messages];
@@ -2221,7 +2227,7 @@ function App() {
   // N-way fan-out, and compare-mode v1 is a one-shot pick-a-winner
   // experience).
   //
-  // Returns { ok, content, tokensIn, tokensOut, elapsedMs }. ok=false
+  // Returns { ok, content, tokensIn, tokensOut, elapsedMs, genMs }. ok=false
   // means the fetch errored before any content arrived (Ollama not
   // running, model missing, etc) — the caller treats this as "this
   // column failed" without aborting the other columns.
@@ -2237,6 +2243,7 @@ function App() {
     let accumulated = '';
     let tokensIn = 0;
     let tokensOut = 0;
+    let genMs = 0;
     let ok = false;
 
     try {
@@ -2267,6 +2274,7 @@ function App() {
           // loop), so this is final by definition.
           tokensIn = ev.promptTokens ?? tokensIn;
           tokensOut += ev.outputTokens ?? 0;
+          genMs += ev.genMs ?? 0;
         }
       };
 
@@ -2300,6 +2308,7 @@ function App() {
       tokensIn,
       tokensOut,
       elapsedMs: Date.now() - startMs,
+      genMs,
     };
   };
 
@@ -2489,6 +2498,10 @@ function App() {
       const tokensIn = value?.tokensIn ?? 0;
       const tokensOut = value?.tokensOut ?? 0;
       const elapsedMs = value?.elapsedMs ?? 0;
+      // Prefer server-measured processing time (no cold-start inflation);
+      // wall-clock is the fallback for providers without timings.
+      const genMs = value?.genMs ?? 0;
+      const shownMs = genMs > 0 ? genMs : elapsedMs;
 
       const errorHint = !ok && !finalContent
         ? `(error: model ${model} unavailable or fetch failed)`
@@ -2502,7 +2515,7 @@ function App() {
             content: renderedContent,
             streaming: false,
             tokens: (tokensIn || tokensOut)
-              ? { in: tokensIn, out: tokensOut, ms: elapsedMs }
+              ? { in: tokensIn, out: tokensOut, ms: shownMs }
               : undefined,
             incomplete: errorHint ? true : undefined,
           } : m,
@@ -2519,7 +2532,7 @@ function App() {
         time: now(),
         tokensIn: tokensIn || null,
         tokensOut: tokensOut || null,
-        tokensMs: elapsedMs || null,
+        tokensMs: shownMs || null,
         promptsJson: null,
         seq: userSeq + 1,
         variantGroupId,
@@ -3926,19 +3939,55 @@ function App() {
     createPrompt({ name, body: text, tags: ['imported'] });
   };
 
-  const [ollamaModalOpen, setOllamaModalOpen] = useS(true);
-  // Non-Ollama backends (custom endpoint OR the bundled engine) must
-  // never see the OllamaGate — its "install/start Ollama" flow is a
-  // dead-end lie when Ollama isn't serving. The gate defaults open and
-  // self-dismisses when Ollama responds; on other backends we dismiss it
-  // up front instead. (Effect body runs post-render — safe re: the
-  // var-hoisting gotcha; the dep array is static.)
+  // First-run setup gate (Phase 5). ONE state drives whichever gate the
+  // active backend needs — EngineGate (bundled) or OllamaGate — and stays
+  // closed for a custom endpoint (BYO owns its own model store) and while
+  // the one-time backend-migration offer is up. Defaults CLOSED and is
+  // opened by the first-run decision effect below once the backend is known,
+  // so the wrong gate never flashes on launch.
+  const [setupGateOpen, setSetupGateOpen] = useS(false);
+  // One-time "Ekorbia runs models itself now" offer for existing Ollama
+  // users who never explicitly picked a backend (Phase 5).
+  const [migrationOfferOpen, setMigrationOfferOpen] = useS(false);
+  // First-run backend decision. Reads the RAW `llm_backend` setting (null =
+  // never chosen; `llm_backend_config_get` would mask that as the Ollama
+  // default) and routes:
+  //   • explicit backend  → open the matching gate (engine/ollama), none for openai
+  //   • unset + FRESH install (no onboarding.completed) → default to the
+  //     bundled engine + EngineGate (the headline: no Ollama, no terminal)
+  //   • unset + EXISTING user → one-time keep-Ollama / switch-to-engine offer
+  // Placed below the gate/offer/backend state it sets (TDZ-safe; see the
+  // forward-reference gotcha in CLAUDE.md).
   useE(() => {
-    invoke('llm_backend_config_get')
-      .then((c) => {
-        if (c && c.backend && c.backend !== 'ollama') setOllamaModalOpen(false);
-      })
-      .catch(() => {});
+    (async () => {
+      let raw = null;
+      try { raw = await invoke('setting_get', { key: 'llm_backend' }); } catch {}
+      // This effect is the SOLE authority for backendKind at mount — it sets
+      // it in every branch (no separate config_get effect to race with).
+      if (raw === 'openai') { setBackendKind('openai'); return; } // BYO: no setup gate
+      if (raw === 'engine') { setBackendKind('engine'); setSetupGateOpen(true); return; }
+      if (raw === 'ollama') { setBackendKind('ollama'); setSetupGateOpen(true); return; }
+      // raw is unset → first-run decision.
+      let onboarded = null;
+      try { onboarded = await invoke('setting_get', { key: 'onboarding.completed' }); } catch {}
+      if (!onboarded) {
+        // Fresh install → make the bundled engine the default and guide a
+        // download. Persist so later launches read 'engine' directly.
+        try {
+          await invoke('llm_backend_config_set', { backendKind: 'engine', baseUrl: null, apiKey: null });
+        } catch {}
+        setBackendKind('engine');
+        setSetupGateOpen(true);
+        return;
+      }
+      // Existing user who never chose a backend → one-time offer. Until they
+      // choose they stay on the Ollama default (nothing breaks).
+      setBackendKind('ollama');
+      let offered = null;
+      try { offered = await invoke('setting_get', { key: 'engine.migration_offered' }); } catch {}
+      if (!offered) setMigrationOfferOpen(true);
+      else setSetupGateOpen(true);                        // already offered → OllamaGate as before
+    })();
   }, []);
   const [modelWarming, setModelWarming] = useS(false);
   // In-app model download/delete modal — opened via
@@ -3999,28 +4048,64 @@ function App() {
     }
   };
 
+  // Shared "guided setup finished" handler for BOTH gates (engine + Ollama):
+  // make the freshly-installed model the active default, patch the current
+  // tab so the composer reflects it, close the gate, and warm it — warming
+  // `id` (not the stale fallback model.id) so the first send is hot.
+  const handleGuidedModelInstalled = (id) => {
+    setModelId(id);
+    persistComposerModel(id);
+    setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, model: id } : t));
+    setSetupGateOpen(false);
+    warmModel(id);
+  };
+
   return (
     <>
-      <OllamaGate
-        // Defer the gate while the onboarding tour is open — both are
-        // top-of-tree modals and the gate (zIndex 9999) would otherwise
-        // bury the tour (9990) on a true first run. Order: tour → setup.
-        open={ollamaModalOpen && !onboardingOpen}
-        modelId={model.id}
-        onReady={() => { setOllamaModalOpen(false); warmModel(model.id); }}
-        onDismiss={() => setOllamaModalOpen(false)}
-        onModelInstalled={(id) => {
-          // Guided setup finished: make the freshly-pulled model the active
-          // default (mirrors the composer's onModelChange), patch the
-          // current tab so the composer reflects it, close, and warm it —
-          // warming `id` (not the stale fallback modelId) so the first send
-          // is hot. Without this the startup validation no-ops on a
-          // zero-models launch and we'd warm a model that isn't installed.
-          setModelId(id);
-          persistComposerModel(id);
-          setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, model: id } : t));
-          setOllamaModalOpen(false);
-          warmModel(id);
+      {/* First-run setup gate — the bundled-engine EngineGate or the Ollama
+          OllamaGate, chosen by the active backend; a custom endpoint gets
+          neither. Deferred while the onboarding tour (zIndex 9990) or the
+          one-time migration offer is up. Order: tour → offer → setup. */}
+      {backendKind === 'engine' ? (
+        <EngineGate
+          open={setupGateOpen && !onboardingOpen && !migrationOfferOpen}
+          modelId={model.id}
+          onReady={() => { setSetupGateOpen(false); warmModel(model.id); }}
+          onDismiss={() => setSetupGateOpen(false)}
+          onModelInstalled={handleGuidedModelInstalled}
+        />
+      ) : backendKind === 'ollama' ? (
+        <OllamaGate
+          open={setupGateOpen && !onboardingOpen && !migrationOfferOpen}
+          modelId={model.id}
+          onReady={() => { setSetupGateOpen(false); warmModel(model.id); }}
+          onDismiss={() => setSetupGateOpen(false)}
+          onModelInstalled={handleGuidedModelInstalled}
+        />
+      ) : null}
+      {/* One-time backend-migration offer for existing Ollama users who
+          never explicitly chose a backend. Keep → stay on Ollama; Switch →
+          bundled engine + EngineGate. Either way the "offered" flag is set
+          so it shows once. */}
+      <EngineMigrationOffer
+        open={migrationOfferOpen}
+        onKeepOllama={async () => {
+          try { await invoke('llm_backend_config_set', { backendKind: 'ollama', baseUrl: null, apiKey: null }); } catch {}
+          try { await invoke('setting_set', { key: 'engine.migration_offered', value: '1' }); } catch {}
+          setBackendKind('ollama');
+          setMigrationOfferOpen(false);
+          setSetupGateOpen(true);
+        }}
+        onSwitchToEngine={async () => {
+          try { await invoke('llm_backend_config_set', { backendKind: 'engine', baseUrl: null, apiKey: null }); } catch {}
+          try { await invoke('setting_set', { key: 'engine.migration_offered', value: '1' }); } catch {}
+          setBackendKind('engine');
+          setMigrationOfferOpen(false);
+          setSetupGateOpen(true);
+        }}
+        onDismiss={async () => {
+          try { await invoke('setting_set', { key: 'engine.migration_offered', value: '1' }); } catch {}
+          setMigrationOfferOpen(false);
         }}
       />
       {/* In-app model download/delete. Mounted unconditionally (early-
@@ -4439,7 +4524,8 @@ function App() {
         {tweaks.showStatusBar && (
           <StatusBar
             model={tabModel}
-            onOllamaClick={() => setOllamaModalOpen(true)}
+            backendKind={backendKind}
+            onOllamaClick={() => setSetupGateOpen(true)}
             warming={modelWarming}
             // Flatten all chats' attachments and surface anything in
             // 'indexing'. Aggregated across the whole window so a long

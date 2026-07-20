@@ -535,6 +535,74 @@ function recommendGemmaModel(ramBytes) {
   };
 }
 
+// Recommend a right-sized chat model from the BUNDLED-ENGINE catalog for the
+// machine's RAM. Unlike recommendGemmaModel (Ollama tags, hardcoded tiers)
+// this is CATALOG-DRIVEN — it reads the live `engine_catalog` payload so it
+// never drifts from catalog.json. Pure + unit-tested.
+//
+//   catalog  — array of engine_catalog entries ({id,label,purpose,minRamGb,
+//              totalBytes,caps,recommended,installed,…}); chat + embed mixed
+//   ramBytes — total system RAM in bytes, or null/0 when undetectable
+//
+// Returns { id, label, approx, vision, reason, lowRam, unknownRam } or null
+// when the catalog carries no chat models. "approx" is a human GB string from
+// totalBytes. Fit rule: a model qualifies when its catalog RAM floor
+// (minRamGb) is ≤ actual memory — the floors already bake in OS/app headroom,
+// so we pick the LARGEST qualifying model. Below every floor → smallest model
+// with a lowRam warning; unknown RAM → the catalog's `recommended` pick.
+function recommendEngineModel(catalog, ramBytes) {
+  const chat = (Array.isArray(catalog) ? catalog : []).filter(
+    (m) => m && m.purpose === "chat",
+  );
+  if (!chat.length) return null;
+  const gbStr = (bytes) => `${((bytes || 0) / 1e9).toFixed(1)} GB`;
+  const toCard = (m, extra) =>
+    Object.assign(
+      {
+        id: m.id,
+        label: m.label || m.id,
+        approx: gbStr(m.totalBytes),
+        vision: !!(m.caps && m.caps.vision),
+        lowRam: false,
+        unknownRam: false,
+      },
+      extra,
+    );
+  // Ascending by RAM floor, then size, so "largest that fits" is well-defined
+  // even when two models share a floor.
+  const asc = chat
+    .slice()
+    .sort(
+      (a, b) =>
+        a.minRamGb - b.minRamGb || (a.totalBytes || 0) - (b.totalBytes || 0),
+    );
+  if (!ramBytes || ramBytes <= 0) {
+    // RAM undetectable (Windows, probe failure). Prefer the catalog's flagged
+    // recommendation; fall back to the middle of the pack.
+    const rec =
+      chat.find((m) => m.recommended) || asc[Math.floor(asc.length / 2)];
+    return toCard(rec, {
+      unknownRam: true,
+      reason:
+        "We couldn't detect your memory, so this is a safe all-round default.",
+    });
+  }
+  const gib = ramBytes / (1024 * 1024 * 1024);
+  const gbRounded = Math.round(gib);
+  const fits = asc.filter((m) => m.minRamGb <= gib);
+  if (!fits.length) {
+    // Even the smallest wants more than we have — recommend it anyway (it may
+    // still run, just tight) with a warning.
+    return toCard(asc[0], {
+      lowRam: true,
+      reason: `Your machine has about ${gbRounded} GB of memory — this is the smallest model and the safest fit. It may be tight; close other heavy apps.`,
+    });
+  }
+  return toCard(fits[fits.length - 1], {
+    reason: `Sized for your ${gbRounded} GB of memory, with headroom for the rest of your apps.`,
+  });
+}
+
 // ── Watch recipes + Today digest (watch.jsx, main.jsx) ─────────────────────
 
 // Turn a watch "recipe" + resolved default paths into a partial WatchModal
@@ -866,6 +934,7 @@ if (typeof window !== "undefined") {
   window.formatClock = formatClock;
   window.applyThinkPref = applyThinkPref;
   window.recommendGemmaModel = recommendGemmaModel;
+  window.recommendEngineModel = recommendEngineModel;
   window.recipeToFormDefaults = recipeToFormDefaults;
   window.buildTodayDigest = buildTodayDigest;
   window.ekFilesGroupByPath = ekFilesGroupByPath;
@@ -973,6 +1042,7 @@ if (typeof module !== "undefined" && module.exports) {
     formatClock,
     applyThinkPref,
     recommendGemmaModel,
+    recommendEngineModel,
     recipeToFormDefaults,
     buildTodayDigest,
     ekFilesGroupByPath,

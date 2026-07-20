@@ -13,7 +13,7 @@ The chat window is the heart of Ekorbia. This page covers what every part of it 
 | **Kebab menu** (top-right of chat pane) | Export menu (Markdown / JSON). Hidden on private chats. |
 | **Messages area** (middle) | Scrollable message history. User messages appear plain; assistant messages are rendered as Markdown. |
 | **Composer** (bottom) | Multi-line text input, model picker, attachment buttons, prompt attach, send button. |
-| **Status bar** (very bottom) | Ollama status, current model state, indexing progress. |
+| **Status bar** (very bottom) | Backend + current model state, indexing progress. |
 
 ## The composer in detail
 
@@ -38,7 +38,7 @@ Tabs with attached files show a small paperclip plus a count in the tab strip, s
 
 ## Model picker
 
-Clicking the model name opens a dropdown listing every model currently installed in Ollama (queried live each time the picker opens, so a freshly-pulled model appears immediately).
+Clicking the model name opens a dropdown listing every installed model (queried live each time the picker opens, so a freshly-downloaded model appears immediately).
 
 The picker shows:
 
@@ -53,9 +53,9 @@ The [quick-query overlay](../overlay.md) keeps a **separate** model preference, 
 
 The bottom strip tells you what's happening with the underlying systems:
 
-- **Ollama not running** — start Ollama (Ekorbia will offer to do it for you)
-- **Model not pulled** — the active model isn't installed; pull it with `ollama pull <name>` or pick a different one
-- **Cold / Warming / Loaded** — Ollama load state of the active model
+- **No model** — you haven't installed a model yet; the setup card offers to download one (or open Settings → Models)
+- **Cold / Warming / Loaded** — the load state of the active model
+- On the **Ollama** backend it may also show *Ollama not running* (Ekorbia offers to start it) or that the active model isn't installed (`ollama pull <name>`)
 - **Indexing docs/ — 42/87** — appears when any attachment is currently being chunked and embedded; aggregates across all in-flight indexing jobs
 
 The status bar can be hidden in **Settings → General**.

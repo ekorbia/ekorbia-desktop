@@ -1395,3 +1395,508 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
     </div>
   );
 }
+
+// ─── Engine Gate (Phase 5) ───────────────────────────────────────────────
+// The bundled-engine counterpart to OllamaGate. There's no external process
+// to install or start, so the whole "is Ollama running / install Ollama /
+// start Ollama" machinery evaporates: the only question is "do you have a
+// model yet?" First run = RAM-aware catalog recommendation → in-app download
+// → chatting. Shares the pull store (ekPullModel/ekGetPull, engine flavor)
+// and recommendEngineModel with the rest of the app.
+//
+//   open: parent-controlled. modelId: the currently-active model (a GGUF
+//   stem on the engine). onReady: an installed chat model is already active.
+//   onModelInstalled(id): a model is now installed + should become active.
+//   onDismiss: user skipped.
+function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
+  // phase: 'checking' | 'recommend' | 'pulling' | 'no-binary'
+  const [phase, setPhase] = useState("checking");
+  const [errorMsg, setErrorMsg] = useState("");
+  const [rec, setRec] = useState(null); // recommendEngineModel() result
+  const [alsoEmbed, setAlsoEmbed] = useState(true); // also pull nomic-embed-text
+  const [pullStep, setPullStep] = useState(null); // 'chat' | 'embed'
+  const [, forcePullTick] = useState(0);
+  const [binaryError, setBinaryError] = useState("");
+  const invoke = getInvoke();
+
+  // Inspect engine state and decide where to land. Returns a routing object.
+  // "Installed chat model" = a GGUF stem that isn't a known catalog embed
+  // model — so a lone nomic-embed-text never reads as a chat model, but a
+  // hand-placed GGUF still counts.
+  const inspect = async () => {
+    if (!invoke) return { phase: "no-binary" };
+    // Engine binary present? In a shipped build it's bundled; this only
+    // trips in a dev tree before scripts/fetch-llama-server.sh has run.
+    try {
+      const st = await invoke("engine_status");
+      if (st && st.binaryOk === false) {
+        setBinaryError(st.binaryError || "");
+        return { phase: "no-binary" };
+      }
+    } catch { /* treat as usable — a real failure surfaces at download time */ }
+    // engine_catalog returns { version, models: [...] } — unwrap to the
+    // models array (same as the model manager). Passing the raw object here
+    // would throw on `.filter`/`.some` and leave the gate stuck on "checking".
+    let catalog = [];
+    try { catalog = (await invoke("engine_catalog"))?.models || []; } catch { /* offline: empty */ }
+    const embedIds = (catalog || [])
+      .filter((m) => m.purpose === "embed")
+      .map((m) => m.id);
+    let names = [];
+    try {
+      const listed = await invoke("llm_list_models");
+      names = (listed.models || []).map((m) => m.name);
+    } catch { /* none */ }
+    const chatNames = names.filter((n) => !embedIds.includes(n));
+    if (chatNames.length) {
+      if (chatNames.includes(modelId)) return { phase: "ready" };
+      // Heal a stale default (e.g. an Ollama-style tag) that isn't on the
+      // engine: switch to an installed model, preferring a catalog pick.
+      const pick =
+        chatNames.find((n) =>
+          (catalog || []).some((m) => m.id === n && m.recommended),
+        ) || chatNames[0];
+      return { phase: "ready-switch", switchTo: pick };
+    }
+    // Nothing chat-capable installed → recommend a right-sized model.
+    let bytes = null;
+    try {
+      const p = await invoke("system_profile");
+      bytes = p?.totalRamBytes ?? null;
+    } catch { /* unknown RAM → recommendEngineModel handles null */ }
+    setRec(recommendEngineModel(catalog, bytes));
+    return { phase: "recommend" };
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    setPhase("checking");
+    setErrorMsg("");
+    inspect().then((r) => {
+      if (r.phase === "ready") { onReady?.(); return; }
+      if (r.phase === "ready-switch") { onModelInstalled?.(r.switchTo); return; }
+      setPhase(r.phase);
+    });
+  }, [open, modelId]);
+
+  // Esc always dismisses — no phase should ever trap the user.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); onDismiss?.(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onDismiss]);
+
+  // Re-render while a guided download streams progress.
+  useEffect(() => {
+    if (!open) return;
+    const unsub = ekPullsSubscribe(() => forcePullTick((n) => n + 1));
+    return unsub;
+  }, [open]);
+
+  // Source of truth for "did the download land": the engine's own model scan.
+  const isInstalled = async (id) => {
+    try {
+      const data = await invoke("llm_list_models");
+      return (data.models || []).some((m) => m.name === id);
+    } catch { return false; }
+  };
+
+  // Download the recommended chat model, then (optionally) the embedding
+  // model, then hand the installed model to the parent.
+  const downloadAndSetup = async () => {
+    if (!rec) return;
+    setErrorMsg("");
+    setPhase("pulling");
+    setPullStep("chat");
+    const res = await ekPullModel(rec.id, { engine: true, silent: true });
+    if (!(await isInstalled(rec.id))) {
+      const detail = res && res.error ? ` (${res.error})` : "";
+      setErrorMsg(
+        `Couldn't download ${rec.label}${detail}. Check your connection and try again, or choose a different model.`,
+      );
+      setPhase("recommend");
+      return;
+    }
+    if (alsoEmbed) {
+      setPullStep("embed");
+      // Best-effort: a failed embedding model shouldn't block getting into
+      // chat — folder search just won't work until it's installed later.
+      await ekPullModel("nomic-embed-text", { engine: true, silent: true });
+    }
+    onModelInstalled?.(rec.id);
+  };
+
+  if (!open || phase === "checking") return null;
+
+  const titles = {
+    recommend: "Let's get you a model",
+    pulling: "Setting things up…",
+    "no-binary": "Engine unavailable",
+  };
+  const subtitle =
+    phase === "no-binary" ? "Bundled engine" : "Local AI setup";
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 9999,
+        background: "rgba(0,0,0,0.7)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        backdropFilter: "blur(4px)",
+      }}
+    >
+      <div
+        style={{
+          width: 420,
+          background: panelGrad(),
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 12,
+          padding: "28px 28px 24px",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
+        }}
+      >
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 26 }}>✨</span>
+          <div>
+            <div style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.fg }}>
+              {titles[phase] || phase}
+            </div>
+            <div style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3, marginTop: 2 }}>
+              {subtitle}
+            </div>
+          </div>
+        </div>
+
+        {/* Body */}
+        {phase === "recommend" && rec && (
+          <>
+            {errorMsg && (
+              <div
+                style={{
+                  background: "rgba(200,80,80,0.1)",
+                  border: "1px solid rgba(200,80,80,0.3)",
+                  borderRadius: 6,
+                  padding: "8px 12px",
+                  fontFamily: T.sans,
+                  fontSize: 12,
+                  color: T.red,
+                  lineHeight: 1.5,
+                }}
+              >
+                {errorMsg}
+              </div>
+            )}
+            <div style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2, lineHeight: 1.6 }}>
+              Ekorbia runs models right on your Mac — no separate install. Here's
+              one sized for your machine; Ekorbia will download it for you.
+            </div>
+            {/* Recommended model card */}
+            <div
+              style={{
+                background: T.bg2,
+                border: `1px solid ${T.borderStrong}`,
+                borderRadius: 8,
+                padding: "12px 14px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: T.fg, flex: 1 }}>
+                  {rec.label}
+                </span>
+                {rec.vision && (
+                  <span
+                    style={{
+                      fontFamily: T.sans,
+                      fontSize: 10,
+                      color: T.blue,
+                      background: T.blue + "26",
+                      borderRadius: 4,
+                      padding: "1px 6px",
+                    }}
+                  >
+                    👁 vision
+                  </span>
+                )}
+                <span style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}>{rec.approx}</span>
+              </div>
+              <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5 }}>
+                {rec.reason}
+              </div>
+              {rec.lowRam && (
+                <div style={{ fontFamily: T.sans, fontSize: 11.5, color: T.amber, marginTop: 2 }}>
+                  ⚠ Limited memory — responses may be slow. A smaller model may feel better.
+                </div>
+              )}
+            </div>
+            {/* Embedding model opt-in */}
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={alsoEmbed}
+                onChange={(e) => setAlsoEmbed(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5 }}>
+                Also download the search model{" "}
+                <code style={{ fontFamily: T.mono, color: T.fg }}>nomic-embed-text</code>{" "}
+                <span style={{ color: T.fg3 }}>(274 MB)</span> — needed for attaching folders and searching files.
+              </span>
+            </label>
+          </>
+        )}
+        {phase === "pulling" && (
+          <>
+            <div style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2, lineHeight: 1.6 }}>
+              {alsoEmbed
+                ? `Downloading ${pullStep === "embed" ? "the search model" : "your model"} — step ${pullStep === "embed" ? "2" : "1"} of 2`
+                : "Downloading your model…"}
+            </div>
+            {(() => {
+              const target = pullStep === "embed" ? "nomic-embed-text" : (rec ? rec.id : null);
+              const label = pullStep === "embed" ? "nomic-embed-text" : (rec ? rec.label : "…");
+              const prog = target ? ekGetPull(target) : null;
+              const pct = prog && prog.pct !== null ? prog.pct : null;
+              return (
+                <div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500, flex: 1 }}>
+                      {label}
+                    </span>
+                    <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg2 }}>
+                      {pct !== null
+                        ? `${pct}% · ${formatBytes(prog.completedBytes)} / ${formatBytes(prog.totalBytes)}`
+                        : (prog && prog.statusLine) || "starting…"}
+                    </span>
+                  </div>
+                  <div style={{ height: 4, borderRadius: 2, background: T.bg3, overflow: "hidden" }}>
+                    <div
+                      style={{
+                        height: "100%",
+                        width: pct !== null ? `${pct}%` : "30%",
+                        background: T.amber,
+                        borderRadius: 2,
+                        transition: "width 200ms linear",
+                        animation: pct === null ? "blink 1.1s steps(2) infinite" : "none",
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+          </>
+        )}
+        {phase === "no-binary" && (
+          <div style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2, lineHeight: 1.6 }}>
+            The bundled engine isn't available in this build.
+            {binaryError && (
+              <div
+                style={{
+                  marginTop: 8,
+                  background: T.bg2,
+                  border: `1px solid ${T.border}`,
+                  borderRadius: 6,
+                  padding: "8px 12px",
+                  fontFamily: T.mono,
+                  fontSize: 11,
+                  color: T.fg3,
+                }}
+              >
+                {binaryError}
+              </div>
+            )}
+            <div style={{ marginTop: 8 }}>
+              You can point Ekorbia at Ollama or a custom endpoint under{" "}
+              <span style={{ color: T.fg }}>Settings → Backend</span>.
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+          {(phase === "recommend" || phase === "no-binary") && (
+            <button
+              onClick={onDismiss}
+              style={{
+                padding: "7px 14px",
+                borderRadius: 6,
+                border: `1px solid ${T.border}`,
+                background: "transparent",
+                color: T.fg3,
+                fontFamily: T.sans,
+                fontSize: 12.5,
+                cursor: "pointer",
+              }}
+            >
+              {phase === "no-binary" ? "Continue" : "Skip for now"}
+            </button>
+          )}
+          {phase === "recommend" && (
+            <>
+              <button
+                onClick={() => { onDismiss?.(); window.ekOpenModelManager?.(); }}
+                style={{
+                  padding: "7px 14px",
+                  borderRadius: 6,
+                  border: `1px solid ${T.border}`,
+                  background: "transparent",
+                  color: T.fg2,
+                  fontFamily: T.sans,
+                  fontSize: 12.5,
+                  cursor: "pointer",
+                }}
+              >
+                Choose a different model
+              </button>
+              <button
+                className="ek-btn-primary"
+                onClick={downloadAndSetup}
+                style={{
+                  padding: "7px 16px",
+                  borderRadius: 6,
+                  border: "none",
+                  background: T.amber,
+                  boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                  color: T.bg0,
+                  fontFamily: T.sans,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Download and set up
+              </button>
+            </>
+          )}
+          {phase === "pulling" && (
+            <button
+              onClick={() => {
+                if (rec) ekCancelPull(rec.id);
+                ekCancelPull("nomic-embed-text");
+                setPhase("recommend");
+              }}
+              style={{
+                padding: "7px 16px",
+                borderRadius: 6,
+                border: `1px solid ${T.border}`,
+                background: "transparent",
+                color: T.fg2,
+                fontFamily: T.sans,
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Engine migration offer (Phase 5) ────────────────────────────────────
+// One-time nudge shown to EXISTING Ollama users after the update that adds
+// the bundled engine. They keep working on Ollama by default (nothing
+// breaks); this just surfaces the new capability once and lets them choose.
+// The caller persists the "offered" flag + the chosen backend.
+function EngineMigrationOffer({ open, onKeepOllama, onSwitchToEngine, onDismiss }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); onDismiss?.(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onDismiss]);
+  if (!open) return null;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 9998,
+        background: "rgba(0,0,0,0.7)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        backdropFilter: "blur(4px)",
+      }}
+    >
+      <div
+        style={{
+          width: 440,
+          background: panelGrad(),
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 12,
+          padding: "28px 28px 24px",
+          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 26 }}>✨</span>
+          <div style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.fg }}>
+            Ekorbia can run models itself now
+          </div>
+        </div>
+        <div style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2, lineHeight: 1.65 }}>
+          You're all set up with Ollama, and it'll keep working. Ekorbia can
+          now download and run models on its own too — no Ollama needed. Switch
+          to the bundled engine, or keep your current setup. You can change
+          this any time under <span style={{ color: T.fg }}>Settings → Backend</span>.
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+          <button
+            onClick={onKeepOllama}
+            style={{
+              padding: "7px 16px",
+              borderRadius: 6,
+              border: `1px solid ${T.border}`,
+              background: "transparent",
+              color: T.fg2,
+              fontFamily: T.sans,
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            Keep Ollama
+          </button>
+          <button
+            className="ek-btn-primary"
+            onClick={onSwitchToEngine}
+            style={{
+              padding: "7px 16px",
+              borderRadius: 6,
+              border: "none",
+              background: T.amber,
+              boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
+              color: T.bg0,
+              fontFamily: T.sans,
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Switch to bundled engine
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

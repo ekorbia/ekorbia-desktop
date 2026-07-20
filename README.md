@@ -3,10 +3,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platform: macOS · Linux · Windows](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey)
 ![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db)
-![Powered by Ollama](https://img.shields.io/badge/powered%20by-Ollama-black)
+![Runs models locally](https://img.shields.io/badge/models-100%25%20local-24c8db)
 [![Launch Certified by FuzzPage](https://fuzzpage.com/badge/ekorbia-ekorbia-desktop.svg)](https://fuzzpage.com/p/ekorbia-ekorbia-desktop)
 
-A native desktop chat and productivity environment for local AI models powered by [Ollama](https://ollama.com). Ekorbia runs entirely on your machine — no cloud, no API keys. It pairs multi-tab local chat with the features that set it apart — background **Watches** over folders, feeds, and web pages, a **Spotlight-style quick-query overlay**, and **ephemeral chats, model comparison mode, prompt library** — all fully offline, with no telemetry and no CDN calls.
+A native desktop chat and productivity environment for local AI models. Ekorbia runs models **on your own machine** with a bundled engine — pick one from the built-in catalog and it downloads, no separate install and no terminal (prefer [Ollama](https://ollama.com) or an OpenAI-compatible endpoint? those work too, under Settings → Backend). No cloud, no API keys. It pairs multi-tab local chat with the features that set it apart — background **Watches** over folders, feeds, and web pages, a **Spotlight-style quick-query overlay**, and **ephemeral chats, model comparison mode, prompt library** — all fully offline, with no telemetry and no CDN calls.
 
 <p align="center">
   <img src="docs/screenshots/ekorbia-screenshot-0.1.png" alt="Ekorbia main chat panel" width="800">
@@ -204,20 +204,16 @@ For development with hot-reload, use `cargo tauri dev` from the
     matrix](#platform-feature-matrix) below); everything else works.
   - **Windows 10 1809+ or Windows 11** — full feature set except the
     one-keystroke screenshot capture (planned).
-- **[Ollama](https://ollama.com) installed and running** — `ollama serve`
-  on `http://localhost:11434`. The Ekorbia installer does not bundle
-  Ollama; install it separately.
-- **At least one chat model** — but you don't have to pull it yourself
-  first. On first launch Ekorbia detects your RAM, recommends a
-  right-sized Gemma 4, and downloads it for you (plus an embedding model
-  for folder RAG). To pre-pull from a terminal instead:
-  ```bash
-  ollama pull gemma4:e4b            # vision-capable, good default
-  ollama pull llama3.2:3b           # small, fast, general-purpose
-  ollama pull nomic-embed-text      # for folder RAG / search
-  ```
+- **No separate runtime to install.** Ekorbia ships with a **bundled
+  engine** and runs models itself. On first launch it detects your RAM,
+  recommends a right-sized Gemma 4 from the built-in catalog, and
+  downloads it for you (plus an embedding model for folder RAG) — no
+  terminal. Prefer your own runtime? Ekorbia also supports **[Ollama](https://ollama.com)**
+  and any **OpenAI-compatible endpoint** (LM Studio, llama.cpp's
+  `llama-server`, vLLM, …), selectable under Settings → Backend.
 - **~8 GB free RAM** for the recommended models. Smaller models will
   run on less; larger ones need more.
+- **Disk space for models** — a few GB per model, in the app data folder.
 
 ## Platform feature matrix
 
@@ -284,8 +280,8 @@ A "—" means the feature isn't shipped on that platform yet. Linux overlay supp
   - **Today view**: an **All / Today** toggle on the feed; *Today* bounds it to the last 24 hours and unlocks **Chat about today**, which opens a chat seeded with a digest of everything your watches surfaced today
   - **Folder watches skip pre-existing files** — a new folder watch (e.g. the Downloads recipe) only summarises files added *after* you create it, so it won't dump a backlog of everything already in the folder; a "skip files already in folder" checkbox in the form controls this
   - "Chat with notes" button opens a new chat with the accumulated notes injected as system context — ideal for asking questions across many summaries at once
-- **Live Ollama model picker** — lists all locally pulled models, switch mid-session; your selection sticks across launches and auto-falls-back to an installed model if your previous pick is no longer pulled
-- **In-app model management** — browse, **download**, and delete Ollama models without opening a terminal: a curated starter list (Gemma 4 tiers, an embedding model, and more) plus a free-text field with name autocomplete, live download progress (per-layer, with a Cancel button), and one-click delete. Reachable from **Settings → Models**, the picker's **Manage models…** footer, and the guided first-run. You can still `ollama pull` from a terminal if you prefer
+- **Live model picker** — lists every installed model, switch mid-session; your selection sticks across launches and auto-falls-back to an installed model if your previous pick is no longer present
+- **In-app model management** — browse, **download**, and delete models without opening a terminal. On the bundled engine it's a curated **catalog** (Gemma 4 tiers + the embedding model) with RAM-fit hints, checksummed + resumable downloads, live progress (with a Cancel button), and one-click delete. Reachable from **Settings → Models**, the picker's **Manage models…** footer, and the guided first-run. (On the Ollama backend the same manager pulls/deletes Ollama models, and you can still `ollama pull` from a terminal.)
 - **Streaming responses** — assistant tokens appear as the model produces them; a **Stop** button mid-generation freezes whatever was written so far and marks the partial message as `Stopped` so you can see exactly where the cut-off happened
 - **Markdown rendering** for assistant replies — headings, lists, tables, blockquotes, inline and fenced code, all rendered cleanly; **syntax-highlighted code blocks** via highlight.js (github-dark) with a per-block **Copy** button on hover. User messages stay as plain text so you see exactly what you typed
 - **Edit & retry messages** — click the pencil icon on any past user message to edit and resend (the conversation truncates from that point so the model re-answers with your revision); click the retry icon on the last assistant reply to regenerate. The DB and FTS index stay consistent — no orphan rows
@@ -306,10 +302,10 @@ A "—" means the feature isn't shipped on that platform yet. Linux overlay supp
 - **History sidebar** with searchable chat history grouped by date, plus per-chat delete
 - **Settings panel** (tabbed: General / Models / Prompts / Memory / Attachments) exposes theme, density, status-bar toggle, overlay hotkey, screenshot hotkey, in-app model install/removal, prompts folder, memory file path, embedding model, top-k chunk count, folder file types and ignore patterns, plus a **Show tour again** button to re-run the onboarding
 - **First-launch onboarding tour** — a 5-slide intro covers the hotkeys, attachments, memory file, and prompts library on the very first launch. Skippable any time with ⎋, and re-openable later from Settings → General → Help → Show tour again
-- **Guided first-run setup** — after the tour, if Ollama is running but you have no models, Ekorbia detects your system RAM, recommends a right-sized Gemma 4 (down to `gemma4:e2b` on low-RAM machines), optionally grabs an embedding model for folder RAG, and downloads them in-app with progress — so you land in a working chat without ever touching a terminal. "Choose a different model" opens the model manager, and a copy-paste terminal command is offered as a fallback
+- **Guided first-run setup** — after the tour, if you have no model yet, Ekorbia detects your system RAM, recommends a right-sized Gemma 4 from the catalog (down to the smallest on low-RAM machines), optionally grabs an embedding model for folder RAG, and downloads them in-app with progress — so you land in a working chat without ever touching a terminal. "Choose a different model" opens the full model manager
 - **Toasts** for non-modal feedback (model not pulled, attachment errors, watch failures) — never blocks the UI
-- **Ollama auto-start** — detects whether Ollama is running at launch and offers to start it; the main window keeps focus while Ollama boots
-- **Status bar** that distinguishes *Ollama not running* / *model not pulled* / *cold* / *warming* / *loaded* states, plus an aggregated *Indexing docs/ — 42/87* line whenever any attachment is being indexed
+- **Selectable backend** — **bundled engine** (default; Ekorbia runs models itself), **Ollama** (optional/external), or any **OpenAI-compatible endpoint**, switchable live under **Settings → Backend**. Existing Ollama users get a one-time offer to keep Ollama or switch to the bundled engine; on the Ollama backend Ekorbia still offers to start Ollama if it isn't running
+- **Status bar** that surfaces the model's state (*cold* / *warming* / *loaded*) and backend, plus an aggregated *Indexing docs/ — 42/87* line whenever any attachment is being indexed
 - **Five themes** — One Dark, One Light, Ayu Dark, Ayu Mirage, Ayu Light
 - **Persisted UI state** — sidebar width, right-panel width, prompt-list width, panel open/closed state, right-panel tab, selected model, hotkey, prompts folder, embedding model, top-k, folder filters, and theme all survive across launches
 - **Local storage**
@@ -327,9 +323,8 @@ A "—" means the feature isn't shipped on that platform yet. Linux overlay supp
 |------|---------|
 | [Rust](https://rustup.rs) (1.80+) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | [Tauri CLI](https://tauri.app/start/prerequisites/) | `cargo install tauri-cli --version '^2'` |
-| [Ollama](https://ollama.com) | Download from ollama.com |
-| A chat model (any one) | `ollama pull gemma4:26b` (vision-capable) or `ollama pull llama3` |
-| Embedding model (for attachments) | `ollama pull nomic-embed-text` |
+| The bundled engine sidecar | `./scripts/fetch-llama-server.sh` (one-time; builds `llama-server` into `src-tauri/binaries/`) |
+| A model | Download one from the in-app catalog on first run (no terminal). Or, to develop against Ollama, install it and `ollama pull <model>` and select it under Settings → Backend |
 
 Per-OS extras:
 
@@ -517,7 +512,7 @@ When you complete a capture:
 - A new chat tab opens automatically with the screenshot attached as a vision attachment
 - If your current model can see images, you're good to go — type a question and send
 - If your current model **can't** see images but a vision model is cached from earlier this session, Ekorbia switches to it and toasts *"Switched to vision model: <name>"*
-- If no vision model is available at all, a toast warns you the image will be ignored — `ollama pull` one (e.g. `gemma4:e4b`, `llava`) and reattach
+- If no vision model is available at all, a toast warns you the image will be ignored — download one (every catalog Gemma 4 model can see images) and reattach
 
 The captured PNG is written to your system temp directory and referenced by path from the attachment store, so don't delete it before sending the first message. On macOS the OS reclaims temp files on reboot.
 
@@ -541,4 +536,4 @@ Ekorbia is released under the [MIT License](LICENSE).
 
 Copyright (c) 2026 Ekorbia.
 
-Third-party crate attributions are enumerated in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). The front-end libraries (React, ReactDOM, Babel-standalone, marked, highlight.js, DOMPurify) and fonts (Inter, JetBrains Mono, Instrument Serif) are **vendored into [`ui/vendor/`](ui/vendor/) and served locally** — Ekorbia loads no code or fonts from any CDN, so it boots fully offline and the only network traffic it produces is to your local Ollama server. See [`ui/vendor/README.md`](ui/vendor/README.md) for pinned versions and upstream sources, and [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSES.md) for their license texts.
+Third-party crate attributions are enumerated in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). The front-end libraries (React, ReactDOM, Babel-standalone, marked, highlight.js, DOMPurify) and fonts (Inter, JetBrains Mono, Instrument Serif) are **vendored into [`ui/vendor/`](ui/vendor/) and served locally** — Ekorbia loads no code or fonts from any CDN, so it boots fully offline; the only network traffic it produces is downloading a model you choose (and, if you opt into one, requests to a custom endpoint you configure). See [`ui/vendor/README.md`](ui/vendor/README.md) for pinned versions and upstream sources, and [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSES.md) for their license texts.

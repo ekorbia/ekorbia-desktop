@@ -492,12 +492,24 @@ impl StreamNorm {
                     calls: std::mem::take(&mut self.tool_calls),
                 });
             }
+            // Ollama reports durations in NANOSECONDS. gen_ms = prompt-eval
+            // + generation (excludes model load, which lives in the gap
+            // between total_duration and these two) → ms.
+            let gen_ns = raw
+                .get("prompt_eval_duration")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                + raw
+                    .get("eval_duration")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
             out.push(E::Done {
                 prompt_tokens: raw
                     .get("prompt_eval_count")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0),
                 output_tokens: raw.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0),
+                gen_ms: gen_ns / 1_000_000,
             });
         }
         out
@@ -984,7 +996,8 @@ mod tests {
                 E::Delta { text: "lo".into() },
                 E::Done {
                     prompt_tokens: 12,
-                    output_tokens: 34
+                    output_tokens: 34,
+                    gen_ms: 0
                 },
             ]
         );
@@ -997,8 +1010,28 @@ mod tests {
             evs,
             vec![E::Done {
                 prompt_tokens: 0,
-                output_tokens: 0
+                output_tokens: 0,
+                gen_ms: 0
             }]
+        );
+    }
+
+    #[test]
+    fn norm_gen_ms_from_nanosecond_durations() {
+        // Ollama durations are nanoseconds; gen_ms = (prompt_eval + eval) / 1e6.
+        let evs = ingest_all(&[
+            r#"{"message":{"content":"x"},"done":true,"prompt_eval_count":3,"eval_count":7,"prompt_eval_duration":40000000,"eval_duration":800000000}"#,
+        ]);
+        assert_eq!(
+            evs,
+            vec![
+                E::Delta { text: "x".into() },
+                E::Done {
+                    prompt_tokens: 3,
+                    output_tokens: 7,
+                    gen_ms: 840
+                },
+            ]
         );
     }
 
@@ -1027,7 +1060,8 @@ mod tests {
             evs[2],
             E::Done {
                 prompt_tokens: 0,
-                output_tokens: 5
+                output_tokens: 5,
+                gen_ms: 0
             }
         );
     }
@@ -1101,10 +1135,11 @@ mod tests {
         assert_eq!(
             serde_json::to_value(E::Done {
                 prompt_tokens: 1,
-                output_tokens: 2
+                output_tokens: 2,
+                gen_ms: 3
             })
             .unwrap(),
-            serde_json::json!({"type":"done","promptTokens":1,"outputTokens":2})
+            serde_json::json!({"type":"done","promptTokens":1,"outputTokens":2,"genMs":3})
         );
         assert_eq!(
             serde_json::to_value(E::Error {

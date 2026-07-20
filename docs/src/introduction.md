@@ -2,7 +2,7 @@
 
 **Ekorbia** is a native desktop integrated productivity environment for local AI models. It runs entirely on your machine — there are no cloud services, no API keys, and nothing leaves your computer unless you explicitly tell it to.
 
-Ekorbia is powered by [Ollama](https://ollama.com), an open-source runtime that lets you download and run language models locally. If you can run a chat model in Ollama, you can use it in Ekorbia.
+Ekorbia runs models with a **bundled engine** — pick one from the built-in catalog and it downloads, no separate install and no terminal. Prefer your own runtime? Ekorbia also works with [Ollama](https://ollama.com) or any OpenAI-compatible endpoint; you choose under **Settings → Backend**.
 
 ## What Ekorbia gives you
 
@@ -29,14 +29,14 @@ Everything you do with Ekorbia stays on your machine:
 - **Watches** poll the URLs and folders you configure, summarize with the local model you choose, and write notes to a local file
 - **Saved files from chat** go to a folder you pick, never anywhere else
 
-Nothing is sent to a third party. The only network traffic Ekorbia generates is between the app and your local Ollama server, and any URLs you explicitly point a watch at.
+Nothing is sent to a third party. Models run on your machine; the only network traffic Ekorbia generates is downloading a model you choose, any URLs you explicitly point a watch at, and — if you opt into a custom endpoint — requests to the server you configured.
 
 ## Where to start
 
 If you're new to Ekorbia, follow the **Getting started** section in order:
 
 1. [Install Ekorbia](./getting-started/install.md)
-2. [Pull your first model](./getting-started/pull-a-model.md)
+2. [Choose a model](./getting-started/choose-a-model.md)
 3. [Your first chat](./getting-started/first-chat.md)
 
 Otherwise, dip into whichever section sounds useful. Every page is self-contained, with links back to related features.

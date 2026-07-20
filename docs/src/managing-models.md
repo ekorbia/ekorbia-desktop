@@ -1,9 +1,6 @@
 # Managing models
 
-Ekorbia has a built-in model manager — download new models and delete old
-ones without touching a terminal. Everything still goes through your local
-Ollama install; the manager is a friendlier face on `ollama pull` and
-`ollama rm`.
+Ekorbia has a built-in model manager — download new models and delete old ones without touching a terminal. On the **bundled engine** (the default) it's driven by a curated catalog; models download straight into the app.
 
 ## Opening the manager
 
@@ -15,22 +12,13 @@ Three ways in:
   have no models at all, the picker shows a **Download a model…** button
   instead.)
 - **The startup dialog** — if Ekorbia launches and your selected model
-  isn't installed, the "Model not found" dialog offers **Download a
-  model…** directly.
+  isn't installed, the setup card offers **Download a model…** directly.
 
 ## Downloading a model
 
-Type any model name from [ollama.com/library](https://ollama.com/library)
-into the box — `gemma4:e4b`, `llama3.2:3b`, whatever you like — and click
-**Pull**. Or click **Pull** on one of the suggestions, which include the
-Gemma 4 family and the `nomic-embed-text` embedding model that folder
-attachments and search rely on.
+On the bundled engine, the manager shows the built-in **catalog** — the Gemma 4 family plus the `nomic-embed-text` embedding model that folder attachments and search rely on. Each entry lists its download size and how much memory it wants, with the recommended pick flagged. Click **Download** on any of them.
 
-While a download runs you'll see a live progress bar with percentage and
-bytes. Downloads keep running if you close the manager — reopen it any
-time to check progress, and a notification toast appears when the model
-is ready. **Cancel** stops a download immediately; partially-downloaded
-layers are kept by Ollama, so retrying later resumes cheaply.
+While a download runs you'll see a live progress bar with percentage and bytes. Downloads keep running if you close the manager — reopen it any time to check progress, and a notification toast appears when the model is ready. Downloads are **checksummed** (a corrupted file never looks installed) and **resumable**: **Cancel** stops immediately but keeps what's already downloaded, so retrying later picks up where it left off.
 
 You can queue several downloads at once; each gets its own progress row.
 
@@ -38,20 +26,16 @@ You can queue several downloads at once; each gets its own progress row.
 
 ## Deleting a model
 
-Click **Delete** next to any installed model. A confirmation explains
-what's about to happen — deleting removes the model from disk, but you
-can always pull it again later. If you delete the model you're currently
-chatting with, Ekorbia falls back to another installed model at the next
-launch so you're never stranded.
+Click **Delete** next to any installed model. A confirmation explains what's about to happen — deleting removes the model's files from disk, but you can always download it again later. If you delete the model you're currently chatting with, Ekorbia falls back to another installed model at the next launch so you're never stranded.
 
-## The terminal still works
+## Using Ollama or a custom endpoint instead
 
-Everything the manager does can also be done with the Ollama CLI
-(`ollama pull`, `ollama rm`, `ollama list`) — the manager and the CLI
-see the same models, so use whichever you prefer.
+If you've switched to the **Ollama** backend under **Settings → Backend**, the manager instead manages your Ollama models — type any name from [ollama.com/library](https://ollama.com/library) and pull it, or delete what you have. Everything the manager does there can also be done with the Ollama CLI (`ollama pull`, `ollama rm`, `ollama list`); the manager and the CLI see the same models.
+
+On a **custom endpoint**, the server owns its own model store, so the manager's download/delete controls are hidden — manage models on that server directly.
 
 ## Related pages
 
-- [Pull your first model](./getting-started/pull-a-model.md) — picking a
-  good first model for your machine
+- [Choose a model](./getting-started/choose-a-model.md) — picking a good
+  first model for your machine, and choosing a backend
 - [Settings](./settings.md)

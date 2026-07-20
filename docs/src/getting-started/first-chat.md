@@ -1,6 +1,6 @@
 # Your first chat
 
-With Ollama running and at least one chat model pulled, you're ready to use Ekorbia.
+With at least one model installed (see [Choose a model](./choose-a-model.md)), you're ready to use Ekorbia.
 
 ## Launch the app
 
@@ -10,15 +10,15 @@ Open **Ekorbia** from your Applications folder. The main window appears with:
 - **Chat pane** in the middle — currently empty
 - **Right panel** on the right with three tabs (📋 Prompts, 👁 Watches, 📄 Files)
 - **Composer** at the bottom — where you type
-- **Status bar** at the very bottom — shows Ollama's status and any background indexing
+- **Status bar** at the very bottom — shows the backend + model status and any background indexing
 
 <!-- TODO: screenshot of the empty main window -->
 
 ## Pick your model
 
-In the bottom-right of the composer there's a **model picker** showing the active model's name. Click it to see every model currently installed in Ollama. Pick one.
+In the bottom-right of the composer there's a **model picker** showing the active model's name. Click it to see every installed model. Pick one.
 
-Your choice **persists across launches** — Ekorbia remembers the last model you used and re-opens to it. If that model is no longer installed (e.g. you ran `ollama rm`), Ekorbia silently falls back to the first available one.
+Your choice **persists across launches** — Ekorbia remembers the last model you used and re-opens to it. If that model is no longer installed (e.g. you deleted it), Ekorbia silently falls back to the first available one.
 
 > **Badges on the model name.** If the active model can use **tools** (write files automatically), a small `TOOL` badge appears next to its name. If you've attached an image to the chat, a `VISION` badge appears on the image chip when the model can see it.
 

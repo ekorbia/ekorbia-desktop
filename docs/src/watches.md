@@ -38,7 +38,7 @@ Every watch has:
 
 - **Name** — what shows in the list (free-form)
 - **Source** — the folder path, feed URL, or web URL
-- **Model** — which Ollama model summarizes new events (defaults to your main chat model)
+- **Model** — which model summarizes new events (defaults to your main chat model)
 - **Summarization prompt** — optional system prompt; you can pick one of the included `*-Watcher` prompts or none
 - **Notes file** — where summaries are appended (defaults to `~/Documents/Ekorbia/notes.md`)
 - **Cadence** — how often to poll (in seconds)

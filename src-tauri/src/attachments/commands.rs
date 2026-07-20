@@ -18,7 +18,9 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use crate::attachments::cancel::{cancel_index, register_cancel};
-use crate::attachments::config::{current_embedding_model, current_top_k};
+use crate::attachments::config::{
+    current_embedding_identity, current_embedding_model, current_top_k,
+};
 use crate::attachments::folder::index_folder;
 use crate::attachments::pipeline::{index_attachment, retrieve_chunks, set_attachment_status};
 use crate::attachments::types::{
@@ -480,19 +482,23 @@ pub(crate) struct StaleAttachmentInfo {
 
 #[tauri::command]
 pub(crate) fn embedding_stale_count(app: tauri::AppHandle) -> Result<StaleAttachmentInfo, String> {
-    let current = current_embedding_model(&app);
+    // Compare on the backend-qualified identity (what's stored), but show
+    // the bare wire name in the banner — "engine:nomic-embed-text" is an
+    // internal tag, not user-facing copy.
+    let current_identity = current_embedding_identity(&app);
+    let current_model = current_embedding_model(&app);
     let state = app.state::<DbState>();
     let db = state.0.lock().map_err(|e| e.to_string())?;
     let count: i64 = db
         .query_row(
             "SELECT COUNT(DISTINCT attachment_id) FROM attachment_chunks WHERE embed_model != ?1",
-            [current.as_str()],
+            [current_identity.as_str()],
             |row| row.get(0),
         )
         .unwrap_or(0);
     Ok(StaleAttachmentInfo {
         count,
-        current_model: current,
+        current_model,
     })
 }
 
@@ -503,7 +509,8 @@ pub(crate) fn embedding_stale_count(app: tauri::AppHandle) -> Result<StaleAttach
 /// as each one starts.
 #[tauri::command]
 pub(crate) fn attachment_reindex_stale(app: tauri::AppHandle) -> Result<i64, String> {
-    let current = current_embedding_model(&app);
+    // Match on the stored identity, not the wire name (see embed_identity).
+    let current = current_embedding_identity(&app);
     let stale_ids: Vec<(String, String)> = {
         let state = app.state::<DbState>();
         let db = state.0.lock().map_err(|e| e.to_string())?;

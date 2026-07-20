@@ -1,18 +1,12 @@
 # Images and vision models
 
-Ekorbia supports image attachments through any **vision-capable model** in Ollama (Gemma 3/4, LLaVA, llama 3.2 Vision, etc.). Drop a `.png`, `.jpg`, `.jpeg`, or `.webp` into a chat and a model that can see it will see it.
+Ekorbia supports image attachments through any **vision-capable model**. Drop a `.png`, `.jpg`, `.jpeg`, or `.webp` into a chat and a model that can see it will see it.
 
 ## What counts as a vision model
 
-When Ekorbia loads a model from Ollama, it checks the model's metadata for vision support. Models that can see images get a small **`VISION`** badge in the model picker.
+Ekorbia detects vision support per model; models that can see images get a small **`VISION`** badge in the model picker.
 
-To pull a vision-capable model:
-
-```bash
-ollama pull gemma3:4b        # small and fast
-ollama pull gemma4:26b       # larger, smarter
-ollama pull llava            # classic vision model
-```
+On the **bundled engine**, every model in the built-in catalog is vision-capable — just download any Gemma 4 from **Settings → Models**. (On the Ollama backend, pull one like `gemma4:e4b` or `llava`.)
 
 ## Attaching an image
 
@@ -31,14 +25,14 @@ What happens depends on whether your active model can see images:
 
 ### When the active model is vision-capable
 
-The image is encoded as base64 and included in the request to Ollama. The model receives it as part of your message and can describe, analyze, or answer questions about it.
+The image is encoded as base64 and included in the request to the model. It receives the image as part of your message and can describe, analyze, or answer questions about it.
 
 ### When the active model is NOT vision-capable
 
 Ekorbia checks whether any vision-capable model is installed:
 
 - **At least one available** — Ekorbia automatically switches to it and shows a toast: *"Switched to vision model: gemma3:4b"*. The original model is restored if you remove the image.
-- **None available** — A toast warns you the image will be ignored. You can still attach it (no error), but the model can't see it. Pull a vision model to fix the situation: `ollama pull gemma3:4b`.
+- **None available** — A toast warns you the image will be ignored. You can still attach it (no error), but the model can't see it. Download a vision model to fix the situation — any Gemma 4 in **Settings → Models**.
 
 This auto-switch only happens for image attachments — text attachments never trigger a model swap.
 
@@ -52,4 +46,4 @@ This auto-switch only happens for image attachments — text attachments never t
 
 - [Attaching files](./files.md)
 - [Screenshot capture](../screenshots.md)
-- [Pull your first model](../getting-started/pull-a-model.md) — pulling a vision model
+- [Choose a model](../getting-started/choose-a-model.md) — picking a vision-capable model

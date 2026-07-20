@@ -3606,19 +3606,24 @@ function RightPanelTabs({ tab, onTab, onClose }) {
     </div>
   );
 }
-function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [] }) {
+function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [], backendKind: backendKindProp }) {
   const [ollamaUp, setOllamaUp] = useState(false);
-  // Active backend kind ('ollama' | 'openai') — drives the down-state
-  // label and whether clicking the pill opens the OllamaGate (never on a
-  // BYO endpoint; the gate's start/install flow doesn't apply there).
-  const [backendKind, setBackendKind] = useState("ollama");
+  // Active backend kind ('ollama' | 'openai' | 'engine') — drives the
+  // down-state label, the backend glyph, and whether clicking the pill opens
+  // the setup gate. PREFER the App's authoritative value (set once by the
+  // first-run decision effect); only self-read as a fallback when it isn't
+  // supplied — a self-read races the fresh-install engine switch and would
+  // otherwise show a stale "ollama" on first launch.
+  const [selfBackend, setSelfBackend] = useState("ollama");
   useEffect(() => {
+    if (backendKindProp) return;
     const inv = getInvoke();
     if (!inv) return;
     inv("llm_backend_config_get")
-      .then((c) => setBackendKind(c?.backend || "ollama"))
+      .then((c) => setSelfBackend(c?.backend || "ollama"))
       .catch(() => {});
-  }, []);
+  }, [backendKindProp]);
+  const backendKind = backendKindProp || selfBackend;
   const [pulled, setPulled] = useState(false);
   const [loaded, setLoaded] = useState(false);
 

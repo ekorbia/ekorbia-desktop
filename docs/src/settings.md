@@ -50,7 +50,7 @@ Settings that apply to [files](./attachments/files.md), [folders](./attachments/
 
 | Setting | What it does |
 |---|---|
-| **Embedding model** | Which Ollama model produces the embeddings used for chunk retrieval. Defaults to `nomic-embed-text`. Changing this triggers the Stale-Embeddings banner. |
+| **Embedding model** | Which model produces the embeddings used for chunk retrieval. Defaults to `nomic-embed-text`. Changing this (or switching backend) triggers the Stale-Embeddings banner. |
 | **Top-k chunks** | How many top-ranked chunks Ekorbia retrieves on each send. Defaults to 6. Higher = more context, slower, more tokens. |
 | **Folder file types** | Comma-separated list of file extensions the folder walker includes. Defaults to `.md, .txt, .pdf`. |
 | **Folder ignore patterns** | Comma-separated list of directory names the folder walker skips. Defaults to `.git, node_modules, target, dist, build, .venv, .next, .cache`. |

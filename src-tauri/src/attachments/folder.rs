@@ -10,7 +10,7 @@
 
 use crate::attachments::cancel::register_cancel;
 use crate::attachments::config::{
-    current_embedding_model, current_folder_exts, current_folder_ignore,
+    current_embedding_identity, current_embedding_model, current_folder_exts, current_folder_ignore,
 };
 use crate::attachments::pipeline::{
     chunk_text, emit_attachment_phase, emit_folder_progress, pack_embedding,
@@ -240,6 +240,9 @@ pub(crate) async fn index_folder(
     //    model. Anything else needs re-embedding. Sources that no longer
     //    appear in the walker output (deleted files) get removed.
     let embed_model_now = current_embedding_model(&app);
+    // Wire name (`embed_model_now`) is what we send to the provider; the
+    // backend-qualified identity is what we STORE + match on for freshness.
+    let embed_identity = current_embedding_identity(&app);
     // existing: path → (source_id, mtime, has_fresh_chunks)
     let existing: std::collections::HashMap<String, (String, i64, bool)> = {
         let state = app.state::<DbState>();
@@ -253,7 +256,7 @@ pub(crate) async fn index_folder(
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map((&id, embed_model_now.as_str()), |row| {
+            .query_map((&id, embed_identity.as_str()), |row| {
                 let sid: String = row.get(0)?;
                 let path: String = row.get(1)?;
                 let mtime: i64 = row.get(2)?;
@@ -335,7 +338,8 @@ pub(crate) async fn index_folder(
             return Ok(());
         }
         let batch_len = u32::try_from(batch.len()).unwrap_or(u32::MAX);
-        let (succeeded, err) = process_file_batch(&app, &id, &embed_model_now, batch).await;
+        let (succeeded, err) =
+            process_file_batch(&app, &id, &embed_model_now, &embed_identity, batch).await;
         let succeeded_u32 = u32::try_from(succeeded).unwrap_or(u32::MAX);
         let failed = batch_len.saturating_sub(succeeded_u32);
         indexed_count += i64::from(succeeded_u32);
@@ -543,6 +547,7 @@ async fn process_file_batch(
     app: &tauri::AppHandle,
     attachment_id: &str,
     embed_model: &str,
+    embed_identity: &str,
     batch: &[ProcessPlan],
 ) -> (usize, Option<String>) {
     // 1. Extract + chunk each file with bounded concurrency. PDF extraction
@@ -685,7 +690,7 @@ async fn process_file_batch(
                     ord_i64,
                     c_text,
                     blob.as_slice(),
-                    embed_model,
+                    embed_identity,
                     cs_i64,
                     ce_i64,
                 ),

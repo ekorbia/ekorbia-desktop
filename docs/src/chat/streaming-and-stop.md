@@ -16,9 +16,9 @@ When you stop:
 
 ## What happens behind the scenes
 
-Ekorbia talks to Ollama over an HTTP streaming endpoint. Each chunk Ollama emits is rendered into the UI as soon as it arrives, with Markdown re-parsed on every chunk so headings, lists, and code blocks render correctly while the reply is still being written.
+Ekorbia streams tokens from the model as they're produced. Each chunk is rendered into the UI as soon as it arrives, with Markdown re-parsed on every chunk so headings, lists, and code blocks render correctly while the reply is still being written.
 
-If your model supports **tool calls** (the `TOOL` badge on the model picker), tool calls only arrive in the final chunk of a turn — Ollama doesn't stream them progressively. The visible token stream pauses briefly between the model's text and the tool invocation, which is normal.
+If your model supports **tool calls** (the `TOOL` badge on the model picker), tool calls only arrive in the final chunk of a turn — they aren't streamed progressively. The visible token stream pauses briefly between the model's text and the tool invocation, which is normal.
 
 ## Related pages
 
