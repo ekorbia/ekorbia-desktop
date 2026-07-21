@@ -841,7 +841,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
         fontFamily: T.mono,
         fontSize: 10,
         fontWeight: 600,
-        color: T.fg3,
+        color: T.fg1,
         textTransform: "uppercase",
         letterSpacing: 0.7,
         paddingBottom: 2,
@@ -1055,6 +1055,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                     cursor: "pointer",
                   }}
                 >
+                  <option value="system">Match System</option>
                   {Object.entries(THEMES).map(([k, v]) => (
                     <option key={k} value={k}>
                       {v.label}
@@ -1068,6 +1069,12 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                 <Toggle
                   value={tweaks.showStatusBar}
                   onChange={(v) => setTweak("showStatusBar", v)}
+                />
+              </Row>
+              <Row label="Show technical details">
+                <Toggle
+                  value={tweaks.showDetails}
+                  onChange={(v) => setTweak("showDetails", v)}
                 />
               </Row>
 
@@ -1710,7 +1717,11 @@ function BackendSettings() {
           className="ek-btn-primary"
           style={{
             background: "var(--ek-accent)",
-            color: "var(--ek-accent-ink)",
+            // T.bg0 (not --ek-accent-ink): the ink var resolves to the amber
+            // itself on light themes, which vanished against the amber fill.
+            // T.bg0 is the app-wide "text on an accent fill" convention and
+            // contrasts on both themes.
+            color: T.bg0,
             border: "none",
             borderRadius: 7,
             padding: "7px 16px",

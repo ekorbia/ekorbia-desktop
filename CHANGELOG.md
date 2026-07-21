@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Less backend jargon, friendlier defaults.** Themes now have plain names
+  (Midnight, Warm, Daylight, Slate, Dusk, Sand) plus a **Match System**
+  appearance that follows macOS; the status bar and model pickers read
+  **Local · Private** instead of raw engine names, and the picker shows what
+  the active model supports.
+- **Technical details are hidden by default** — per-message token/timing
+  footers and capability badges now live behind Settings → **Show technical
+  details**, one click away on any message.
+- **Subtly colored toolbar icons** for a warmer, less utilitarian navigation.
+
+### Fixed
+
+- The Backend settings tab's **Save** button was invisible (amber text on an
+  amber fill) on light themes.
+
 ## [0.6.0] - 2026-07-20
 
 ### Added

@@ -15,6 +15,12 @@
   (function () {
     try {
       var t = JSON.parse(localStorage.getItem('ekorbia.tweaks') || '{}').theme;
+      // "system" follows the OS appearance — resolve to the brand light/dark
+      // defaults before first paint so Match-System users don't flash the
+      // wrong theme. Mirrors the resolveThemeKey logic in main.jsx.
+      if (t === 'system') t = (window.matchMedia &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches)
+        ? 'one_dark' : 'one_light';
       var bg = {
         one_dark: '#0d0f13', warm_dark: '#0a0a0c',
         one_light: '#fafafa', ayu_dark: '#0d1017',

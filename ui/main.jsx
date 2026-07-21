@@ -21,7 +21,7 @@ const THEMES = {
     border:'#262a33', borderStrong:'#2f3540',
     amber:'#f0934a', blue:'#5fb0ff', green:'#7dd17a', purple:'#c281f5',
     yellow:'#e8ca6a', teal:'#6cc7d1', red:'#ff8b8b',
-    label:'one dark',
+    label:'Midnight',
   },
   warm_dark: {
     bg0:'#0a0a0c', bg1:'#15151a', bg2:'#1c1c22', bg3:'#272730', bg4:'#33333d',
@@ -29,7 +29,7 @@ const THEMES = {
     border:'#2e2e38', borderStrong:'#3d3d48',
     amber:'#d48a50', blue:'#7ea7d8', green:'#9bbf83', purple:'#c89bd0',
     yellow:'#d8c97e', teal:'#83b4bf', red:'#d87e7e',
-    label:'warm dark',
+    label:'Warm',
   },
   one_light: {
     bg0:'#fafafa', bg1:'#f0f0f0', bg2:'#e7e7e7', bg3:'#d8d8d8', bg4:'#c4c4c4',
@@ -37,7 +37,7 @@ const THEMES = {
     border:'#d4d4d4', borderStrong:'#bcbcbc',
     amber:'#b15c13', blue:'#4078f2', green:'#50a14f', purple:'#a626a4',
     yellow:'#c18401', teal:'#0184bc', red:'#e45649',
-    light:true, label:'one light',
+    light:true, label:'Daylight',
   },
   ayu_dark: {
     bg0:'#0d1017', bg1:'#131721', bg2:'#1b202a', bg3:'#232a35', bg4:'#2d3540',
@@ -45,7 +45,7 @@ const THEMES = {
     border:'#262d38', borderStrong:'#3a4150',
     amber:'#e6b450', blue:'#5fb0ff', green:'#7dd17a', purple:'#c281f5',
     yellow:'#e8ca6a', teal:'#6cc7d1', red:'#ff8b8b',
-    label:'ayu dark',
+    label:'Slate',
   },
   ayu_mirage: {
     bg0:'#1f2430', bg1:'#232834', bg2:'#2a2f3d', bg3:'#343a4b', bg4:'#3d4456',
@@ -53,7 +53,7 @@ const THEMES = {
     border:'#2d3340', borderStrong:'#3d4456',
     amber:'#ffcc66', blue:'#5fb0ff', green:'#7dd17a', purple:'#c281f5',
     yellow:'#e8ca6a', teal:'#6cc7d1', red:'#ff8b8b',
-    label:'ayu mirage',
+    label:'Dusk',
   },
   ayu_light: {
     bg0:'#fcfcfc', bg1:'#f3f4f5', bg2:'#e8eaeb', bg3:'#dcdfe2', bg4:'#c8ccd0',
@@ -61,7 +61,7 @@ const THEMES = {
     border:'#dcdfe2', borderStrong:'#bcc0c5',
     amber:'#fa8d3e', blue:'#399ee6', green:'#86b300', purple:'#a37acc',
     yellow:'#f2ae49', teal:'#4cbf99', red:'#f07171',
-    light:true, label:'ayu light',
+    light:true, label:'Sand',
   },
 };
 
@@ -69,7 +69,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "theme": "one_dark",
   "fontScale": 1.0,
   "density": "comfortable",
-  "showStatusBar": true
+  "showStatusBar": true,
+  "showDetails": false
 }/*EDITMODE-END*/;
 
 // ── Helper functions ──────────────────────────────────────────────────────────
@@ -345,13 +346,45 @@ function OutputDirModal({ chatId, chatTitle, suggested, onClose, invoke }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
+// Tracks the OS light/dark preference and re-renders when it flips. Backs the
+// "Match System" theme choice — WebKit floor is Safari 14, so addEventListener
+// on the MediaQueryList is available (no legacy addListener shim needed).
+function usePrefersDark() {
+  const mq = () =>
+    typeof matchMedia === "function"
+      ? matchMedia("(prefers-color-scheme: dark)")
+      : null;
+  const [dark, setDark] = useS(() => {
+    const m = mq();
+    return m ? m.matches : true; // default dark when matchMedia is absent
+  });
+  useE(() => {
+    const m = mq();
+    if (!m) return;
+    const onChange = (e) => setDark(e.matches);
+    m.addEventListener("change", onChange);
+    return () => m.removeEventListener("change", onChange);
+  }, []);
+  return dark;
+}
+
 function App() {
   // Fallback to a rejecting stub so call sites can `await invoke(...)`
   // unconditionally — non-Tauri (pure-browser dev) has no IPC bridge.
   const invoke = getInvoke() ?? (() => Promise.reject('no tauri'));
 
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const theme = THEMES[tweaks.theme] || THEMES.one_dark;
+  // "system" (Match System) follows the OS appearance, resolving to the brand
+  // light/dark defaults and re-resolving live when the OS flips. Any other
+  // value is a concrete THEMES key.
+  const systemDark = usePrefersDark();
+  const resolvedThemeKey =
+    tweaks.theme === "system"
+      ? systemDark
+        ? "one_dark"
+        : "one_light"
+      : tweaks.theme;
+  const theme = THEMES[resolvedThemeKey] || THEMES.one_dark;
 
   // Apply theme tokens to T (mutate in place — components read T at render).
   // Includes fg1/fg2/fg3 + border tokens so light themes don't end up with
@@ -4385,6 +4418,9 @@ function App() {
                   // Resolved at the parent so ChatPane stays presentation-
                   // only and doesn't need the spaces array.
                   space={chat.spaceId ? (spaces || []).find(s => s.id === chat.spaceId) || null : null}
+                  // Progressive disclosure: when off (default), per-message
+                  // token/timing footers collapse to a quiet "Details" toggle.
+                  showDetails={tweaks.showDetails}
                 />
                 <Composer
                   model={tabModel}
@@ -4432,6 +4468,9 @@ function App() {
                   seedKey={composerSeedKey}
                   // Hide attach buttons in private mode — see Composer notes.
                   ephemeral={!!chat.ephemeral}
+                  // When off (default), the capability chip collapses to a
+                  // quiet ⓘ tooltip beside the model picker.
+                  showDetails={tweaks.showDetails}
                 />
               </>
             )}

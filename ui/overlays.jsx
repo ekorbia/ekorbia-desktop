@@ -25,9 +25,13 @@ function modelColor(name) {
   return MODEL_COLORS[h % MODEL_COLORS.length];
 }
 
-function ModelPicker({ active, onPick, onClose }) {
+function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasVision = false }) {
   const [models, setModels] = useState(null); // null = loading
   const [error, setError] = useState("");
+  // Whether the active backend runs on this machine — drives the group
+  // header ("Local models" vs "Models"). Defaults local (the common case);
+  // a remote BYO endpoint must not claim "Local".
+  const [local, setLocal] = useState(true);
   const invoke = getInvoke();
 
   useEffect(() => {
@@ -54,12 +58,26 @@ function ModelPicker({ active, onPick, onClose }) {
   }, []);
 
   useEffect(() => {
+    if (!invoke) return;
+    invoke("llm_backend_config_get")
+      .then((c) => setLocal(isLocalEndpoint(c?.backend || "ollama", c?.baseUrl)))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     const onClick = (e) => {
       if (!e.target.closest("[data-model-picker]")) onClose();
     };
     setTimeout(() => document.addEventListener("click", onClick), 0);
     return () => document.removeEventListener("click", onClick);
   }, [onClose]);
+
+  // Capability labels for the ACTIVE model (the only one whose caps we know
+  // here — a per-model probe would be a separate feature). Rendered on the
+  // active row's subtitle; empty string when the model reports neither.
+  const capsStr = [modelHasTools && "Tool use", modelHasVision && "Vision"]
+    .filter(Boolean)
+    .join(" • ");
 
   return (
     <div
@@ -68,7 +86,7 @@ function ModelPicker({ active, onPick, onClose }) {
         position: "absolute",
         bottom: "calc(100% + 6px)",
         right: 0,
-        width: 340,
+        width: 400,
         background: T.bg1,
         border: `1px solid ${T.borderStrong}`,
         borderRadius: 6,
@@ -89,7 +107,7 @@ function ModelPicker({ active, onPick, onClose }) {
           letterSpacing: 0.6,
         }}
       >
-        Local models · ollama
+        {local ? "Local models" : "Models"}
       </div>
 
       {models === null && (
@@ -218,11 +236,23 @@ function ModelPicker({ active, onPick, onClose }) {
                   style={{
                     fontFamily: T.mono,
                     fontSize: 10,
-                    color: T.fg3,
+                    color: T.fg1,
                     marginTop: 1,
                   }}
                 >
                   {sizeOnDisk} on disk
+                </div>
+              )}
+              {isActive && capsStr && (
+                <div
+                  style={{
+                    fontFamily: T.mono,
+                    fontSize: 10,
+                    color: T.fg1,
+                    marginTop: 1,
+                  }}
+                >
+                  Supports: {capsStr}
                 </div>
               )}
             </div>

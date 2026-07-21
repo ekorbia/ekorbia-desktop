@@ -38,6 +38,9 @@ function IconButton({
   active,
   title,
   size = 26,
+  // Optional brand-family hue for the icon glyph only (label stays neutral).
+  // Pass a theme token (e.g. T.purple) so it adapts across light/dark themes.
+  tint,
   children,
 }) {
   const [hover, setHover] = useState(false);
@@ -64,7 +67,11 @@ function IconButton({
         fontSize: 11,
       }}
     >
-      {Ico && <Ico size={13} />}
+      {Ico && (
+        <span style={{ display: "inline-flex", color: tint || "inherit" }}>
+          <Ico size={13} />
+        </span>
+      )}
       {children}
     </button>
   );

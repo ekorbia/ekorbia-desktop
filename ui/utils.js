@@ -900,6 +900,40 @@ function lightenHex(hex, amount) {
   );
 }
 
+// ── isLocalEndpoint ────────────────────────────────────────────────────────
+//
+// True when inference runs on THIS machine: the bundled engine, or an
+// endpoint whose host is loopback (localhost / 127.0.0.0-8 / ::1 /
+// *.localhost). Drives the StatusBar "Local · Private" caption — a remote
+// host must NEVER be labeled private. Ollama with no base-URL override
+// defaults to 127.0.0.1:11434, so a bare Ollama backend is local; an
+// OpenAI-compatible backend REQUIRES a base URL, so an empty one there is
+// treated as not-local rather than guessed. A LM Studio / llama-server BYO
+// endpoint at 127.0.0.1 correctly reads as local.
+function isLocalEndpoint(backendKind, baseUrl) {
+  if (backendKind === "engine") return true;
+  if (!baseUrl) return backendKind === "ollama";
+  let host;
+  try {
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(baseUrl)
+      ? baseUrl
+      : "http://" + baseUrl;
+    host = new URL(withScheme).hostname.toLowerCase();
+  } catch (_e) {
+    return false;
+  }
+  // URL() keeps the brackets on IPv6 literals ('[::1]'); strip them so the
+  // loopback compare below sees a bare '::1'.
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "::1" ||
+    host === "0.0.0.0" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+  );
+}
+
 // ── Publish on window (browser) and module.exports (Node) ──────────────────
 //
 // `typeof window` lets the same file work as both a global-scope script
@@ -950,6 +984,7 @@ if (typeof window !== "undefined") {
   window.instantiateSpacePinnedAttachments = instantiateSpacePinnedAttachments;
   window.hexToRgbTriplet = hexToRgbTriplet;
   window.lightenHex = lightenHex;
+  window.isLocalEndpoint = isLocalEndpoint;
 }
 
 // ── instantiateSpacePinnedAttachments ────────────────────────────────────
@@ -1058,5 +1093,6 @@ if (typeof module !== "undefined" && module.exports) {
     instantiateSpacePinnedAttachments,
     hexToRgbTriplet,
     lightenHex,
+    isLocalEndpoint,
   };
 }

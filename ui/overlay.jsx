@@ -120,11 +120,18 @@ function QuickQuery() {
   // ("run ollama serve") and must not lie on the engine / custom-endpoint
   // backends, whose errors are already user-directed.
   const [backendKind, setBackendKind] = qS('ollama');
+  // Whether the backend runs on this machine — drives the picker header
+  // ("Local models" vs "Models"). Defaults local (the common case); a remote
+  // BYO endpoint must not claim "Local".
+  const [local, setLocal] = qS(true);
   qE(() => {
     const inv = getInvoke();
     if (!inv) return;
     inv('llm_backend_config_get')
-      .then((c) => setBackendKind((c && c.backend) || 'ollama'))
+      .then((c) => {
+        setBackendKind((c && c.backend) || 'ollama');
+        setLocal(isLocalEndpoint((c && c.backend) || 'ollama', c && c.baseUrl));
+      })
       .catch(() => {});
   }, []);
 
@@ -875,7 +882,7 @@ function QuickQuery() {
               letterSpacing: 0.6,
             }}
           >
-            Local models · ollama
+            {local ? "Local models" : "Models"}
           </div>
 
           {availableModels === null && (
@@ -1015,7 +1022,7 @@ function QuickQuery() {
                       style={{
                         fontFamily: FONT_MONO,
                         fontSize: 10,
-                        color: C_FG2,
+                        color: C_FG1,
                         marginTop: 1,
                       }}
                     >

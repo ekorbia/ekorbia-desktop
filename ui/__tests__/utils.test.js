@@ -31,6 +31,7 @@ const {
   instantiateSpacePinnedAttachments,
   hexToRgbTriplet,
   lightenHex,
+  isLocalEndpoint,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -1040,4 +1041,30 @@ test("lightenHex: negative amounts darken; out-of-range clamps", () => {
   assert.equal(lightenHex("#ffffff", -0.5), "#808080");
   assert.equal(lightenHex("#ffffff", -2), "#000000");
   assert.equal(lightenHex("#5fb0ff", 2), "#ffffff");
+});
+
+// ── isLocalEndpoint ──────────────────────────────────────────────────────
+test("isLocalEndpoint: bundled engine is always local", () => {
+  assert.equal(isLocalEndpoint("engine", null), true);
+  assert.equal(isLocalEndpoint("engine", "http://example.com"), true);
+});
+
+test("isLocalEndpoint: bare Ollama defaults to localhost", () => {
+  assert.equal(isLocalEndpoint("ollama", null), true);
+  assert.equal(isLocalEndpoint("ollama", ""), true);
+});
+
+test("isLocalEndpoint: loopback hosts are local (incl. BYO at 127.0.0.1)", () => {
+  assert.equal(isLocalEndpoint("openai", "http://127.0.0.1:1234/v1"), true);
+  assert.equal(isLocalEndpoint("openai", "http://localhost:8080"), true);
+  assert.equal(isLocalEndpoint("openai", "http://[::1]:8080"), true);
+  assert.equal(isLocalEndpoint("ollama", "http://127.0.0.5:11434"), true);
+  assert.equal(isLocalEndpoint("openai", "localhost:1234"), true); // no scheme
+});
+
+test("isLocalEndpoint: remote hosts are NOT local (never claim private)", () => {
+  assert.equal(isLocalEndpoint("openai", "https://api.openai.com/v1"), false);
+  assert.equal(isLocalEndpoint("openai", "http://192.168.1.50:1234"), false);
+  assert.equal(isLocalEndpoint("ollama", "http://my-server.lan:11434"), false);
+  assert.equal(isLocalEndpoint("openai", ""), false); // BYO requires a URL
 });

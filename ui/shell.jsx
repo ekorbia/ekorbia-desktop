@@ -89,6 +89,7 @@ function TitleBar({
         onClick={onTogglePrompts}
         active={rightPanelOpen && rightPanelTab === "prompts"}
         title="Prompt library"
+        tint={T.purple}
       >
         Prompts
       </IconButton>
@@ -97,6 +98,7 @@ function TitleBar({
         onClick={onToggleWatch}
         active={rightPanelOpen && rightPanelTab === "watches"}
         title="Watches — folder→notes pipelines"
+        tint={T.amber}
       >
         Watch
       </IconButton>
@@ -105,6 +107,7 @@ function TitleBar({
         onClick={onToggleFiles}
         active={rightPanelOpen && rightPanelTab === "files"}
         title="Files saved by this chat"
+        tint={T.blue}
       >
         Files
       </IconButton>
@@ -470,7 +473,7 @@ function Sidebar({
                 fontFamily: T.mono,
                 fontSize: 10,
                 fontWeight: 500,
-                color: T.fg3,
+                color: T.fg1,
                 textTransform: "uppercase",
                 letterSpacing: 0.6,
               }}
@@ -510,7 +513,7 @@ function Sidebar({
                 fontFamily: T.mono,
                 fontSize: 10,
                 fontWeight: 500,
-                color: T.fg3,
+                color: T.fg1,
                 textTransform: "uppercase",
                 letterSpacing: 0.6,
               }}
@@ -749,7 +752,7 @@ function SpacesSection({
           fontFamily: T.mono,
           fontSize: 10,
           fontWeight: 500,
-          color: T.fg3,
+          color: T.fg1,
           textTransform: "uppercase",
           letterSpacing: 0.6,
           display: "flex",
@@ -3615,12 +3618,23 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [], ba
   // supplied — a self-read races the fresh-install engine switch and would
   // otherwise show a stale "ollama" on first launch.
   const [selfBackend, setSelfBackend] = useState("ollama");
+  // Whether inference runs on THIS machine — drives the "Local · Private" vs
+  // "Remote" caption. Derived from the backend config's base URL (loopback =
+  // local). Defaults to local: both default backends (bundled engine,
+  // localhost Ollama) are.
+  const [endpointLocal, setEndpointLocal] = useState(true);
   useEffect(() => {
-    if (backendKindProp) return;
     const inv = getInvoke();
     if (!inv) return;
     inv("llm_backend_config_get")
-      .then((c) => setSelfBackend(c?.backend || "ollama"))
+      .then((c) => {
+        // backendKind stays App-authoritative (prop); we self-read it only as
+        // a fallback. The base URL is read purely for the local/remote label.
+        if (!backendKindProp) setSelfBackend(c?.backend || "ollama");
+        setEndpointLocal(
+          isLocalEndpoint(backendKindProp || c?.backend || "ollama", c?.baseUrl)
+        );
+      })
       .catch(() => {});
   }, [backendKindProp]);
   const backendKind = backendKindProp || selfBackend;
@@ -3689,9 +3703,10 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [], ba
 
   const byo = backendKind === "openai";
   const engineB = backendKind === "engine";
-  // Left-glyph caption names the active backend so the pill's states
-  // read correctly ("engine · gemma loaded" vs "ollama · …").
-  const backendGlyph = engineB ? "engine" : byo ? "endpoint" : "ollama";
+  // Plain-language backend caption (replaces the raw "engine / ollama /
+  // endpoint" jargon). A loopback backend is private; a remote endpoint is
+  // labeled honestly, with no privacy claim.
+  const backendLabel = endpointLocal ? "Local · Private" : "Remote";
   let dotColor, label, dim;
   if (!ollamaUp) {
     dotColor = T.fg3;
@@ -3760,7 +3775,7 @@ function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [], ba
         }}
       >
         <ModelDot color={dotColor} size={6} glow={false} />
-        {backendGlyph}
+        {backendLabel}
       </span>
       <span
         data-status-model-pill
