@@ -3967,7 +3967,20 @@ function App() {
       if (raw === 'openai') { setBackendKind('openai'); return; } // BYO: no setup gate
       if (raw === 'engine') { setBackendKind('engine'); setSetupGateOpen(true); return; }
       if (raw === 'ollama') { setBackendKind('ollama'); setSetupGateOpen(true); return; }
-      // raw is unset → first-run decision.
+      // raw is unset → first-run decision. The engine default + migration
+      // offer only make sense where the engine is actually bundled (macOS in
+      // the current release). Where the sidecar is absent (Linux/Windows),
+      // fall back to the classic Ollama first-run so those users still get a
+      // guided setup instead of an "engine unavailable" dead end. Don't
+      // persist here — leaving llm_backend unset lets a future build that DOES
+      // ship the engine re-evaluate and flip them.
+      let engineOk = false;
+      try { const st = await invoke('engine_status'); engineOk = !!(st && st.binaryOk); } catch {}
+      if (!engineOk) {
+        setBackendKind('ollama');
+        setSetupGateOpen(true);
+        return;
+      }
       let onboarded = null;
       try { onboarded = await invoke('setting_get', { key: 'onboarding.completed' }); } catch {}
       if (!onboarded) {

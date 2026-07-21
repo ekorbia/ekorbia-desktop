@@ -1,6 +1,6 @@
 {
   "productName": "Ekorbia",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "identifier": "com.ekorbia.desktop",
   "build": {
     "frontendDist": "../ui"

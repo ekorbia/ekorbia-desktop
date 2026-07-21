@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-20
+
 ### Added
 
 - **Ekorbia runs models itself — no Ollama, no terminal.** A bundled
@@ -14,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   First launch recommends a model sized for your Mac and downloads it with
   one click; you're chatting in a couple of minutes. (Already using Ollama?
   Nothing breaks — you get a one-time offer to keep it or switch, and it
-  stays available under Settings → Backend.)
+  stays available under Settings → Backend.) The bundled engine is
+  macOS-only in this release; Linux and Windows continue to use Ollama or
+  a custom endpoint.
 - **Built-in model catalog.** The model manager downloads curated
   Gemma 4 models (official quantization-aware builds, vision included)
   and the RAG embedding model in-app — checksummed, resumable, no
