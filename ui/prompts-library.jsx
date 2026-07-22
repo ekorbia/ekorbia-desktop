@@ -40,7 +40,10 @@ function PromptLibrary({
   const [search, setSearch] = useState("");
   const [favoriteFilter, setFavoriteFilter] = useState(null);
   const [tagFilters, setTagFilters] = useState([]);
-  const [filtersOpen, setFiltersOpen] = useState(true);
+  // Collapsed by default — the tag list is a power-user affordance, not
+  // something to greet every panel-open with a wall of chips. The count
+  // badge next to the header still signals when filters are active.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   // Default to alphabetical — easier to scan / find a prompt by name once
   // the library has more than a handful. Users who prefer the recency view
   // can switch back via the sort menu; the choice is session-scoped so it
@@ -484,7 +487,9 @@ function PromptLibrary({
             textTransform: "uppercase",
           }}
         >
-          <span style={{ fontSize: 8 }}>{filtersOpen ? "▾" : "▸"}</span>
+          <span style={{ fontSize: 12, lineHeight: 1, width: 10, display: "inline-flex", justifyContent: "center" }}>
+            {filtersOpen ? "▾" : "▸"}
+          </span>
           <span>Filters</span>
           {tagFilters.length > 0 && (
             <span style={{ color: T.amber }}>· {tagFilters.length}</span>

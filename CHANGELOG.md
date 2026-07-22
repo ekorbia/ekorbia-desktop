@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   greeting and starter cards that drop one of your saved prompts into the
   composer (and focus it), falling back to a starter phrase if the prompt
   isn't in your library.
+- **A simpler Settings panel** — six focused tabs instead of seven. Keyboard
+  shortcuts get their own **Hotkeys** tab (with a one-click *Reset to
+  defaults*), and the separate Prompts, Memory, and Attachments tabs merge
+  into a single **Files** tab.
+- **A tidier prompts panel** — the tag filters now start collapsed, behind a
+  larger, easier-to-hit toggle.
 
 ### Fixed
 

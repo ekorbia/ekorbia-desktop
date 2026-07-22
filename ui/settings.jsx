@@ -816,6 +816,19 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
     }
   };
 
+  // Reset every applicable hotkey slot to its platform default. Each
+  // apply* call re-registers with Rust and persists, so this is a true
+  // reset, not just a UI value swap. Skips slots that don't apply on the
+  // current platform (Quick Query is hidden on Linux; dictation + screenshot
+  // are macOS-only).
+  const resetHotkeys = () => {
+    if (!IS_LINUX) applyHotkey(HOTKEY_DEFAULT);
+    if (IS_MAC) {
+      applyVoiceHotkey(VOICE_HOTKEY_DEFAULT);
+      applyScreenshotHotkey(SCREENSHOT_HOTKEY_DEFAULT);
+    }
+  };
+
   if (!open) return null;
 
   const Row = ({ label, children }) => (
@@ -925,9 +938,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          // Wide enough that all six tabs (General…Attachments) fit inside
-          // the strip's own 16px side padding — at 420 the last tab sat
-          // flush against the dialog edge.
+          // Wide enough that all six tabs (General…Files) fit inside the
+          // strip's own 16px side padding — at 420 the last tab sat flush
+          // against the dialog edge.
           width: 480,
           background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
@@ -986,13 +999,18 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
         >
           {[
             { id: "general", label: "General" },
-            { id: "models", label: "Models" },
             { id: "backend", label: "Backend" },
+            { id: "models", label: "Models" },
             // Voice input is macOS-only (the Whisper backend is macOS-gated).
             ...(IS_MAC ? [{ id: "voice", label: "Voice" }] : []),
-            { id: "prompts", label: "Prompts" },
-            { id: "memory", label: "Memory" },
-            { id: "attachments", label: "Attachments" },
+            // Hotkeys: Quick Query is macOS+Windows; dictation + screenshot
+            // are macOS-only — nothing to show on Linux, so hide the tab
+            // there rather than render an empty pane.
+            ...(!IS_LINUX ? [{ id: "hotkeys", label: "Hotkeys" }] : []),
+            // "Files" collects the file/folder-backed settings that used to
+            // be three separate tabs (prompts library, memory file,
+            // attachment embedding).
+            { id: "files", label: "Files" },
           ].map(({ id, label }) => (
             <button
               key={id}
@@ -1077,122 +1095,6 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                   onChange={(v) => setTweak("showDetails", v)}
                 />
               </Row>
-
-              {/* Quick Query overlay: macOS + Windows (where transparent
-                  + always-on-top windows + per-window vibrancy all work).
-                  Linux falls through to Phase L2 — the overlay code path
-                  isn't wired up there yet, so showing the hotkey setting
-                  would be misleading. */}
-              {!IS_LINUX && (
-                <>
-                  <SectionLabel label="Quick Query" />
-                  <Row label="Hotkey">
-                    <HotkeyCapture value={hotkey} onChange={applyHotkey} />
-                  </Row>
-                  {hotkeyError && (
-                    <div
-                      style={{
-                        marginTop: -2,
-                        padding: "4px 0",
-                        fontFamily: T.mono,
-                        fontSize: 10.5,
-                        color: T.red,
-                        textAlign: "right",
-                      }}
-                    >
-                      {hotkeyError}
-                    </div>
-                  )}
-                  <div
-                    style={{
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg3,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    {IS_MAC
-                      ? "Click to capture. Needs at least one modifier (⌘/⌃/⌥)."
-                      : "Click to capture. Needs at least one modifier (Win / Ctrl / Alt)."}
-                  </div>
-                </>
-              )}
-
-              {/* Voice dictation hotkey — macOS only (the Whisper backend is
-                  macOS-gated; see voice.jsx / Cargo.toml). */}
-              {IS_MAC && (
-                <>
-                  <SectionLabel label="Voice input" />
-                  <Row label="Dictation hotkey">
-                    <HotkeyCapture value={voiceHotkey} onChange={applyVoiceHotkey} />
-                  </Row>
-                  {voiceHotkeyError && (
-                    <div
-                      style={{
-                        marginTop: -2,
-                        padding: "4px 0",
-                        fontFamily: T.mono,
-                        fontSize: 10.5,
-                        color: T.red,
-                        textAlign: "right",
-                      }}
-                    >
-                      {voiceHotkeyError}
-                    </div>
-                  )}
-                  <div
-                    style={{
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg3,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    Opens the quick-query overlay and starts listening. Click to
-                    capture; needs at least one modifier.
-                  </div>
-                </>
-              )}
-
-              {/* Screenshot capture: macOS only for now. Linux (Phase L3)
-                  and Windows (Phase W3) need their own capture pipelines —
-                  /usr/sbin/screencapture is mac-exclusive. */}
-              {IS_MAC && (
-                <>
-                  <SectionLabel label="Screenshot" />
-                  <Row label="Hotkey">
-                    <HotkeyCapture
-                      value={screenshotHotkey}
-                      onChange={applyScreenshotHotkey}
-                    />
-                  </Row>
-                  {screenshotHotkeyError && (
-                    <div
-                      style={{
-                        marginTop: -2,
-                        padding: "4px 0",
-                        fontFamily: T.mono,
-                        fontSize: 10.5,
-                        color: T.red,
-                        textAlign: "right",
-                      }}
-                    >
-                      {screenshotHotkeyError}
-                    </div>
-                  )}
-                  <div
-                    style={{
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg3,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    Captures a screen region (drag to select, Space for a window,
-                    Esc to cancel) and opens it in a new chat with a vision model.
-                  </div>
-                </>
-              )}
 
               <SectionLabel label="Help" />
               <Row label="Onboarding tour">
@@ -1311,10 +1213,166 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
             </>
           )}
 
-          {/* ── Prompts tab ──────────────────────────────────────── */}
-          {activeTab === "prompts" && (
+          {/* ── Hotkeys tab ──────────────────────────────────────── */}
+          {/* Global shortcuts, split out of General. Quick Query is       */}
+          {/* macOS+Windows; dictation + screenshot are macOS-only, so the */}
+          {/* tab is hidden on Linux (see the tab-strip gate above).       */}
+          {activeTab === "hotkeys" && (
             <>
-              <SectionLabel label="Prompts Folder" />
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  marginTop: 2,
+                }}
+              >
+                <div
+                  style={{
+                    flex: 1,
+                    fontFamily: T.mono,
+                    fontSize: 10,
+                    color: T.fg3,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Global keyboard shortcuts. Click one to record a new
+                  combination — each needs at least one modifier{" "}
+                  ({IS_MAC ? "⌘ / ⌃ / ⌥" : "Win / Ctrl / Alt"}).
+                </div>
+                <button
+                  onClick={resetHotkeys}
+                  title="Reset all shortcuts to their defaults"
+                  style={{
+                    flexShrink: 0,
+                    height: 22,
+                    padding: "0 10px",
+                    background: T.bg2,
+                    border: `1px solid ${T.border}`,
+                    borderRadius: 4,
+                    color: T.fg2,
+                    fontFamily: T.mono,
+                    fontSize: 10.5,
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = T.bg3)}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = T.bg2)}
+                >
+                  Reset to defaults
+                </button>
+              </div>
+
+              {!IS_LINUX && (
+                <>
+                  <SectionLabel label="Quick query" />
+                  <Row label="Hotkey">
+                    <HotkeyCapture value={hotkey} onChange={applyHotkey} />
+                  </Row>
+                  {hotkeyError && (
+                    <div
+                      style={{
+                        marginTop: -2,
+                        padding: "4px 0",
+                        fontFamily: T.mono,
+                        fontSize: 10.5,
+                        color: T.red,
+                        textAlign: "right",
+                      }}
+                    >
+                      {hotkeyError}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 10,
+                      color: T.fg3,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Opens the quick-query overlay from anywhere.
+                  </div>
+                </>
+              )}
+
+              {IS_MAC && (
+                <>
+                  <SectionLabel label="Voice dictation" />
+                  <Row label="Hotkey">
+                    <HotkeyCapture value={voiceHotkey} onChange={applyVoiceHotkey} />
+                  </Row>
+                  {voiceHotkeyError && (
+                    <div
+                      style={{
+                        marginTop: -2,
+                        padding: "4px 0",
+                        fontFamily: T.mono,
+                        fontSize: 10.5,
+                        color: T.red,
+                        textAlign: "right",
+                      }}
+                    >
+                      {voiceHotkeyError}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 10,
+                      color: T.fg3,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Opens the quick-query overlay and starts listening.
+                  </div>
+                </>
+              )}
+
+              {IS_MAC && (
+                <>
+                  <SectionLabel label="Screenshot" />
+                  <Row label="Hotkey">
+                    <HotkeyCapture
+                      value={screenshotHotkey}
+                      onChange={applyScreenshotHotkey}
+                    />
+                  </Row>
+                  {screenshotHotkeyError && (
+                    <div
+                      style={{
+                        marginTop: -2,
+                        padding: "4px 0",
+                        fontFamily: T.mono,
+                        fontSize: 10.5,
+                        color: T.red,
+                        textAlign: "right",
+                      }}
+                    >
+                      {screenshotHotkeyError}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 10,
+                      color: T.fg3,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Captures a screen region (drag to select, Space for a
+                    window, Esc to cancel) and opens it in a new chat with a
+                    vision model.
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
+          {/* ── Files tab (was Prompts + Memory + Attachments) ────── */}
+          {activeTab === "files" && (
+            <>
+              <SectionLabel label="Prompts folder" />
               <div
                 style={{
                   fontFamily: T.mono,
@@ -1328,12 +1386,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                 drop it in a git repo to version or share your library.
               </div>
               <PromptsFolderRow onPromptsChanged={onPromptsChanged} />
-            </>
-          )}
 
-          {/* ── Memory tab ──────────────────────────────────────── */}
-          {activeTab === "memory" && (
-            <>
               <SectionLabel label="Memory file" />
               <div
                 style={{
@@ -1350,6 +1403,22 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                 but cannot modify it — only you can.
               </div>
               <MemorySettings />
+
+              <SectionLabel label="Attachments" />
+              <div
+                style={{
+                  fontFamily: T.mono,
+                  fontSize: 10,
+                  color: T.fg3,
+                  lineHeight: 1.5,
+                  marginBottom: 4,
+                }}
+              >
+                Large files and folders get chunked and embedded with the model
+                below. Changing the model requires re-indexing — a banner will
+                appear with a one-click action when chunks go stale.
+              </div>
+              <AttachmentsSettings />
             </>
           )}
 
@@ -1396,26 +1465,6 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
             </>
           )}
 
-          {/* ── Attachments tab ──────────────────────────────────── */}
-          {activeTab === "attachments" && (
-            <>
-              <SectionLabel label="Embedding" />
-              <div
-                style={{
-                  fontFamily: T.mono,
-                  fontSize: 10,
-                  color: T.fg3,
-                  lineHeight: 1.5,
-                  marginBottom: 4,
-                }}
-              >
-                Large files and folders get chunked and embedded with the model
-                below. Changing the model requires re-indexing — a banner will
-                appear with a one-click action when chunks go stale.
-              </div>
-              <AttachmentsSettings />
-            </>
-          )}
         </div>
       </div>
     </div>
