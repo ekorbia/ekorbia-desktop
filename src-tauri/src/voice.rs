@@ -269,6 +269,30 @@ fn evict_cached_context(name: &str) {
     }
 }
 
+/// Free the cached Whisper context at app exit.
+///
+/// whisper.cpp's Metal backend registers a process-global ggml-metal device
+/// whose C++ static destructor runs during `exit()`'s `__cxa_finalize` (on
+/// macOS, quit goes `-[NSApplication terminate:] → exit()`). That destructor
+/// asserts its residency sets are empty (`GGML_ASSERT([rsets->data count] ==
+/// 0)`), so a live `WhisperContext` — cached here for the session, and
+/// populated eagerly by `voice_prewarm` the moment the mic is hovered, before
+/// any dictation — trips the assert and *aborts* the process on quit (a native
+/// crash dialog instead of a clean exit).
+///
+/// Dropping the cached context frees its Metal buffers *before* finalize runs
+/// the device destructor, so the residency sets are empty and the assert
+/// passes. Called from `RunEvent::Exit` alongside `engine::shutdown_sync`.
+/// Best-effort: `get()` never force-inits the cache at exit, and a poisoned
+/// lock is recovered because clearing to `None` is safe regardless and must
+/// still happen. The cache lock is only held briefly at dictation start (never
+/// across a transcription), so a quit-time clear normally drops the last `Arc`.
+pub(crate) fn shutdown_sync() {
+    if let Some(lock) = WHISPER_CACHE.get() {
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
 fn load_or_get_context(app: &AppHandle, name: &str) -> Result<Arc<WhisperContext>, String> {
     // Silence whisper.cpp + ggml/Metal's stderr spam (model-load + backend-init
     // logging that otherwise prints on every dictation). whisper-rs captures it

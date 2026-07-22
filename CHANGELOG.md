@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No more crash on quit after using voice.** Once the on-device speech model
+  had loaded (hovering the mic is enough to prewarm it), quitting could abort
+  with a native crash instead of closing cleanly; Ekorbia now releases the
+  model before shutdown.
 - The Backend settings tab's **Save** button was invisible (amber text on an
   amber fill) on light themes.
 

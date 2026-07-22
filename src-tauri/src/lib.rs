@@ -515,6 +515,13 @@ pub fn run() {
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 engine::shutdown_sync();
+                // Free whisper.cpp's cached Metal context before exit()'s C++
+                // finalizers run ggml-metal's device destructor — otherwise its
+                // residency-set assert (`[rsets->data count] == 0`) aborts the
+                // process on quit. macOS-only (voice is macOS-gated; see
+                // `mod voice`).
+                #[cfg(target_os = "macos")]
+                voice::shutdown_sync();
             }
         });
 }
