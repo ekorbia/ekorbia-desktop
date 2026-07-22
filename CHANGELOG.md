@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   footers and capability badges now live behind Settings → **Show technical
   details**, one click away on any message.
 - **Subtly colored toolbar icons** for a warmer, less utilitarian navigation.
+- **A content-forward sidebar.** Chat history rows are now roomier cards
+  showing the title, a one-line preview of the latest message, and a
+  relative time.
+- **A friendlier new-chat screen.** An empty chat opens with a time-of-day
+  greeting and starter cards that drop one of your saved prompts into the
+  composer (and focus it), falling back to a starter phrase if the prompt
+  isn't in your library.
 
 ### Fixed
 

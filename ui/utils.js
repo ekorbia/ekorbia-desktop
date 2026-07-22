@@ -742,6 +742,7 @@ function bucketChatsByDate(chatRows) {
       title: r.title,
       model: r.model,
       when: relativeTime(r.updatedAt),
+      preview: r.preview || null,
       tabType: r.tabType || null,
       models: Array.isArray(parsedModels) ? parsedModels : null,
       // spaceId is needed by the context menu's "Move to Space" submenu
@@ -934,6 +935,18 @@ function isLocalEndpoint(backendKind, baseUrl) {
   );
 }
 
+// ── greetingForHour ────────────────────────────────────────────────────────
+//
+// Time-of-day greeting for the empty-chat state. Pure (takes the hour) so
+// it's node-testable; the component passes `new Date().getHours()`. No name —
+// Ekorbia doesn't store one.
+function greetingForHour(hour) {
+  if (hour < 5) return "Good evening";
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
 // ── Publish on window (browser) and module.exports (Node) ──────────────────
 //
 // `typeof window` lets the same file work as both a global-scope script
@@ -985,6 +998,7 @@ if (typeof window !== "undefined") {
   window.hexToRgbTriplet = hexToRgbTriplet;
   window.lightenHex = lightenHex;
   window.isLocalEndpoint = isLocalEndpoint;
+  window.greetingForHour = greetingForHour;
 }
 
 // ── instantiateSpacePinnedAttachments ────────────────────────────────────
@@ -1094,5 +1108,6 @@ if (typeof module !== "undefined" && module.exports) {
     hexToRgbTriplet,
     lightenHex,
     isLocalEndpoint,
+    greetingForHour,
   };
 }

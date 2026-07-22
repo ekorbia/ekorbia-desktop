@@ -39,6 +39,27 @@ pub(crate) struct ChatRow {
     /// `last_content` / `last_polled_at`.
     #[serde(default)]
     space_id: Option<String>,
+    /// One-line snippet of the most recent user/assistant message — the
+    /// sidebar row's Bear-style preview line. `None` when the chat has no
+    /// non-empty message yet (a fresh or attachment-only chat).
+    #[serde(default)]
+    preview: Option<String>,
+}
+
+/// Collapse a raw message body to a short, single-line preview for the
+/// sidebar row: whitespace/newlines collapse to single spaces, then
+/// truncate to 100 chars on a char boundary with an ellipsis. `None` when
+/// there's nothing left after collapsing (e.g. a whitespace-only message).
+fn preview_snippet(raw: &str) -> Option<String> {
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    let mut out: String = collapsed.chars().take(100).collect();
+    if collapsed.chars().count() > 100 {
+        out.push('…');
+    }
+    Some(out)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -87,14 +108,24 @@ pub(crate) struct MessageRow {
 #[tauri::command]
 pub(crate) fn db_load_chats(state: tauri::State<'_, DbState>) -> Result<Vec<ChatRow>, String> {
     let db = state.0.lock().map_err(|e| e.to_string())?;
+    // The correlated subquery pulls the newest non-empty user/assistant
+    // message per chat for the sidebar preview line. It rides the
+    // idx_messages_chat(chat_id, seq) index; tool/system rows and empty
+    // assistant placeholders are excluded. SUBSTR bounds the bytes read;
+    // preview_snippet does the final whitespace collapse + char-safe truncate.
     let mut stmt = db
         .prepare(
-            "SELECT id, title, model, created_at, updated_at, tab_type, multi_models, space_id \
+            "SELECT id, title, model, created_at, updated_at, tab_type, multi_models, space_id, \
+             (SELECT SUBSTR(content, 1, 200) FROM messages m \
+              WHERE m.chat_id = chats.id AND m.role IN ('user', 'assistant') \
+                AND TRIM(m.content) <> '' \
+              ORDER BY m.seq DESC LIMIT 1) AS preview \
              FROM chats ORDER BY updated_at DESC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
+            let raw_preview: Option<String> = row.get(8)?;
             Ok(ChatRow {
                 id: row.get(0)?,
                 title: row.get(1)?,
@@ -104,6 +135,7 @@ pub(crate) fn db_load_chats(state: tauri::State<'_, DbState>) -> Result<Vec<Chat
                 tab_type: row.get(5)?,
                 multi_models: row.get(6)?,
                 space_id: row.get(7)?,
+                preview: raw_preview.as_deref().and_then(preview_snippet),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -375,6 +407,9 @@ pub(crate) fn chat_export_to_path(
                     tab_type: row.get(5)?,
                     multi_models: row.get(6)?,
                     space_id: row.get(7)?,
+                    // Not part of the export payload — the sidebar preview is
+                    // computed only in db_load_chats.
+                    preview: None,
                 })
             },
         )
@@ -487,4 +522,38 @@ fn render_json(chat: &ChatRow, messages: &[MessageRow]) -> Result<String, String
     }
     let payload = Export { chat, messages };
     serde_json::to_string_pretty(&payload).map_err(|e| format!("serialize JSON: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_snippet;
+
+    #[test]
+    fn snippet_collapses_whitespace_and_newlines() {
+        assert_eq!(
+            preview_snippet("  hello\n  world \t next  "),
+            Some("hello world next".to_string())
+        );
+    }
+
+    #[test]
+    fn snippet_is_none_for_blank_content() {
+        assert_eq!(preview_snippet("   \n\t  "), None);
+    }
+
+    #[test]
+    fn snippet_truncates_long_content_on_a_char_boundary() {
+        // 300 single-char tokens collapse to 300 chars → truncated to 100 + …
+        let long = "x ".repeat(300);
+        let s = preview_snippet(&long).unwrap();
+        assert_eq!(s.chars().count(), 101);
+        assert!(s.ends_with('…'));
+    }
+
+    #[test]
+    fn snippet_keeps_short_content_verbatim() {
+        let s = preview_snippet("short answer").unwrap();
+        assert_eq!(s, "short answer");
+        assert!(!s.ends_with('…'));
+    }
 }

@@ -492,6 +492,7 @@ function App() {
   // useEffect inside Composer only seeds when this changes.
   const [composerSeedKey, setComposerSeedKey] = useS(0);
   const [composerSeedText, setComposerSeedText] = useS("");
+  const [composerFocusKey, setComposerFocusKey] = useS(0);
   const [query, setQuery] = useS('');
   // Full-text-search hits across message content. Populated by a debounced
   // call to the Rust `search_chats` command whenever `query` changes; an
@@ -528,6 +529,33 @@ function App() {
       ...m,
       [activeTab]: (m[activeTab] || []).filter(x => x !== id),
     }));
+  };
+
+  // Empty-state starter cards: attach a real library prompt when one matches
+  // (by display name, case-insensitive, or by slug), otherwise fall back to
+  // seeding example text — so a deleted or renamed prompt still does
+  // something useful. Attach-only (never toggles a match back off).
+  const handleStarterPrompt = (promptName, fallbackText) => {
+    const match = (prompts || []).find(
+      (p) =>
+        !p._virtual &&
+        ((p.name || "").toLowerCase() === promptName.toLowerCase() ||
+          p.id === promptName.toLowerCase().replace(/\s+/g, "-")),
+    );
+    if (match) {
+      setAttachedPromptsByChat((m) => {
+        const curr = m[activeTab] || [];
+        return curr.includes(match.id)
+          ? m
+          : { ...m, [activeTab]: [...curr, match.id] };
+      });
+      // Attaching doesn't touch the composer text, so nudge focus explicitly.
+      setComposerFocusKey((k) => k + 1);
+    } else {
+      // Seeding text focuses via the seedKey effect already.
+      setComposerSeedText(fallbackText);
+      setComposerSeedKey((k) => k + 1);
+    }
   };
 
   // ── Chat attachments ──────────────────────────────────────────────────────
@@ -4421,6 +4449,9 @@ function App() {
                   // Progressive disclosure: when off (default), per-message
                   // token/timing footers collapse to a quiet "Details" toggle.
                   showDetails={tweaks.showDetails}
+                  // Empty-state starter cards attach a matching library
+                  // prompt (falling back to seeding example text).
+                  onStarter={handleStarterPrompt}
                 />
                 <Composer
                   model={tabModel}
@@ -4466,6 +4497,7 @@ function App() {
                   modelHasTools={activeModelHasTools}
                   seedText={composerSeedText}
                   seedKey={composerSeedKey}
+                  focusSignal={composerFocusKey}
                   // Hide attach buttons in private mode — see Composer notes.
                   ephemeral={!!chat.ephemeral}
                   // When off (default), the capability chip collapses to a

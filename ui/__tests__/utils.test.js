@@ -32,6 +32,7 @@ const {
   hexToRgbTriplet,
   lightenHex,
   isLocalEndpoint,
+  greetingForHour,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -1067,4 +1068,16 @@ test("isLocalEndpoint: remote hosts are NOT local (never claim private)", () => 
   assert.equal(isLocalEndpoint("openai", "http://192.168.1.50:1234"), false);
   assert.equal(isLocalEndpoint("ollama", "http://my-server.lan:11434"), false);
   assert.equal(isLocalEndpoint("openai", ""), false); // BYO requires a URL
+});
+
+// ── greetingForHour ──────────────────────────────────────────────────────
+test("greetingForHour: maps the hour to a time-of-day greeting", () => {
+  assert.equal(greetingForHour(2), "Good evening"); // small hours
+  assert.equal(greetingForHour(8), "Good morning");
+  assert.equal(greetingForHour(13), "Good afternoon");
+  assert.equal(greetingForHour(20), "Good evening");
+  // boundaries
+  assert.equal(greetingForHour(5), "Good morning");
+  assert.equal(greetingForHour(12), "Good afternoon");
+  assert.equal(greetingForHour(18), "Good evening");
 });

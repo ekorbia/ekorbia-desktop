@@ -48,7 +48,7 @@ function ExportMenuItem({ label, onClick }) {
 }
 
 // ─── Chat Pane ──────────────────────────────────────────────
-function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, space, showDetails = false }) {
+function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, space, showDetails = false, onStarter }) {
   const scrollerRef = useRef(null);
   const lastContent = chat.messages[chat.messages.length - 1]?.content;
   useEffect(() => {
@@ -469,80 +469,137 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
           {chat.messages.length === 0 && !isStreaming && (
             <div
               style={{
-                margin: "60px auto",
-                maxWidth: 460,
+                margin: "56px auto",
+                maxWidth: 540,
                 padding: "20px 24px",
                 textAlign: "center",
-                color: T.fg3,
                 fontFamily: T.sans,
-                fontSize: 13,
-                lineHeight: 1.7,
               }}
             >
-              <div style={{ marginBottom: 12 }}>
+              <div style={{ marginBottom: 14 }}>
                 <BrandMark size={30} />
               </div>
               <div
                 style={{
                   color: T.fg,
-                  fontSize: 16,
-                  fontWeight: 500,
-                  marginBottom: 8,
+                  fontSize: 20,
+                  fontWeight: 600,
+                  letterSpacing: -0.2,
+                  marginBottom: 6,
                 }}
               >
-                Start a{" "}
-                <em
-                  style={{
-                    fontFamily: T.serif,
-                    fontStyle: "italic",
-                    fontWeight: 400,
-                    fontSize: 17.5,
-                    color: T.amber,
-                  }}
-                >
-                  conversation
-                </em>
-                .
+                {greetingForHour(new Date().getHours())}
               </div>
-              <div style={{ marginBottom: 14 }}>
-                Type below to chat with{" "}
-                <span style={{ color: T.fg2, fontFamily: T.mono, fontSize: 12 }}>
-                  {model?.name || model?.id || "the selected model"}
-                </span>
-                .
+              <div style={{ color: T.fg2, fontSize: 13.5, marginBottom: 20 }}>
+                Everything here runs on your machine. Ask anything — or start
+                with one of these:
               </div>
+              {/* Starter cards — each pre-fills the composer (you review, then
+                  send). They surface what Ekorbia does beyond plain chat. */}
               <div
                 style={{
                   display: "grid",
-                  gap: 6,
-                  fontSize: 11.5,
-                  color: T.fg3,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                  gap: 10,
                   textAlign: "left",
-                  fontFamily: T.mono,
-                  background: T.bg1,
-                  border: `1px solid ${T.border}`,
-                  borderRadius: 6,
-                  padding: "10px 14px",
                 }}
               >
-                {/* Quick-query hint: macOS + Windows only — the overlay
-                    isn't wired up on Linux yet (Phase L2). */}
+                {[
+                  {
+                    t: "Brainstorm",
+                    d: "Ideas for anything",
+                    prompt: "Brainstorm",
+                    fallback: "Brainstorm ideas for ",
+                  },
+                  {
+                    t: "Explain simply",
+                    d: "Any topic, in plain language",
+                    prompt: "Explain Simply",
+                    fallback: "Explain this simply: ",
+                  },
+                  {
+                    t: "Draft an email",
+                    d: "A reply or a quick note",
+                    prompt: "Email Draft",
+                    fallback: "Help me draft an email: ",
+                  },
+                  {
+                    t: "Opinionated take",
+                    d: "A strong, honest stance",
+                    prompt: "Opinionated Answers",
+                    fallback: "Give me your honest, opinionated take on ",
+                  },
+                  {
+                    t: "How does it end?",
+                    d: "Book or film ending",
+                    prompt: "How Does It End",
+                    fallback: "Tell me how this ends: ",
+                  },
+                  {
+                    t: "Translate to Spanish",
+                    d: "Any text, into Spanish",
+                    prompt: "Translate → Spanish",
+                    fallback: "Translate the following into Spanish: ",
+                  },
+                ].map((s) => (
+                  <button
+                    key={s.t}
+                    data-empty-starter
+                    onClick={() => onStarter && onStarter(s.prompt, s.fallback)}
+                    style={{
+                      display: "block",
+                      textAlign: "left",
+                      background: T.bg1,
+                      border: `1px solid ${T.border}`,
+                      borderRadius: 10,
+                      padding: "12px 13px",
+                      cursor: "pointer",
+                      fontFamily: T.sans,
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = T.bg2;
+                      e.currentTarget.style.borderColor = T.amber + "66";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = T.bg1;
+                      e.currentTarget.style.borderColor = T.border;
+                    }}
+                  >
+                    <div
+                      style={{
+                        color: T.fg,
+                        fontSize: 12.5,
+                        fontWeight: 600,
+                        marginBottom: 3,
+                      }}
+                    >
+                      {s.t}
+                    </div>
+                    <div style={{ color: T.fg2, fontSize: 11 }}>{s.d}</div>
+                  </button>
+                ))}
+              </div>
+              {/* Quiet discovery hint. Overlay hotkey is macOS/Windows only —
+                  the Linux overlay isn't wired up yet (Phase L2). */}
+              <div
+                style={{
+                  color: T.fg3,
+                  fontSize: 11.5,
+                  marginTop: 18,
+                  lineHeight: 1.6,
+                }}
+              >
                 {!IS_LINUX && (
-                  <div>
-                    <span style={{ color: T.amber }}>
+                  <>
+                    Press{" "}
+                    <span style={{ color: T.fg2, fontWeight: 600 }}>
                       {formatHotkey("Super+Shift+Space")}
                     </span>{" "}
-                    <span style={{ color: T.fg2 }}>— quick-query overlay from anywhere</span>
-                  </div>
+                    for the quick-query overlay ·{" "}
+                  </>
                 )}
-                <div>
-                  <span style={{ color: T.amber }}>Paperclip</span>{" "}
-                  <span style={{ color: T.fg2 }}>— attach files or a folder for context</span>
-                </div>
-                <div>
-                  <span style={{ color: T.amber }}>Prompts panel</span>{" "}
-                  <span style={{ color: T.fg2 }}>— pin a saved system prompt to this chat</span>
-                </div>
+                <span style={{ color: T.fg2, fontWeight: 600 }}>Attach</span>{" "}
+                files or a folder for grounded answers
               </div>
             </div>
           )}
@@ -1846,6 +1903,10 @@ function Composer({
   // uncontrolled in the common case.
   seedText,
   seedKey,
+  // focusSignal: a counter that, when bumped, focuses the textarea WITHOUT
+  // touching its text — used by the empty-state starter cards on the attach
+  // path (the seed/fallback path already focuses via seedKey).
+  focusSignal,
 }) {
   const [text, setText] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -2017,6 +2078,14 @@ function Composer({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedKey]);
+
+  // Focus on demand — the attach path (starter card attaches a prompt) bumps
+  // this so the caret lands in the composer without clearing any text.
+  useEffect(() => {
+    if (typeof focusSignal === "number" && focusSignal > 0) {
+      setTimeout(() => taRef.current?.focus(), 0);
+    }
+  }, [focusSignal]);
 
   const handleSend = () => {
     if (!text.trim() || isStreaming) return;

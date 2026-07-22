@@ -75,6 +75,8 @@
       "onPick", "onPickRecipe", "onChatAboutToday", "onConfigure",
       // Voice dictation
       "onInsert",
+      // Empty-state starter cards (Phase 4) — attach a prompt / seed text
+      "onStarter",
     ];
     handlerNames.forEach(function (name) {
       if (typeof finalProps[name] !== "function") {

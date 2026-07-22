@@ -3221,13 +3221,13 @@ function ChatRow({
       data-chat-id={chat.id}
       style={{
         margin: "0 6px",
-        padding: "5px 8px",
+        padding: "7px 9px",
         background: active ? T.bg4 : hover ? T.bg3 : "transparent",
         border: `1px solid ${hover && !active ? T.border : "transparent"}`,
-        borderRadius: 7,
+        borderRadius: 8,
         cursor: "pointer",
         display: "flex",
-        alignItems: "center",
+        alignItems: "flex-start",
         gap: 8,
         position: "relative",
       }}
@@ -3238,77 +3238,111 @@ function ChatRow({
           style={{ color: T.amber, position: "absolute", left: -2, top: 7 }}
         />
       )}
-      <ModelDot
-        color={spaceColor || model?.color || T.fg3}
-        size={6}
-        glow={false}
-      />
+      <span style={{ marginTop: 3, flexShrink: 0 }}>
+        <ModelDot
+          color={spaceColor || model?.color || T.fg3}
+          size={6}
+          glow={false}
+        />
+      </span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            fontFamily: T.sans,
-            fontSize: 12,
-            color: active ? T.fg : T.fg1,
-            fontWeight: active ? 500 : 400,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            display: "flex",
-            alignItems: "center",
-            gap: 5,
-          }}
-        >
-          {(chat.tabType === "multi-pending" ||
-            chat.tabType === "single-from-multi") && (
-            <I.Columns
-              size={10}
-              style={{ color: T.amber, flexShrink: 0 }}
-              title={`Comparison chat (${chat.models?.length || 0} models)`}
-              data-compare-badge
-            />
-          )}
-          <span
+        {/* Row 1: title + relative time — the time swaps for the delete ×
+            on hover/active. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div
             style={{
               flex: 1,
               minWidth: 0,
+              fontFamily: T.sans,
+              fontSize: 12,
+              color: active ? T.fg : T.fg1,
+              fontWeight: active ? 500 : 400,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+            }}
+          >
+            {(chat.tabType === "multi-pending" ||
+              chat.tabType === "single-from-multi") && (
+              <I.Columns
+                size={10}
+                style={{ color: T.amber, flexShrink: 0 }}
+                title={`Comparison chat (${chat.models?.length || 0} models)`}
+                data-compare-badge
+              />
+            )}
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {highlight(chat.title)}
+            </span>
+          </div>
+          {hover || active ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              style={{
+                flexShrink: 0,
+                width: 16,
+                height: 16,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: T.fg3,
+                borderRadius: 3,
+                padding: 0,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
+              onMouseLeave={(e) => (e.currentTarget.style.color = T.fg3)}
+            >
+              <I.X size={10} />
+            </button>
+          ) : (
+            chat.when && (
+              <span
+                style={{
+                  flexShrink: 0,
+                  fontFamily: T.mono,
+                  fontSize: 10,
+                  color: T.fg3,
+                }}
+              >
+                {chat.when}
+              </span>
+            )
+          )}
+        </div>
+        {/* Row 2: one-line message preview (Bear-style). Absent on a fresh
+            or attachment-only chat with no non-empty message yet. */}
+        {chat.preview && (
+          <div
+            style={{
+              fontFamily: T.sans,
+              fontSize: 11,
+              color: T.fg2,
+              marginTop: 2,
+              whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
             }}
           >
-            {highlight(chat.title)}
-          </span>
-        </div>
+            {chat.preview}
+          </div>
+        )}
       </div>
-      {hover || active ? (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          style={{
-            flexShrink: 0,
-            width: 16,
-            height: 16,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            color: T.fg3,
-            borderRadius: 3,
-            padding: 0,
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
-          onMouseLeave={(e) => (e.currentTarget.style.color = T.fg3)}
-        >
-          <I.X size={10} />
-        </button>
-      ) : (
-        <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3 }}>
-          {chat.when}
-        </span>
-      )}
     </div>
   );
 }
