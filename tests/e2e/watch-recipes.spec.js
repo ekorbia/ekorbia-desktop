@@ -13,8 +13,6 @@ test("recipe gallery renders every recipe card", async ({ page }) => {
   const root = page.locator("#test-root");
   for (const label of [
     "Summarise new downloads",
-    "Watch a price",
-    "Watch job listings",
     "Follow a blog",
     "Custom watch",
   ]) {
@@ -24,7 +22,7 @@ test("recipe gallery renders every recipe card", async ({ page }) => {
 
 test("picker fires onPick with the chosen recipe", async ({ page }) => {
   await page.evaluate(() => window.__TEST_MOUNT("RecipePickerModal", { open: true }));
-  await page.locator('[data-recipe="price"]').click();
+  await page.locator('[data-recipe="blog"]').click();
   await page.waitForFunction(() => (window.__TEST_CALLS.onPick || 0) >= 1);
 });
 
@@ -46,7 +44,7 @@ test("WatchModal pre-fills from a Downloads recipe template", async ({ page }) =
   });
 
   // Folder path resolves from the mocked watch_default_paths (async).
-  const folder = page.locator('#test-root input[placeholder="/Users/you/Downloads"]');
+  const folder = page.locator('#test-root input[placeholder="e.g. /Users/you/Downloads"]');
   await expect(folder).toHaveValue("/Users/test/Downloads");
 
   // "Skip files already in the folder" is checked (the recipe's ignore_before).
@@ -81,6 +79,6 @@ test("Custom recipe pre-fills nothing (blank form)", async ({ page }) => {
     // template=null models the "Custom" pick (main.jsx maps custom → null).
     window.__TEST_MOUNT("WatchModal", { open: true, prompts: [], template: null });
   });
-  const folder = page.locator('#test-root input[placeholder="/Users/you/Downloads"]');
+  const folder = page.locator('#test-root input[placeholder="e.g. /Users/you/Downloads"]');
   await expect(folder).toHaveValue("");
 });

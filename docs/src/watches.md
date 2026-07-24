@@ -11,8 +11,6 @@ Open the **Watches** tab in the right sidebar to see your watches. Click **+ Con
 You don't have to know what "diff mode" or a CSS selector is to set up a watch. Click **+ Configure** (or use the cards shown when you have no watches yet) and pick a **recipe**:
 
 - **Summarise new downloads** — watches your Downloads folder and summarizes PDFs, text, and Markdown as they arrive. It skips everything already there, so you don't get flooded with summaries of old files.
-- **Watch a price** — tracks a product page and tells you when the price or stock changes.
-- **Watch job listings** — follows a careers page and summarizes new postings.
 - **Follow a blog or feed** — summarizes new posts from any RSS/Atom feed.
 - **Custom watch** — start from a blank form.
 

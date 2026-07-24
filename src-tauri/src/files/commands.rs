@@ -38,6 +38,14 @@ pub(crate) struct ChatFile {
     saved_at: i64,
     source: String,
     version: i64,
+    // Filled from disk by chat_files_list (not stored). `preview` is a
+    // one-line text snippet of the file's current content (None for empty /
+    // binary / missing files); `missing` is true when the file is no longer
+    // on disk (deleted outside the app).
+    #[serde(default)]
+    preview: Option<String>,
+    #[serde(default)]
+    missing: bool,
 }
 
 /// Persist a user-chosen output directory on the chat row. Pass an empty
@@ -61,6 +69,12 @@ pub(crate) fn chat_set_output_dir(
         params![dir, now_unix(), chat_id],
     )
     .map_err(|e| e.to_string())?;
+    // Remember the last real folder so a new chat's permission prompt can
+    // suggest it (one-click reuse). Skip the "" block sentinel. Best-effort —
+    // a settings-write hiccup shouldn't fail the user's accept.
+    if !dir.is_empty() {
+        let _ = crate::db::set_setting(&db, "last_output_dir", &dir);
+    }
     Ok(())
 }
 
@@ -81,36 +95,95 @@ pub(crate) fn chat_output_dir(
     Ok(v.flatten())
 }
 
+/// How many bytes of a saved file we read to build the row preview. Bounded so
+/// a huge file doesn't turn the panel load into a big read — the preview shows
+/// only the first line anyway.
+const PREVIEW_READ_BYTES: u64 = 4096;
+
+/// Read a saved file's leading bytes to produce `(preview, missing)`:
+///   - open fails (deleted / unreadable) → `(None, true)`
+///   - binary (contains a NUL byte) → `(None, false)` — present, no text preview
+///   - text → `(one-line snippet, false)`
+fn file_preview_and_missing(output_dir: &str, rel_path: &str) -> (Option<String>, bool) {
+    use std::io::Read;
+    let mut path = std::path::PathBuf::from(output_dir);
+    path.push(rel_path);
+    let mut buf = Vec::new();
+    match std::fs::File::open(&path) {
+        Ok(f) => {
+            let _ = f.take(PREVIEW_READ_BYTES).read_to_end(&mut buf);
+        }
+        Err(_) => return (None, true),
+    }
+    if buf.contains(&0) {
+        return (None, false);
+    }
+    (
+        crate::chat::preview_snippet(&String::from_utf8_lossy(&buf)),
+        false,
+    )
+}
+
 #[tauri::command]
 pub(crate) fn chat_files_list(
     app: tauri::AppHandle,
     chat_id: String,
 ) -> Result<Vec<ChatFile>, String> {
-    let state = app.state::<DbState>();
-    let db = state.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = db
-        .prepare(
-            "SELECT id, chat_id, message_id, rel_path, bytes, saved_at, source, version \
-             FROM chat_files WHERE chat_id = ? ORDER BY saved_at DESC, id DESC",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![chat_id], |r| {
-            Ok(ChatFile {
-                id: r.get(0)?,
-                chat_id: r.get(1)?,
-                message_id: r.get(2)?,
-                rel_path: r.get(3)?,
-                bytes: r.get(4)?,
-                saved_at: r.get(5)?,
-                source: r.get(6)?,
-                version: r.get(7)?,
+    // Read rows + the chat's output dir, then DROP the DB lock before touching
+    // the filesystem (never hold the mutex across file I/O).
+    let (mut out, output_dir): (Vec<ChatFile>, Option<String>) = {
+        let state = app.state::<DbState>();
+        let db = state.0.lock().map_err(|e| e.to_string())?;
+        let output_dir = get_chat_output_dir(&db, &chat_id)?.filter(|s| !s.is_empty());
+        let mut stmt = db
+            .prepare(
+                "SELECT id, chat_id, message_id, rel_path, bytes, saved_at, source, version \
+                 FROM chat_files WHERE chat_id = ? ORDER BY saved_at DESC, id DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![chat_id], |r| {
+                Ok(ChatFile {
+                    id: r.get(0)?,
+                    chat_id: r.get(1)?,
+                    message_id: r.get(2)?,
+                    rel_path: r.get(3)?,
+                    bytes: r.get(4)?,
+                    saved_at: r.get(5)?,
+                    source: r.get(6)?,
+                    version: r.get(7)?,
+                    preview: None,  // filled from disk below
+                    missing: false, // filled from disk below
+                })
             })
-        })
-        .map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row.map_err(|e| e.to_string())?);
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| e.to_string())?);
+        }
+        (out, output_dir)
+    };
+    // Fill preview + missing from disk, deduped per rel_path (all versions of a
+    // file share one on-disk path). Without a resolvable output dir, nothing
+    // can be on disk, so every row reads missing.
+    match output_dir {
+        Some(dir) => {
+            let mut cache: std::collections::HashMap<String, (Option<String>, bool)> =
+                std::collections::HashMap::new();
+            for f in out.iter_mut() {
+                let (preview, missing) = cache
+                    .entry(f.rel_path.clone())
+                    .or_insert_with(|| file_preview_and_missing(&dir, &f.rel_path))
+                    .clone();
+                f.preview = preview;
+                f.missing = missing;
+            }
+        }
+        None => {
+            for f in out.iter_mut() {
+                f.missing = true;
+            }
+        }
     }
     Ok(out)
 }
@@ -142,6 +215,29 @@ pub(crate) fn chat_file_path(app: tauri::AppHandle, file_id: String) -> Result<S
     let mut p = std::path::PathBuf::from(dir);
     p.push(rel_path);
     Ok(p.to_string_lossy().to_string())
+}
+
+/// Remove a saved-file entry (and its version history) from the chat's file
+/// list. Intended for files deleted on disk — this only clears the
+/// `chat_files` rows, never the filesystem. rel_path is resolved from the
+/// given file_id so the whole version group is removed as a unit.
+#[tauri::command]
+pub(crate) fn chat_file_remove(app: tauri::AppHandle, file_id: String) -> Result<(), String> {
+    let state = app.state::<DbState>();
+    let db = state.0.lock().map_err(|e| e.to_string())?;
+    let (chat_id, rel_path): (String, String) = db
+        .query_row(
+            "SELECT chat_id, rel_path FROM chat_files WHERE id = ?",
+            params![file_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| format!("chat_file {file_id} not found: {e}"))?;
+    db.execute(
+        "DELETE FROM chat_files WHERE chat_id = ? AND rel_path = ?",
+        params![chat_id, rel_path],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ── Path open / reveal — bypasses tauri-plugin-shell scope ───────────────
@@ -262,5 +358,42 @@ pub(crate) fn spawn_opener(path: &str, reveal: bool) -> Result<(), String> {
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("start spawn failed: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_and_missing_covers_text_binary_empty_and_deleted() {
+        let dir = std::env::temp_dir().join(format!("ek_filepreview_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_s = dir.to_string_lossy().to_string();
+
+        // Text file → one-line, whitespace-collapsed preview; present.
+        std::fs::write(dir.join("note.md"), "# Title\n\nsome body text").unwrap();
+        let (p, missing) = file_preview_and_missing(&dir_s, "note.md");
+        assert!(!missing);
+        assert_eq!(p.as_deref(), Some("# Title some body text"));
+
+        // Binary file (NUL byte) → present, but no text preview.
+        std::fs::write(dir.join("blob.bin"), [0u8, 1, 2, 3, 0]).unwrap();
+        let (p, missing) = file_preview_and_missing(&dir_s, "blob.bin");
+        assert!(!missing);
+        assert_eq!(p, None);
+
+        // Empty file → present, no preview.
+        std::fs::write(dir.join("empty.txt"), "").unwrap();
+        let (p, missing) = file_preview_and_missing(&dir_s, "empty.txt");
+        assert!(!missing);
+        assert_eq!(p, None);
+
+        // Deleted / never-existed file → missing, no preview.
+        let (p, missing) = file_preview_and_missing(&dir_s, "gone.txt");
+        assert!(missing);
+        assert_eq!(p, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

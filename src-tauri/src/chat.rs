@@ -50,7 +50,7 @@ pub(crate) struct ChatRow {
 /// sidebar row: whitespace/newlines collapse to single spaces, then
 /// truncate to 100 chars on a char boundary with an ellipsis. `None` when
 /// there's nothing left after collapsing (e.g. a whitespace-only message).
-fn preview_snippet(raw: &str) -> Option<String> {
+pub(crate) fn preview_snippet(raw: &str) -> Option<String> {
     let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.is_empty() {
         return None;

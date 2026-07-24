@@ -1063,6 +1063,24 @@ function App() {
   // engine default back to ollama). Settings → Backend applies changes live
   // in Rust; this UI-side copy updates on the next relaunch.
   const [backendKind, setBackendKind] = useS('ollama');
+  // Bundled engine's chat context window (tokens). Threaded to the chat
+  // panes so a message's Details footer can show its input against this
+  // ceiling ("1,731 / 8,192 ctx"). Null on Ollama/BYO backends, whose
+  // window we don't control or know — those footers just show "in".
+  const [engineCtx, setEngineCtx] = useS(null);
+  useE(() => {
+    let alive = true;
+    if (backendKind !== 'engine') { setEngineCtx(null); return undefined; }
+    (async () => {
+      try {
+        const st = await getInvoke()('engine_status');
+        // Fall back to the known pinned window if an older Rust build
+        // doesn't report chatCtx yet — better a value than a blank.
+        if (alive) setEngineCtx((st && st.chatCtx) || 8192);
+      } catch { if (alive) setEngineCtx(8192); }
+    })();
+    return () => { alive = false; };
+  }, [backendKind]);
   // Derived capability bits + the mount probe. These MUST sit below the
   // `modelId` declaration: Babel-standalone downlevels `const` to `var`,
   // so a read above the declaration doesn't throw (no TDZ) — it silently
@@ -1731,7 +1749,7 @@ function App() {
         // right-click "Move to Space" submenu) to file afterwards.
         const newItem = {
           id: activeTab, title, model: modelId, when: 'now',
-          spaceId: null,
+          spaceId: null, preview: previewSnippet(text),
         };
         setHistory(hs => prependChatToToday(hs, newItem));
       }
@@ -2480,7 +2498,7 @@ function App() {
       if (!ephemeral) {
         const newItem = {
           id: activeTab, title, model: models[0], when: 'now',
-          tabType: tab.tabType, models, spaceId: null,
+          tabType: tab.tabType, models, spaceId: null, preview: previewSnippet(text),
         };
         setHistory(hs => {
           // Guard against double-add: confirmCompareModels' persist may
@@ -4390,6 +4408,7 @@ function App() {
                 onCancel={() => closeTab(activeTab)}
                 attachedPrompts={attachedPrompts}
                 onDetachPrompt={detachPrompt}
+                engineCtx={engineCtx}
               />
             ) : (
               <>
@@ -4449,6 +4468,9 @@ function App() {
                   // Progressive disclosure: when off (default), per-message
                   // token/timing footers collapse to a quiet "Details" toggle.
                   showDetails={tweaks.showDetails}
+                  // Bundled engine's context window, so the footer can show
+                  // input as a budget against it. Null on Ollama/BYO.
+                  engineCtx={engineCtx}
                   // Empty-state starter cards attach a matching library
                   // prompt (falling back to seeding example text).
                   onStarter={handleStarterPrompt}

@@ -230,4 +230,14 @@ test.describe("Message — engine status placeholder", () => {
     await expect(page.locator("[data-stream-status]")).toHaveCount(0);
     await expect(page.locator("#test-root")).toContainText("First tokens");
   });
+
+  test("generic Thinking label shows while streaming with no engine status", async ({ page }) => {
+    await page.evaluate(() => {
+      window.__TEST_MOUNT("Message", {
+        m: { id: "a3", role: "assistant", content: "", streaming: true },
+      });
+    });
+    // No statusText → the rotating reassurance label, starting at "Thinking…".
+    await expect(page.locator("[data-stream-status]")).toContainText("Thinking");
+  });
 });

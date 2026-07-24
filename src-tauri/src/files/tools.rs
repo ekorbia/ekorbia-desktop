@@ -107,6 +107,23 @@ pub(crate) fn default_output_dir_for_chat(
     chat_id: String,
     chat_title: String,
 ) -> Result<String, String> {
+    // Prefer the last folder the user picked (persisted by chat_set_output_dir)
+    // so a second chat's permission prompt suggests the same place — one-click
+    // reuse instead of a fresh per-chat slug folder. Falls back to a per-chat
+    // Outputs/<slug> folder on first-ever use. Lock scoped + dropped before the
+    // path work below.
+    let last_used = {
+        let state = app.state::<DbState>();
+        let locked = state.0.lock();
+        locked
+            .ok()
+            .and_then(|db| crate::db::get_setting(&db, "last_output_dir"))
+    };
+    if let Some(dir) = last_used {
+        if !dir.trim().is_empty() {
+            return Ok(dir);
+        }
+    }
     let base = app
         .path()
         .app_data_dir()

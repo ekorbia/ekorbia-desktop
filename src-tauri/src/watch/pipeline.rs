@@ -594,7 +594,16 @@ pub(crate) async fn process_item(
 /// entry when this function returns, so a subsequent re-enable starts
 /// with a fresh, unflipped flag.
 pub(crate) async fn run_watch(app: &tauri::AppHandle, watch: &Watch) {
-    let token = register_cancel(&watch.id);
+    // One cycle per watch at a time. The poller and the two "Run now"
+    // commands can each fire a cycle for the same watch; register_cancel
+    // returns None when one is already in flight, so we skip the overlap
+    // rather than start a second cycle (which would spuriously "Cancel" the
+    // first — see register_cancel). The in-flight cycle stamps
+    // last_polled_at when it finishes, so cadence stays correct without a
+    // mark here.
+    let Some(token) = register_cancel(&watch.id) else {
+        return;
+    };
     let flag = token.flag.clone();
     match watch.kind.as_str() {
         "folder" | "" => run_folder_watch(app, watch, &flag).await,

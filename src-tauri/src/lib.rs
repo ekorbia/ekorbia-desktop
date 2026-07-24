@@ -246,6 +246,7 @@ pub fn run() {
             files::commands::chat_file_path,
             files::commands::chat_file_open,
             files::commands::chat_file_reveal,
+            files::commands::chat_file_remove,
             files::commands::chat_output_dir_reveal,
             files::tools::chat_tool_schemas,
             files::tools::default_output_dir_for_chat,

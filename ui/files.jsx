@@ -26,9 +26,10 @@ function ekFilesAgeLabel(savedAt) {
 
 function ekFilesByteLabel(bytes) {
   if (bytes == null) return '';
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  // Space before the unit so "76 B" doesn't read as "768" at a glance.
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // Collapse the chat_files_list result (multiple rows per rel_path = version
@@ -156,6 +157,18 @@ function FilesPanel({ tabHeader, width, chatId, onScrollToMessage }) {
     }
   };
 
+  // Drop a deleted file's entry (all versions) from the list. Only offered on
+  // rows the model marked `missing` — clears the chat_files rows, never disk.
+  const removeFromList = async (row) => {
+    if (!chatId) return;
+    try {
+      await invoke('chat_file_remove', { fileId: row.head.id });
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      window.ekToast?.({ kind: 'error', title: 'Remove failed', body: String(e) });
+    }
+  };
+
   // ── Header strip ─────────────────────────────────────────────────────
   // Three states for outputDir:
   //   null              → never picked. Show "Not set" + Choose folder...
@@ -280,6 +293,10 @@ function FilesPanel({ tabHeader, width, chatId, onScrollToMessage }) {
           >
             No files saved yet.
             <div style={{ marginTop: 8, fontSize: 11, color: T.fg3 }}>
+              Each chat keeps its own saved files and output folder, so
+              switching chats shows a different set.
+            </div>
+            <div style={{ marginTop: 8, fontSize: 11, color: T.fg3 }}>
               Tool-using models can write files here; for other models, fenced
               code blocks in assistant messages show a Save button.
             </div>
@@ -294,9 +311,6 @@ function FilesPanel({ tabHeader, width, chatId, onScrollToMessage }) {
                   if (r.messageId && onScrollToMessage) onScrollToMessage(r.messageId);
                 }}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
                   padding: '8px 12px',
                   borderBottom: `1px solid ${T.border}`,
                   cursor: r.messageId ? 'pointer' : 'default',
@@ -306,9 +320,12 @@ function FilesPanel({ tabHeader, width, chatId, onScrollToMessage }) {
                 onMouseEnter={(e) => (e.currentTarget.style.background = T.bg2)}
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               >
-                <div style={{ flex: 1, minWidth: 0 }}>
+                {/* Line 1: filename + size/age + actions */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div
                     style={{
+                      flex: 1,
+                      minWidth: 0,
                       color: T.fg,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
@@ -319,58 +336,110 @@ function FilesPanel({ tabHeader, width, chatId, onScrollToMessage }) {
                   </div>
                   <div
                     style={{
+                      flexShrink: 0,
                       color: T.fg3,
                       fontSize: 10,
-                      marginTop: 2,
                       display: 'flex',
+                      alignItems: 'center',
                       gap: 8,
+                      whiteSpace: 'nowrap',
                     }}
                   >
-                    <span>{ekFilesByteLabel(r.bytes)}</span>
-                    {g.versions.length > 1 && (
-                      <span title={`${g.versions.length} versions saved`}>
-                        v{r.version} ({g.versions.length})
-                      </span>
-                    )}
-                    <span>{ekFilesAgeLabel(r.savedAt)}</span>
-                    {r.source === 'manual' && (
+                    {r.missing ? (
                       <span
-                        title="Saved via the Save button on a fenced code block"
-                        style={{ color: T.fg3 }}
-                      >manual</span>
+                        title="This file was deleted outside Ekorbia"
+                        style={{ color: T.amber }}
+                      >deleted from disk</span>
+                    ) : (
+                      <>
+                        <span>{ekFilesByteLabel(r.bytes)}</span>
+                        {g.versions.length > 1 && (
+                          <span title={`${g.versions.length} versions saved`}>
+                            v{r.version}
+                          </span>
+                        )}
+                        {r.source === 'manual' && (
+                          <span title="Saved via the Save button on a fenced code block">
+                            manual
+                          </span>
+                        )}
+                        <span>{ekFilesAgeLabel(r.savedAt)}</span>
+                      </>
                     )}
                   </div>
+                  {r.missing ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); removeFromList(g); }}
+                      title="Remove this deleted file from the list"
+                      style={{
+                        flexShrink: 0,
+                        background: 'none',
+                        border: 'none',
+                        color: T.fg2,
+                        cursor: 'pointer',
+                        fontFamily: T.mono,
+                        fontSize: 10,
+                        padding: '2px 4px',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = T.red)}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = T.fg2)}
+                    >Remove</button>
+                  ) : (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); reveal(g, 'reveal'); }}
+                        title="Reveal in Finder"
+                        style={{
+                          flexShrink: 0,
+                          background: 'none',
+                          border: 'none',
+                          color: T.fg2,
+                          cursor: 'pointer',
+                          fontFamily: T.mono,
+                          fontSize: 10,
+                          padding: '2px 4px',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = T.fg2)}
+                      >Reveal</button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); reveal(g, 'open'); }}
+                        title="Open file"
+                        style={{
+                          flexShrink: 0,
+                          background: 'none',
+                          border: 'none',
+                          color: T.fg2,
+                          cursor: 'pointer',
+                          fontFamily: T.mono,
+                          fontSize: 10,
+                          padding: '2px 4px',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = T.fg2)}
+                      >Open</button>
+                    </>
+                  )}
                 </div>
-                <button
-                  onClick={(e) => { e.stopPropagation(); reveal(g, 'reveal'); }}
-                  title="Reveal in Finder"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: T.fg2,
-                    cursor: 'pointer',
-                    fontFamily: T.mono,
-                    fontSize: 10,
-                    padding: '2px 4px',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = T.fg2)}
-                >Reveal</button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); reveal(g, 'open'); }}
-                  title="Open file"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: T.fg2,
-                    cursor: 'pointer',
-                    fontFamily: T.mono,
-                    fontSize: 10,
-                    padding: '2px 4px',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = T.fg2)}
-                >Open</button>
+                {/* Two-line content preview below the header line */}
+                {r.preview && (
+                  <div
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 10.5,
+                      color: T.fg2,
+                      marginTop: 4,
+                      lineHeight: 1.4,
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {r.preview}
+                  </div>
+                )}
               </div>
             );
           })

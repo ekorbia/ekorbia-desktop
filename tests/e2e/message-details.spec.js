@@ -32,9 +32,11 @@ test("footer is collapsed to a Details toggle by default", async ({ page }) => {
   await expect(toggle).toBeVisible();
   await toggle.click();
   await expect(page.locator("#test-root [data-message-footer]")).toBeVisible();
-  await expect(page.locator("#test-root [data-message-tokens]")).toContainText(
-    "12/34 tok",
-  );
+  const tokens = page.locator("#test-root [data-message-tokens]");
+  // Labeled input/output + throughput (no engine window → plain "in").
+  await expect(tokens).toContainText("12 in");
+  await expect(tokens).toContainText("34 out");
+  await expect(tokens).toContainText("15 tok/s"); // 34 out / 2.3s
 });
 
 test("footer renders inline when Show technical details is on", async ({ page }) => {
@@ -43,10 +45,22 @@ test("footer renders inline when Show technical details is on", async ({ page })
   }, ASSISTANT_MSG);
   await expect(page.locator("#test-root [data-message-footer]")).toBeVisible();
   await expect(page.locator("#test-root [data-message-tokens]")).toContainText(
-    "12/34 tok",
+    "12 in",
   );
   // No redundant toggle when everything is already shown.
   await expect(
     page.locator("#test-root [data-message-details-toggle]"),
   ).toHaveCount(0);
+});
+
+test("engine backend shows input as a context budget", async ({ page }) => {
+  await page.evaluate((m) => {
+    // engineCtx = the bundled engine's chat window; input renders against it.
+    window.__TEST_MOUNT("Message", { m, showDetails: true, engineCtx: 8192 });
+  }, ASSISTANT_MSG);
+  const tokens = page.locator("#test-root [data-message-tokens]");
+  await expect(tokens).toContainText("12 / 8,192 ctx");
+  await expect(tokens).toContainText("34 out");
+  // The plain "in" label is replaced by the budget on the engine backend.
+  await expect(tokens).not.toContainText("12 in");
 });

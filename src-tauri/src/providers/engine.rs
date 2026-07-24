@@ -158,6 +158,11 @@ pub(crate) struct EngineStatus {
     binary_error: Option<String>,
     models_dir: String,
     model_count: usize,
+    /// Chat context window (tokens) the engine spawns with — the UI shows
+    /// a message's input against this as a "context budget". A fixed
+    /// constant today; surfaced here so the UI has a single source of
+    /// truth instead of duplicating the number.
+    chat_ctx: u32,
 }
 
 /// One-shot health snapshot for the Settings → Backend engine card and
@@ -181,6 +186,7 @@ pub(crate) fn engine_status() -> EngineStatus {
         binary_error,
         models_dir,
         model_count,
+        chat_ctx: crate::engine::CHAT_CTX,
     }
 }
 

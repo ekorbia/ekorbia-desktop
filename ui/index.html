@@ -199,6 +199,14 @@
   body[data-window="overlay"] input::placeholder {
     color: rgba(227, 230, 236, 0.55);
   }
+  /* Main-window placeholders read as faint, italic hint text so an empty
+     field is never mistaken for a real value. Scoped away from the overlay,
+     which keeps its own brighter rule (faint text vanishes on its vibrancy). */
+  body:not([data-window="overlay"]) input::placeholder,
+  body:not([data-window="overlay"]) textarea::placeholder {
+    font-style: italic;
+    opacity: 0.4;
+  }
   /* ─── Markdown rendering for assistant messages (Phase 1a) ───────────
      Applied via the .ek-md root class on the container that holds the
      marked-rendered HTML. We deliberately avoid global element rules so

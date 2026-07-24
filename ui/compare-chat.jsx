@@ -38,6 +38,9 @@ function CompareChatPane({
   // chip calls onDetachPrompt(promptId).
   attachedPrompts = [],
   onDetachPrompt,
+  // Bundled engine's context window, so each column's per-message footer
+  // can show input as a budget against it. Null on Ollama/BYO.
+  engineCtx = null,
 }) {
   const messages = chat?.messages || [];
   const models = chat?.models || [];
@@ -601,20 +604,13 @@ function CompareColumn({ model, message, onStop, onKeep }) {
             background: T.bg1,
           }}
         >
-          {message.tokens && (
-            <span
-              style={{
-                fontFamily: T.mono,
-                fontSize: 10,
-                color: T.fg3,
-                flex: 1,
-              }}
-            >
-              {message.tokens.in || 0}/{message.tokens.out || 0} tok ·{" "}
-              {Math.round((message.tokens.ms || 0) / 100) / 10}s
+          {message.tokens ? (
+            <span style={{ fontFamily: T.mono, fontSize: 10, flex: 1 }}>
+              <TokenFooter tokens={message.tokens} engineCtx={engineCtx} />
             </span>
+          ) : (
+            <span style={{ flex: 1 }} />
           )}
-          {!message.tokens && <span style={{ flex: 1 }} />}
           <button
             onClick={onKeep}
             disabled={!canKeep}

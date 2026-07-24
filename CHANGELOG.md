@@ -31,6 +31,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into a single **Files** tab.
 - **A tidier prompts panel** — the tag filters now start collapsed, behind a
   larger, easier-to-hit toggle.
+- **Clearer input placeholders.** Empty fields now read as faint, italic hint
+  text instead of real-looking values; example values are prefixed with
+  "e.g."; and settings that have a default (Top-K, folder file types, …) show
+  it as a "Defaults to …" helper line with the field left blank.
+- **A trimmed watch recipe gallery** — now Downloads, Blog/feed, and Custom.
+  The Price and Job-listings starter recipes were removed; set those up as a
+  Custom URL watch instead (their prompts stay in your library).
+- **Saved files are easier to keep together.** A new chat's save-location
+  prompt now defaults to your last-used output folder (one click to reuse it),
+  and the Files panel notes that each chat keeps its own saved files.
+- **A richer saved-files list.** Each row in the Files panel now shows a
+  two-line preview of the file's contents, with its name, size, and age on the
+  top line; files deleted outside Ekorbia are flagged **deleted from disk**
+  with a one-click **Remove**, and file sizes read clearly (`76 B`, not `76B`).
+- **A livelier waiting state.** While a model prepares its reply, an empty
+  message now shows animated dots and a rotating label (**Thinking… → Still
+  thinking… → Almost there…**) instead of a bare dot; the bundled engine still
+  surfaces its real progress ("loading model…").
+- **Clearer message details.** The per-message **Details** line now labels its
+  numbers (`1,731 in · 1,118 out`) and adds throughput (`tok/s`); on the
+  bundled engine the input shows against the context window as a budget
+  (`1,731 / 8,192 ctx`), so you can see how full a chat's context is getting.
+- **Watches are grouped by watch.** The Watches panel no longer splits into a
+  list on top and one merged activity feed below — each watch is now a section
+  with its own summaries nested directly beneath it, and clicking a watch's
+  header collapses or expands just that section.
 
 ### Fixed
 
@@ -40,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model before shutdown.
 - The Backend settings tab's **Save** button was invisible (amber text on an
   amber fill) on light themes.
+- **Watches no longer show a phantom "Cancelled by user".** Running a watch
+  while its automatic check was already underway could collide, flagging one
+  file as cancelled (though nobody cancelled it) and then summarizing it a
+  second time. A watch now runs one pass at a time, so triggers overlap
+  cleanly instead of fighting.
 
 ## [0.6.0] - 2026-07-20
 

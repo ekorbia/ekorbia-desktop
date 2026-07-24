@@ -68,8 +68,10 @@ use std::time::Duration;
 /// chats are short-context). Embed spawns pass no `-c` at all: embedding
 /// models declare small native contexts, and chunk sizes must fit the
 /// model's real window anyway.
-#[cfg_attr(not(unix), allow(dead_code))]
-const CHAT_CTX: u32 = 8192;
+// Referenced by the unix spawn path (`build_args`) AND by the
+// cross-platform `engine_status` command (surfaces it to the UI's token
+// footer), so it's live on every platform — no `dead_code` allow needed.
+pub(crate) const CHAT_CTX: u32 = 8192;
 
 /// How long a spawn may take to reach `/health` = 200 before we give up.
 /// Dominated by weight loading — a 12B Q4 model takes ~10-30s from a

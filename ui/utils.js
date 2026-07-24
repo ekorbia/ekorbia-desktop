@@ -947,6 +947,19 @@ function greetingForHour(hour) {
   return "Good evening";
 }
 
+// ── previewSnippet ─────────────────────────────────────────────────────────
+//
+// One-line message preview for a sidebar chat row. Mirror of Rust's
+// preview_snippet (chat.rs) so a brand-new chat shows a preview immediately —
+// before db_load_chats (which computes the same thing server-side) next
+// reloads the list. Collapses internal whitespace, trims, caps at 100 chars
+// with an ellipsis; returns null when empty.
+function previewSnippet(text) {
+  const collapsed = String(text == null ? "" : text).replace(/\s+/g, " ").trim();
+  if (!collapsed) return null;
+  return collapsed.length > 100 ? collapsed.slice(0, 100) + "…" : collapsed;
+}
+
 // ── Publish on window (browser) and module.exports (Node) ──────────────────
 //
 // `typeof window` lets the same file work as both a global-scope script
@@ -999,6 +1012,7 @@ if (typeof window !== "undefined") {
   window.lightenHex = lightenHex;
   window.isLocalEndpoint = isLocalEndpoint;
   window.greetingForHour = greetingForHour;
+  window.previewSnippet = previewSnippet;
 }
 
 // ── instantiateSpacePinnedAttachments ────────────────────────────────────
@@ -1109,5 +1123,6 @@ if (typeof module !== "undefined" && module.exports) {
     lightenHex,
     isLocalEndpoint,
     greetingForHour,
+    previewSnippet,
   };
 }

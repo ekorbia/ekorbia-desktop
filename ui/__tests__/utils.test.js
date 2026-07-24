@@ -33,6 +33,7 @@ const {
   lightenHex,
   isLocalEndpoint,
   greetingForHour,
+  previewSnippet,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -1080,4 +1081,20 @@ test("greetingForHour: maps the hour to a time-of-day greeting", () => {
   assert.equal(greetingForHour(5), "Good morning");
   assert.equal(greetingForHour(12), "Good afternoon");
   assert.equal(greetingForHour(18), "Good evening");
+});
+
+// ── previewSnippet ─────────────────────────────────────────────────────────
+test("previewSnippet: collapses whitespace, trims, caps at 100 chars", () => {
+  assert.equal(previewSnippet("Flagged three risks"), "Flagged three risks");
+  // internal whitespace (incl. newlines/tabs) collapses to single spaces + trim
+  assert.equal(previewSnippet("  a\n\n  b\tc  "), "a b c");
+  // empty / whitespace-only / nullish → null (matches Rust's None)
+  assert.equal(previewSnippet(""), null);
+  assert.equal(previewSnippet("   \n\t "), null);
+  assert.equal(previewSnippet(null), null);
+  assert.equal(previewSnippet(undefined), null);
+  // <=100 unchanged; >100 truncates to 100 chars + ellipsis
+  const s100 = "x".repeat(100);
+  assert.equal(previewSnippet(s100), s100);
+  assert.equal(previewSnippet("y".repeat(101)), "y".repeat(100) + "…");
 });

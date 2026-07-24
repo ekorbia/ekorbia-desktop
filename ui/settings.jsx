@@ -224,6 +224,19 @@ function AttachmentsSettings() {
   const ok = modelStatus?.installed === true;
   const checked = modelStatus !== null;
 
+  // When no embedding model is explicitly configured, default the picker to
+  // the model actually in use rather than showing "— pick a model —": the
+  // Rust-side default surfaced by the install probe (modelStatus.model) when
+  // it's pulled, otherwise the first pulled embedding model. Display-only —
+  // Rust already falls back to this same default for embedding, and choosing
+  // any option still persists via onChange as before.
+  const effectiveEmbed = modelStatus?.model;
+  const selectedEmbed = pulledEmbedModels.includes(embedModel)
+    ? embedModel
+    : pulledEmbedModels.includes(effectiveEmbed)
+      ? effectiveEmbed
+      : pulledEmbedModels[0] || "";
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
@@ -231,7 +244,7 @@ function AttachmentsSettings() {
         <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           {pickerMode === "dropdown" && pulledEmbedModels.length > 0 ? (
             <select
-              value={pulledEmbedModels.includes(embedModel) ? embedModel : ""}
+              value={selectedEmbed}
               onChange={(e) => {
                 const v = e.target.value;
                 if (v === "__custom__") {
@@ -254,7 +267,7 @@ function AttachmentsSettings() {
                 cursor: "pointer",
               }}
             >
-              {!embedModel && <option value="">— pick a model —</option>}
+              {!selectedEmbed && <option value="">— pick a model —</option>}
               {pulledEmbedModels.map((n) => (
                 <option key={n} value={n}>{n}</option>
               ))}
@@ -269,7 +282,7 @@ function AttachmentsSettings() {
               value={embedModel}
               onChange={setEmbedModel}
               onCommit={() => persist("embedding_model", embedModel)}
-              placeholder="nomic-embed-text"
+              placeholder="e.g. nomic-embed-text"
             />
           )}
           {checked && (
@@ -327,8 +340,10 @@ function AttachmentsSettings() {
           value={topK}
           onChange={setTopK}
           onCommit={() => persist("top_k", topK)}
-          placeholder="6"
         />
+      </div>
+      <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3, textAlign: "right", marginTop: -4 }}>
+        Defaults to 6
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
         <span style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2 }}>Folder file types</span>
@@ -337,8 +352,10 @@ function AttachmentsSettings() {
           value={folderExts}
           onChange={setFolderExts}
           onCommit={() => persist("folder_exts", folderExts)}
-          placeholder="md, markdown, txt, pdf"
         />
+      </div>
+      <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3, textAlign: "right", marginTop: -4 }}>
+        Defaults to md, markdown, txt, pdf
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
         <span style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2 }}>Folder ignore dirs</span>
@@ -347,8 +364,10 @@ function AttachmentsSettings() {
           value={folderIgnore}
           onChange={setFolderIgnore}
           onCommit={() => persist("folder_ignore", folderIgnore)}
-          placeholder=".git, node_modules, target, …"
         />
+      </div>
+      <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3, textAlign: "right", marginTop: -4 }}>
+        Defaults to .git, node_modules, target, …
       </div>
       {savingKey && (
         <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3, textAlign: "right" }}>
@@ -1701,7 +1720,7 @@ function BackendSettings() {
             data-backend-url
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="http://127.0.0.1:1234"
+            placeholder="e.g. http://127.0.0.1:1234"
             spellCheck={false}
             style={inputStyle}
           />

@@ -63,24 +63,32 @@ impl Drop for WatchCancelToken {
     }
 }
 
-/// Register a cancel flag for a watch id and return the owning token.
-/// Overwrites any prior entry for the same id — if a previous cycle is
-/// somehow still running (shouldn't happen under the serial poller, but
-/// `watch_run_one` could theoretically race), its flag is flipped here
-/// before being replaced. That tells the lingering cycle to bail.
-pub(crate) fn register_cancel(id: &str) -> WatchCancelToken {
-    let flag = Arc::new(AtomicBool::new(false));
-    if let Ok(mut m) = cancel_registry().lock() {
-        if let Some(prev) = m.insert(id.to_string(), flag.clone()) {
-            // Older cycle still around — make sure it sees a cancel
-            // signal so it stops competing with the new one.
-            prev.store(true, Ordering::Relaxed);
-        }
+/// Register a cancel flag for a watch id and return the owning token —
+/// or `None` if a cycle is ALREADY registered for this id, meaning the
+/// caller should skip. One cycle per watch at a time.
+///
+/// This doubles as the mutual-exclusion point for watch cycles. Three
+/// callers race to start a cycle for the same watch: the background poller
+/// and the two "Run now" commands (`watch_run_once` / `watch_run_one`).
+/// Letting two run concurrently double-processes items AND makes them
+/// fight over this registry — the previous design overwrote the entry and
+/// flipped the older cycle's flag, which surfaced as a spurious "Cancelled
+/// by user" row on whatever file that cycle was mid-processing (then
+/// reprocessed by the winner). Refusing the second cycle fixes both: the
+/// in-flight cycle runs to completion, the redundant trigger no-ops.
+pub(crate) fn register_cancel(id: &str) -> Option<WatchCancelToken> {
+    // Recover from a poisoned lock rather than skipping the cycle — a
+    // panic in one watch shouldn't wedge the whole subsystem.
+    let mut m = cancel_registry().lock().unwrap_or_else(|e| e.into_inner());
+    if m.contains_key(id) {
+        return None; // a cycle is already live for this watch
     }
-    WatchCancelToken {
+    let flag = Arc::new(AtomicBool::new(false));
+    m.insert(id.to_string(), flag.clone());
+    Some(WatchCancelToken {
         id: id.to_string(),
         flag,
-    }
+    })
 }
 
 /// Flip the cancel flag for a watch and remove the entry. The pipeline's
@@ -110,4 +118,44 @@ pub(crate) fn is_cancelled(id: &str) -> bool {
         .ok()
         .and_then(|m| m.get(id).map(|f| f.load(Ordering::Relaxed)))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    // Distinct ids per test: the registry is process-global and cargo runs
+    // tests in parallel threads, so shared ids would cross-talk.
+
+    #[test]
+    fn register_cancel_refuses_a_second_concurrent_cycle() {
+        let id = "watch-test-refuse-second";
+        let first = register_cancel(id).expect("first cycle registers");
+        assert!(
+            register_cancel(id).is_none(),
+            "a second cycle for the same watch must be refused while the first is live"
+        );
+        drop(first);
+        // Once the first token drops (cycle finished), a fresh cycle registers.
+        let again = register_cancel(id).expect("a new cycle registers after the first finished");
+        drop(again);
+    }
+
+    #[test]
+    fn cancel_watch_flips_flag_and_frees_the_slot() {
+        let id = "watch-test-cancel-frees";
+        let live = register_cancel(id).expect("register");
+        let flag = live.flag.clone();
+        cancel_watch(id);
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "cancel_watch flips the cycle's flag so its next check bails"
+        );
+        // The entry is gone, so a fresh cycle can register even though the
+        // cancelled token is still alive (unwinding after seeing the flag).
+        let next = register_cancel(id).expect("re-register after cancel_watch removed the entry");
+        drop(next);
+        drop(live);
+    }
 }

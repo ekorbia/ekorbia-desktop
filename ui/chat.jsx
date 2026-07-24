@@ -48,7 +48,7 @@ function ExportMenuItem({ label, onClick }) {
 }
 
 // ─── Chat Pane ──────────────────────────────────────────────
-function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, space, showDetails = false, onStarter }) {
+function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, space, showDetails = false, onStarter, engineCtx = null }) {
   const scrollerRef = useRef(null);
   const lastContent = chat.messages[chat.messages.length - 1]?.content;
   useEffect(() => {
@@ -621,6 +621,7 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                 onEditMessage={onEditMessage}
                 onRetryMessage={isLastAssistant ? onRetryMessage : null}
                 showDetails={showDetails}
+                engineCtx={engineCtx}
               />
             );
           })}
@@ -1193,7 +1194,45 @@ function MessageActionButton({ icon, label, title, onClick }) {
   );
 }
 
-function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetryMessage, showDetails = false }) {
+// Content of the assistant Details footer: input, output, wall-time, and
+// throughput, all derived from the per-message `tokens` snapshot. When
+// `engineCtx` is known (bundled engine only), input is shown as a budget
+// against the context window — the single most useful local signal
+// ("how full is my context"). On Ollama/BYO it falls back to a plain
+// "in" count because their window isn't ours to know. A hover title
+// spells out what input actually includes (the #1 source of confusion:
+// input is the WHOLE assembled prompt each turn — message + history +
+// memory + attachments — not just what the user typed).
+function TokenFooter({ tokens, engineCtx = null }) {
+  // Deterministic thousands separators (no locale dependence in tests).
+  const g = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const tin = tokens.in || 0;
+  const tout = tokens.out || 0;
+  const secs = tokens.ms ? tokens.ms / 1000 : null;
+  // tok/s uses total processing time (prompt-eval + generation); it's the
+  // conventional headline number and all we have a single figure for.
+  const tps = secs && tout ? Math.round(tout / secs) : null;
+  const parts = [
+    engineCtx ? `${g(tin)} / ${g(engineCtx)} ctx` : `${g(tin)} in`,
+    `${g(tout)} out`,
+  ];
+  if (secs) parts.push(`${secs.toFixed(1)}s`);
+  if (tps) parts.push(`${g(tps)} tok/s`);
+  const title =
+    `Input: ${g(tin)} tokens sent to the model this turn — your message, ` +
+    `the chat history, memory, and any attachments.\n` +
+    `Output: ${g(tout)} tokens the model generated.` +
+    (engineCtx
+      ? `\nContext window: ${g(engineCtx)} tokens — older turns start dropping once it fills.`
+      : "");
+  return (
+    <span style={{ color: T.fg3 }} data-message-tokens title={title}>
+      {parts.join(" · ")}
+    </span>
+  );
+}
+
+function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetryMessage, showDetails = false, engineCtx = null }) {
   const isUser = m.role === "user";
   // Per-message reveal for the token/timing footer when the global
   // "Show technical details" pref is off. Keeps the details one click away
@@ -1424,27 +1463,14 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
               streaming={m.streaming}
             />
           )}
-          {m.streaming && (
+          {m.streaming && m.content && (
+            // Trailing "typing" cursor once tokens are flowing.
             <span className="stream-cursor" style={{ color: T.amber }} />
           )}
-          {!isUser && m.streaming && !m.content && m.statusText && (
-            // Engine-backend progress ("loading gemma…", "waiting for
-            // model…") — a StreamEvent `status` sets the transient
-            // m.statusText; the first delta clears it. Muted italic so
-            // it reads as state, not content; never persisted.
-            <div
-              data-stream-status
-              style={{
-                marginTop: 2,
-                fontFamily: T.mono,
-                fontSize: 11,
-                color: T.fg3,
-                fontStyle: "italic",
-                letterSpacing: 0.3,
-              }}
-            >
-              {m.statusText}
-            </div>
+          {!isUser && m.streaming && !m.content && (
+            // Pre-first-token: animated dots + a rotating "Thinking…" label,
+            // or the engine's real status ("loading model…") when present.
+            <ThinkingIndicator statusText={m.statusText} />
           )}
           {!isUser && m.incomplete && !m.streaming && (
             // "Stopped" marker for assistant messages where the user clicked
@@ -1499,12 +1525,7 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
               </span>
             )}
             {m.tokens && (m.tokens.in || m.tokens.out) ? (
-              <span style={{ color: T.fg3 }} data-message-tokens>
-                {m.tokens.in || 0}/{m.tokens.out || 0} tok
-                {m.tokens.ms
-                  ? ` · ${(m.tokens.ms / 1000).toFixed(1)}s`
-                  : ""}
-              </span>
+              <TokenFooter tokens={m.tokens} engineCtx={engineCtx} />
             ) : null}
           </div>
         ) : (
@@ -1695,6 +1716,58 @@ function StreamingIndicator() {
         <span className="typing-dot">●</span>
         <span className="typing-dot">●</span>
       </div>
+    </div>
+  );
+}
+
+// Pre-first-token "thinking" indicator: bouncing amber dots + a reassurance
+// label. The label rotates over elapsed time (calm 4s cadence) so a long wait
+// still feels alive — but a REAL backend status (engine: "loading model…")
+// wins verbatim, since that's genuine progress. Carries `data-stream-status`
+// (pinned by engine-backend.spec.js). Rendered only while streaming with no
+// content yet; the first delta gives m.content and this yields to the stream.
+const THINKING_PHRASES = [
+  "Thinking",
+  "Still thinking",
+  "Working on it",
+  "Almost there",
+];
+function ThinkingIndicator({ statusText }) {
+  const [phase, setPhase] = React.useState(0);
+  React.useEffect(() => {
+    // A real status shows as-is (no rotation); otherwise advance the generic
+    // phrases, stopping once we reach the last one.
+    if (statusText) return undefined;
+    const id = setInterval(() => setPhase((p) => p + 1), 4000);
+    return () => clearInterval(id);
+  }, [statusText]);
+  const label =
+    statusText ||
+    `${THINKING_PHRASES[Math.min(phase, THINKING_PHRASES.length - 1)]}…`;
+  return (
+    <div
+      data-stream-status
+      style={{ display: "inline-flex", alignItems: "center", gap: 9, marginTop: 2 }}
+    >
+      <span
+        aria-hidden="true"
+        style={{ color: T.amber, fontFamily: T.mono, fontSize: 13, letterSpacing: 2 }}
+      >
+        <span className="typing-dot">●</span>
+        <span className="typing-dot">●</span>
+        <span className="typing-dot">●</span>
+      </span>
+      <span
+        style={{
+          fontFamily: T.mono,
+          fontSize: 11.5,
+          color: T.fg2,
+          fontStyle: "italic",
+          letterSpacing: 0.3,
+        }}
+      >
+        {label}
+      </span>
     </div>
   );
 }

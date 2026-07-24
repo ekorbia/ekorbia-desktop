@@ -89,28 +89,6 @@ const WATCH_RECIPES = [
     name: "Downloads",
   },
   {
-    id: "price",
-    icon: "🏷️",
-    title: "Watch a price",
-    blurb: "Track a product page and get told when the price or stock changes.",
-    kind: "url",
-    promptSlug: "price-watcher",
-    urlDiffMode: "diff",
-    namePlaceholder: "e.g. Widget price",
-    sourcePlaceholder: "https://store.example.com/product",
-  },
-  {
-    id: "jobs",
-    icon: "💼",
-    title: "Watch job listings",
-    blurb: "Follow a careers page and summarise new postings as they appear.",
-    kind: "url",
-    promptSlug: "careers-watcher",
-    urlDiffMode: "diff",
-    namePlaceholder: "e.g. Acme careers",
-    sourcePlaceholder: "https://acme.com/careers",
-  },
-  {
     id: "blog",
     icon: "📡",
     title: "Follow a blog or feed",
@@ -230,6 +208,138 @@ function RecipePickerModal({ open, onClose, onPick }) {
 //
 // Subscribes to the `watch:event_changed` Tauri event so the activity feed
 // updates the moment Rust finishes processing a file.
+// One activity row: status dot + headline + relative time, then a summary
+// preview that clips to 3 lines and expands on click. Rendered under its
+// watch's section header — which already names the watch, so there's no
+// per-row watch tag. `kind` is the parent watch's kind: feed-kind rows
+// (rss/url) show the summary's first line as the headline because their
+// dedup key is a GUID/URL hash that reads as gibberish.
+function WatchEventRow({ e, kind, expanded, onToggle }) {
+  const fname = e.filePath.split("/").pop();
+  const statusColor =
+    e.status === "done" ? T.green : e.status === "error" ? T.red : T.amber;
+  const isProcessing = e.status === "processing";
+  const isFeedKind = kind === "rss" || kind === "url";
+  const summaryHeadline = e.summary
+    ? (e.summary.split("\n").find((s) => s.trim()) || "").trim()
+    : "";
+  const headline = isFeedKind
+    ? summaryHeadline || (isProcessing ? "(fetching…)" : fname)
+    : fname;
+  return (
+    <div
+      style={{
+        margin: "0 8px 8px",
+        padding: "12px 14px",
+        background: T.bg2,
+        border: `1px solid ${isProcessing ? T.amber + "55" : T.border}`,
+        borderRadius: 7,
+      }}
+    >
+      <div
+        onClick={onToggle}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          cursor: "pointer",
+        }}
+        title={expanded ? "Collapse" : "Expand to read full summary"}
+      >
+        <span
+          className={isProcessing ? "watch-pulse-dot" : undefined}
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: 99,
+            background: statusColor,
+            boxShadow: `0 0 4px ${statusColor}88`,
+            flexShrink: 0,
+          }}
+        />
+        <span
+          style={{
+            fontFamily: T.sans,
+            fontSize: 13.5,
+            color: T.fg,
+            fontWeight: 500,
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={isFeedKind ? fname : undefined}
+        >
+          {headline}
+        </span>
+        {isProcessing ? (
+          <span
+            className="watch-pulse-text"
+            style={{
+              fontFamily: T.mono,
+              fontSize: 10,
+              color: T.amber,
+              letterSpacing: 0.3,
+              textTransform: "uppercase",
+            }}
+          >
+            processing…
+          </span>
+        ) : (
+          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+            {relativeTime(e.createdAt, { verbose: true })}
+          </span>
+        )}
+        <span
+          style={{
+            display: "inline-flex",
+            color: T.fg3,
+            transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+            transition: "transform 120ms ease",
+            flexShrink: 0,
+          }}
+        >
+          <I.ChevronR size={11} />
+        </span>
+      </div>
+      {e.summary && (
+        <div
+          onClick={onToggle}
+          style={{
+            fontFamily: T.sans,
+            fontSize: 12.5,
+            color: T.fg1,
+            lineHeight: 1.55,
+            whiteSpace: "pre-wrap",
+            marginTop: 8,
+            cursor: "pointer",
+            display: expanded ? "block" : "-webkit-box",
+            WebkitLineClamp: expanded ? "unset" : 3,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {e.summary}
+        </div>
+      )}
+      {e.error && (
+        <div
+          style={{
+            fontFamily: T.mono,
+            fontSize: 11,
+            color: T.red,
+            marginTop: 8,
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {e.error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WatchPanel({
   tabHeader,
   width,
@@ -260,8 +370,16 @@ function WatchPanel({
   // last 24h, for a daily digest + "Chat about today").
   const [todayMode, setTodayMode] = useState(false);
   const [events, setEvents] = useState([]);
-  // null = show all; otherwise filter to just this watch's events
-  const [selectedWatchId, setSelectedWatchId] = useState(null);
+  // Watch ids whose section is collapsed (header clicked). Default: none
+  // collapsed, so every watch shows its own activity inline beneath it.
+  const [collapsedIds, setCollapsedIds] = useState(() => new Set());
+  const toggleCollapsed = (id) =>
+    setCollapsedIds((curr) => {
+      const next = new Set(curr);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   // Activity rows are click-to-expand. We track which ones are open in a
   // Set so multiple can be open simultaneously.
   const [expandedIds, setExpandedIds] = useState(() => new Set());
@@ -313,7 +431,15 @@ function WatchPanel({
   // selected watch row again.
   useEffect(() => {
     if (!focusFilter || !focusFilter.key) return;
-    if (focusFilter.watchId) setSelectedWatchId(focusFilter.watchId);
+    // Notification click-through: make sure the relevant watch's section is
+    // expanded so the user lands on its activity (was: filter to it).
+    if (focusFilter.watchId)
+      setCollapsedIds((curr) => {
+        if (!curr.has(focusFilter.watchId)) return curr;
+        const next = new Set(curr);
+        next.delete(focusFilter.watchId);
+        return next;
+      });
   }, [focusFilter?.key]);
 
   // Live updates: Rust emits this event after every file it processes.
@@ -392,10 +518,6 @@ function WatchPanel({
   // same way everywhere in the app.
   const fmtTime = (ts) => relativeTime(ts, { verbose: true });
 
-  const visibleEvents = selectedWatchId
-    ? events.filter((e) => e.watchId === selectedWatchId)
-    : events;
-
   return (
     <aside
       style={{
@@ -457,17 +579,14 @@ function WatchPanel({
           })}
         </div>
         <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
-          {visibleEvents.length}
-          {selectedWatchId && (
-            <span style={{ color: T.amber, marginLeft: 6 }}>· filtered</span>
-          )}
+          {events.length}
         </span>
         <span style={{ flex: 1 }} />
         {todayMode &&
-          visibleEvents.some((e) => e.status === "done" && e.summary) && (
+          events.some((e) => e.status === "done" && e.summary) && (
             <button
               onClick={() =>
-                onChatAboutToday?.(buildTodayDigest(visibleEvents, watches).text)
+                onChatAboutToday?.(buildTodayDigest(events, watches).text)
               }
               title="Open a chat seeded with today's summaries"
               style={{
@@ -546,15 +665,15 @@ function WatchPanel({
       ) : (
         <div
           style={{
-            flexShrink: 0,
-            maxHeight: 200,
+            flex: 1,
+            minHeight: 0,
             overflowY: "auto",
-            padding: "4px 0",
-            borderBottom: `1px solid ${T.border}`,
+            padding: "6px 0 10px",
           }}
         >
           {watches.map((w) => {
-            const isSelected = selectedWatchId === w.id;
+            const collapsed = collapsedIds.has(w.id);
+            const wEvents = events.filter((e) => e.watchId === w.id);
             const linkedPrompt = w.promptId
               ? prompts?.find((p) => p.id === w.promptId)
               : null;
@@ -563,36 +682,35 @@ function WatchPanel({
               : null;
             const favColor = fav?.color || null;
             return (
-              <div
-                key={w.id}
-                onClick={() => setSelectedWatchId(isSelected ? null : w.id)}
-                title={
-                  isSelected
-                    ? "Click to clear filter"
-                    : "Click to filter activity to this watch"
-                }
-                style={{
-                  margin: "0 6px 2px",
-                  padding: "6px 8px",
-                  background: isSelected ? T.bg4 : "transparent",
-                  border: "1px solid transparent",
-                  borderRadius: 7,
-                  cursor: "pointer",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 3,
-                }}
-                onMouseEnter={(e) => {
-                  if (isSelected) return;
-                  e.currentTarget.style.background = T.bg3;
-                  e.currentTarget.style.borderColor = T.border;
-                }}
-                onMouseLeave={(e) => {
-                  if (isSelected) return;
-                  e.currentTarget.style.background = "transparent";
-                  e.currentTarget.style.borderColor = "transparent";
-                }}
-              >
+              <div key={w.id} style={{ marginBottom: 4 }}>
+                {/* Watch header — click toggles this section's activity. */}
+                <div
+                  onClick={() => toggleCollapsed(w.id)}
+                  title={
+                    collapsed
+                      ? "Click to show this watch's activity"
+                      : "Click to collapse this watch's activity"
+                  }
+                  style={{
+                    margin: "0 6px 2px",
+                    padding: "6px 8px",
+                    background: "transparent",
+                    border: "1px solid transparent",
+                    borderRadius: 7,
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 3,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = T.bg3;
+                    e.currentTarget.style.borderColor = T.border;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.borderColor = "transparent";
+                  }}
+                >
                 <div
                   style={{
                     display: "flex",
@@ -601,6 +719,18 @@ function WatchPanel({
                     minWidth: 0,
                   }}
                 >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      display: "inline-flex",
+                      color: T.fg3,
+                      transform: collapsed ? "rotate(0deg)" : "rotate(90deg)",
+                      transition: "transform 120ms ease",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <I.ChevronR size={11} />
+                  </span>
                   <span
                     style={{
                       width: 6,
@@ -809,220 +939,37 @@ function WatchPanel({
                     </span>
                   )}
                 </div>
+                </div>
+                {!collapsed &&
+                  (wEvents.length === 0 ? (
+                    <div
+                      style={{
+                        margin: "0 8px 8px",
+                        padding: "10px 14px",
+                        fontFamily: T.mono,
+                        fontSize: 10.5,
+                        color: T.fg3,
+                        fontStyle: "italic",
+                      }}
+                    >
+                      {todayMode ? "Nothing today." : "Nothing processed yet."}
+                    </div>
+                  ) : (
+                    wEvents.map((e) => (
+                      <WatchEventRow
+                        key={e.id}
+                        e={e}
+                        kind={w.kind}
+                        expanded={expandedIds.has(e.id)}
+                        onToggle={() => toggleExpanded(e.id)}
+                      />
+                    ))
+                  ))}
               </div>
             );
           })}
         </div>
       )}
-
-      {/* ── Activity feed ── */}
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          padding: "6px 0 10px",
-        }}
-      >
-        {visibleEvents.length === 0 && (
-          <div
-            style={{
-              padding: "16px 14px",
-              fontFamily: T.mono,
-              fontSize: 11,
-              color: T.fg3,
-              fontStyle: "italic",
-              textAlign: "center",
-            }}
-          >
-            {watches.length === 0
-              ? "Configure a watch to start summarising."
-              : selectedWatchId
-                ? "Nothing processed yet for this watch."
-                : "Nothing processed yet."}
-          </div>
-        )}
-        {visibleEvents.map((e) => {
-          const fname = e.filePath.split("/").pop();
-          const expanded = expandedIds.has(e.id);
-          const statusColor =
-            e.status === "done"
-              ? T.green
-              : e.status === "error"
-                ? T.red
-                : T.amber;
-          const w = watches.find((x) => x.id === e.watchId);
-          const isProcessing = e.status === "processing";
-          // Headline shown on row 1. For folder watches the file's
-          // basename is meaningful; for rss/url the dedup key written to
-          // file_path is typically a GUID or canonical URL hash that
-          // reads as gibberish ("ebb03519e293…"). Prefer the first
-          // non-empty line of the AI summary there — for a well-formed
-          // summary that's effectively the article title, and it works
-          // retroactively for events already stored without a schema
-          // change. Falls back to "(fetching…)" while in-flight, then
-          // to fname as a last resort so the row is never blank.
-          const isFeedKind = w?.kind === "rss" || w?.kind === "url";
-          const summaryHeadline = e.summary
-            ? (e.summary.split("\n").find((s) => s.trim()) || "").trim()
-            : "";
-          const headline = isFeedKind
-            ? (summaryHeadline ||
-                (isProcessing ? "(fetching…)" : fname))
-            : fname;
-          return (
-            <div
-              key={e.id}
-              style={{
-                margin: "0 8px 8px",
-                // Roomier padding gives the row enough breathing space that
-                // the summary preview reads as a paragraph instead of a chip.
-                padding: "12px 14px",
-                background: T.bg2,
-                // In-flight rows get a tinted border so they're easy to
-                // spot at a glance even when the row is collapsed.
-                border: `1px solid ${isProcessing ? T.amber + "55" : T.border}`,
-                borderRadius: 7,
-              }}
-            >
-              {/* Row 1: status + filename + watch name (if not filtered) + time */}
-              <div
-                onClick={() => toggleExpanded(e.id)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  cursor: "pointer",
-                }}
-                title={expanded ? "Collapse" : "Expand to read full summary"}
-              >
-                <span
-                  // .watch-pulse-dot adds a 1.4s scale+opacity animation
-                  // (see index.html). Static dot for done/error states so
-                  // the eye is drawn only to rows that are actively moving.
-                  className={isProcessing ? "watch-pulse-dot" : undefined}
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: 99,
-                    background: statusColor,
-                    boxShadow: `0 0 4px ${statusColor}88`,
-                    flexShrink: 0,
-                  }}
-                />
-                <span
-                  style={{
-                    fontFamily: T.sans,
-                    fontSize: 13.5,
-                    color: T.fg,
-                    fontWeight: 500,
-                    flex: 1,
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                  // For feed-kind rows the headline is the summary's
-                  // first line; tooltip still surfaces the dedup key
-                  // (GUID / URL) so the user can correlate with the
-                  // source if they need to.
-                  title={isFeedKind ? fname : undefined}
-                >
-                  {headline}
-                </span>
-                {!selectedWatchId && w && (
-                  <span
-                    style={{
-                      fontFamily: T.mono,
-                      fontSize: 9.5,
-                      color: T.fg3,
-                    }}
-                  >
-                    {w.name}
-                  </span>
-                )}
-                {isProcessing ? (
-                  <span
-                    className="watch-pulse-text"
-                    style={{
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.amber,
-                      letterSpacing: 0.3,
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    processing…
-                  </span>
-                ) : (
-                  <span
-                    style={{
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg3,
-                    }}
-                  >
-                    {fmtTime(e.createdAt)}
-                  </span>
-                )}
-                {/* Expand affordance — without this, the row reads as a */}
-                {/* static card and users miss that there's more to see. */}
-                {/* Quiet color so it doesn't compete with the status    */}
-                {/* dot. Rotates 90° on expand instead of swapping icons */}
-                {/* to keep the layout stable.                            */}
-                <span
-                  style={{
-                    display: "inline-flex",
-                    color: T.fg3,
-                    transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
-                    transition: "transform 120ms ease",
-                    flexShrink: 0,
-                  }}
-                >
-                  <I.ChevronR size={11} />
-                </span>
-              </div>
-              {/* Row 2: summary (preview or full) */}
-              {e.summary && (
-                <div
-                  onClick={() => toggleExpanded(e.id)}
-                  style={{
-                    fontFamily: T.sans,
-                    fontSize: 12.5,
-                    color: T.fg1,
-                    lineHeight: 1.55,
-                    whiteSpace: "pre-wrap",
-                    marginTop: 8,
-                    cursor: "pointer",
-                    // When collapsed, clip to 3 lines so the row stays
-                    // scannable but shows enough preview to make sense of
-                    // each summary without expanding. Expanded shows all.
-                    display: expanded ? "block" : "-webkit-box",
-                    WebkitLineClamp: expanded ? "unset" : 3,
-                    WebkitBoxOrient: "vertical",
-                    overflow: "hidden",
-                  }}
-                >
-                  {e.summary}
-                </div>
-              )}
-              {e.error && (
-                <div
-                  style={{
-                    fontFamily: T.mono,
-                    fontSize: 11,
-                    color: T.red,
-                    marginTop: 8,
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {e.error}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
 
       {/* ── Delete-confirm dialog ──────────────────────────────────── */}
       {/* Styled to match the prompt-delete and Settings → clear-all   */}
@@ -1056,7 +1003,6 @@ function WatchPanel({
           setDeleteBusy(true);
           try {
             await invoke("watch_delete", { id: w.id });
-            if (selectedWatchId === w.id) setSelectedWatchId(null);
             await reload();
           } catch (e) {
             console.error(e);
@@ -1605,7 +1551,7 @@ function WatchModal({
               label="Watch folder"
               value={form.folderPath}
               onChange={(v) => setForm({ ...form, folderPath: v })}
-              placeholder="/Users/you/Downloads"
+              placeholder="e.g. /Users/you/Downloads"
               onBrowse={pickFolder}
               browseLabel="Choose…"
             />
@@ -1648,7 +1594,7 @@ function WatchModal({
                   // line doesn't lie about a URL that changed since.
                   if (testResult) setTestResult(null);
                 }}
-                placeholder="https://example.com/feed.xml"
+                placeholder="e.g. https://example.com/feed.xml"
                 onBrowse={runTest}
                 browseLabel={testBusy ? "Testing…" : "Test"}
               />
@@ -1676,7 +1622,7 @@ function WatchModal({
                   setForm({ ...form, sourceUrl: v });
                   if (testResult) setTestResult(null);
                 }}
-                placeholder="https://example.com/blog/post"
+                placeholder="e.g. https://example.com/blog/post"
                 onBrowse={runTest}
                 browseLabel={testBusy ? "Testing…" : "Test"}
               />
@@ -1817,7 +1763,7 @@ function WatchModal({
                       label="CSS selector (optional)"
                       value={form.urlSelector}
                       onChange={(v) => setForm({ ...form, urlSelector: v })}
-                      placeholder="article, main, .post-content"
+                      placeholder="e.g. article, main, .post-content"
                     />
                     <div
                       style={{
@@ -1885,7 +1831,7 @@ function WatchModal({
             label="Notes file"
             value={form.notesPath}
             onChange={(v) => setForm({ ...form, notesPath: v })}
-            placeholder="/Users/you/Documents/inbox-summaries.md"
+            placeholder="e.g. /Users/you/Documents/inbox-summaries.md"
             onBrowse={pickNotesFile}
             browseLabel="Choose…"
           />
