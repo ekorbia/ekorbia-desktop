@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-25
+
 ### Added
 
 - **Qwen3.5 in the model catalog.** Two new one-click models on the bundled
@@ -474,6 +476,8 @@ First public release. Local-first AI desktop built on Tauri 2 + Ollama.
   Ekorbia-tinted), built via `./scripts/build-docs.sh` and uploaded
   manually to ekorbia.com.
 
+[0.7.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.2.0...v0.3.0
