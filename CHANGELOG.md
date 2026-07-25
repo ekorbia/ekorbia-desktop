@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Qwen3.5 in the model catalog.** Two new one-click models on the bundled
+  engine — **Qwen3.5 4B** (2.7 GB) and **Qwen3.5 9B** (5.7 GB).
+
 ### Changed
 
 - **Less backend jargon, friendlier defaults.** Themes now have plain names
@@ -57,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list on top and one merged activity feed below — each watch is now a section
   with its own summaries nested directly beneath it, and clicking a watch's
   header collapses or expands just that section.
+- **A friendlier model catalog.** Settings → Models leads with the best pick
+  for your Mac, ranks the rest by fit, and folds the long list behind a filter
+  and a "show more" so it stays scannable. Adding your own model is now one
+  field — paste a Hugging Face link (page or download) and Ekorbia names it for
+  you, no separate "local name" to invent.
+- **Browse Hugging Face for models.** Paste a repo id (`org/model`) into
+  **Add from a link** and click **Browse**: Ekorbia lists the repo's quants
+  with sizes, flags a sensible default, pairs a vision projector automatically,
+  and **verifies each download against Hugging Face's published checksums** —
+  the same integrity guarantee as the built-in catalog.
 
 ### Fixed
 

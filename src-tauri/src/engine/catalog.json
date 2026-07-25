@@ -111,6 +111,48 @@
       ]
     },
     {
+      "id": "qwen3.5-4b",
+      "label": "Qwen3.5 4B",
+      "blurb": "Alibaba's compact Qwen — strong reasoning, coding, and tool use with a thinking mode. Snappy on 8 GB+ Macs. 4-bit build.",
+      "purpose": "chat",
+      "minRamGb": 8,
+      "caps": {
+        "vision": false,
+        "tools": true
+      },
+      "license": "apache-2.0",
+      "source": "unsloth/Qwen3.5-4B-GGUF",
+      "files": [
+        {
+          "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+          "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+          "bytes": 2740937888,
+          "dest": "qwen3.5-4b.gguf"
+        }
+      ]
+    },
+    {
+      "id": "qwen3.5-9b",
+      "label": "Qwen3.5 9B",
+      "blurb": "A meatier Qwen for sharper reasoning and coding, still light on memory. Text and tools, with a thinking mode. 4-bit build.",
+      "purpose": "chat",
+      "minRamGb": 8,
+      "caps": {
+        "vision": false,
+        "tools": true
+      },
+      "license": "apache-2.0",
+      "source": "unsloth/Qwen3.5-9B-GGUF",
+      "files": [
+        {
+          "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
+          "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+          "bytes": 5680522464,
+          "dest": "qwen3.5-9b.gguf"
+        }
+      ]
+    },
+    {
       "id": "nomic-embed-text",
       "label": "Nomic Embed Text v1.5",
       "blurb": "The embedding model that powers attachments, folder chat, and watch search. Small, fast, required for RAG.",

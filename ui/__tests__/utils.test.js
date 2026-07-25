@@ -24,6 +24,10 @@ const {
   applyThinkPref,
   recommendGemmaModel,
   recommendEngineModel,
+  ggufNameFromFile,
+  parseHfGgufLink,
+  parseHfRepo,
+  ggufQuantLabel,
   recipeToFormDefaults,
   buildTodayDigest,
   ekFilesGroupByPath,
@@ -897,6 +901,92 @@ test("recommendEngineModel: every result carries id/label/approx/reason + vision
     assert.ok(r.reason && r.reason.length > 0);
     assert.equal(r.vision, true);
   }
+});
+
+// ── ggufNameFromFile / parseHfGgufLink ───────────────────────────────────
+
+test("ggufNameFromFile: strips .gguf, lowercases, dashes junk, trims", () => {
+  assert.equal(ggufNameFromFile("Gemma-4-E4B_q4_0-it.gguf"), "gemma-4-e4b_q4_0-it");
+  assert.equal(ggufNameFromFile("My Model (v2).GGUF"), "my-model-v2");
+  assert.equal(ggufNameFromFile("...leading.gguf"), "leading");
+  // No slashes survive (would fail engine::validate_model_name).
+  assert.ok(!ggufNameFromFile("a/b/c.gguf")?.includes("/"));
+  // Empty base → null, not "".
+  assert.equal(ggufNameFromFile(".gguf"), null);
+  assert.equal(ggufNameFromFile(""), null);
+});
+
+test("parseHfGgufLink: resolve URL passes through with a derived name", () => {
+  const r = parseHfGgufLink(
+    "https://huggingface.co/google/gemma-4-E4B/resolve/main/gemma-4-E4B_q4_0-it.gguf",
+  );
+  assert.equal(r.url,
+    "https://huggingface.co/google/gemma-4-E4B/resolve/main/gemma-4-E4B_q4_0-it.gguf");
+  assert.equal(r.name, "gemma-4-e4b_q4_0-it");
+  assert.equal(r.file, "gemma-4-E4B_q4_0-it.gguf");
+});
+
+test("parseHfGgufLink: blob (page) URL is rewritten to resolve", () => {
+  const r = parseHfGgufLink(
+    "https://huggingface.co/org/repo/blob/main/model.gguf",
+  );
+  assert.equal(r.url, "https://huggingface.co/org/repo/resolve/main/model.gguf");
+  assert.equal(r.name, "model");
+});
+
+test("parseHfGgufLink: scheme-less host path gets https://", () => {
+  const r = parseHfGgufLink("huggingface.co/org/repo/resolve/main/m.gguf");
+  assert.equal(r.url, "https://huggingface.co/org/repo/resolve/main/m.gguf");
+});
+
+test("parseHfGgufLink: query string is preserved (?download=true)", () => {
+  const r = parseHfGgufLink(
+    "https://huggingface.co/org/repo/resolve/main/m.gguf?download=true",
+  );
+  assert.match(r.url, /m\.gguf\?download=true$/);
+  assert.equal(r.name, "m");
+});
+
+test("parseHfGgufLink: trims surrounding quotes/brackets", () => {
+  const r = parseHfGgufLink('  "https://example.com/x/model.gguf"  ');
+  assert.equal(r.url, "https://example.com/x/model.gguf");
+  assert.equal(r.name, "model");
+});
+
+test("parseHfGgufLink: rejects non-.gguf, non-https, and junk → null", () => {
+  assert.equal(parseHfGgufLink(""), null);
+  assert.equal(parseHfGgufLink("   "), null);
+  assert.equal(parseHfGgufLink("https://huggingface.co/org/repo"), null); // no file
+  assert.equal(parseHfGgufLink("http://example.com/m.gguf"), null); // not https
+  assert.equal(parseHfGgufLink("ftp://example.com/m.gguf"), null);
+  assert.equal(parseHfGgufLink("just some text"), null);
+  assert.equal(parseHfGgufLink("https://example.com/notagguf.bin"), null);
+});
+
+// ── parseHfRepo / ggufQuantLabel ─────────────────────────────────────────
+
+test("parseHfRepo: bare org/model and HF URLs → canonical org/model", () => {
+  assert.equal(parseHfRepo("Qwen/Qwen3.5-4B-GGUF"), "Qwen/Qwen3.5-4B-GGUF");
+  assert.equal(parseHfRepo("https://huggingface.co/org/repo/tree/main"), "org/repo");
+  assert.equal(parseHfRepo("huggingface.co/org/repo"), "org/repo");
+  assert.equal(parseHfRepo("  https://huggingface.co/a/b/blob/main  "), "a/b");
+});
+
+test("parseHfRepo: rejects direct files, other hosts, and junk → null", () => {
+  // A direct .gguf link is parseHfGgufLink's job, not a repo.
+  assert.equal(parseHfRepo("https://huggingface.co/org/repo/resolve/main/m.gguf"), null);
+  assert.equal(parseHfRepo("https://example.com/org/repo"), null);
+  assert.equal(parseHfRepo("just-a-word"), null);
+  assert.equal(parseHfRepo(""), null);
+  assert.equal(parseHfRepo("org/"), null);
+});
+
+test("ggufQuantLabel: extracts the quant tag or '' ", () => {
+  assert.equal(ggufQuantLabel("Qwen3.5-4B-Q4_K_M.gguf"), "Q4_K_M");
+  assert.equal(ggufQuantLabel("path/to/model-Q8_0.gguf"), "Q8_0");
+  assert.equal(ggufQuantLabel("x-IQ4_XS.gguf"), "IQ4_XS");
+  assert.equal(ggufQuantLabel("model.F16.gguf"), "F16");
+  assert.equal(ggufQuantLabel("plain-model.gguf"), "");
 });
 
 // ── recipeToFormDefaults ─────────────────────────────────────────────────

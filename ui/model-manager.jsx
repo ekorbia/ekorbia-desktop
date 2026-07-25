@@ -53,10 +53,13 @@ function ekPullsSubscribe(fn) {
 // only the invoke names differ:
 //   opts.engine    — `model` is a catalog id → engine_download
 //   opts.customUrl — best-effort custom GGUF → engine_download_custom
+//   opts.hf        — {repo, file} from the HF picker → engine_download_hf
+//                    (checksum-verified; auto-pairs the repo's vision mmproj)
 async function ekPullModel(model, opts) {
   const silent = !!(opts && opts.silent);
   const engine = !!(opts && opts.engine);
   const customUrl = (opts && opts.customUrl) || null;
+  const hf = (opts && opts.hf) || null;
   const invoke = getInvoke();
   model = (model || "").trim();
   if (!invoke || !model) return { ok: false, error: "The model backend is not available" };
@@ -64,7 +67,7 @@ async function ekPullModel(model, opts) {
 
   // `dl:` namespace for engine downloads, `pull:` for Ollama — same
   // shared cancel registry on the Rust side, no id collisions.
-  const isEngineFlavor = engine || !!customUrl;
+  const isEngineFlavor = engine || !!customUrl || !!hf;
   const requestId = `${isEngineFlavor ? "dl" : "pull"}:${model}:${genId()}`;
   const seed = accumulatePullProgress(null, null);
   seed.model = model;
@@ -90,7 +93,15 @@ async function ekPullModel(model, opts) {
 
   const run = (async () => {
     try {
-      if (customUrl) {
+      if (hf) {
+        await invoke("engine_download_hf", {
+          repo: hf.repo,
+          file: hf.file,
+          name: model,
+          requestId,
+          onProgress: ch,
+        });
+      } else if (customUrl) {
         await invoke("engine_download_custom", {
           url: customUrl,
           name: model,
@@ -214,9 +225,15 @@ function ModelManagerPanel({ activeModel }) {
   const [engineCatalog, setEngineCatalog] = useState(null);
   // Machine RAM (GB) for the catalog's fit badges.
   const [ramGb, setRamGb] = useState(null);
-  // Custom-GGUF download row state.
-  const [customUrl, setCustomUrl] = useState("");
-  const [customName, setCustomName] = useState("");
+  // "Add from a link" box: one field; we derive the local name from the file
+  // (see parseHfGgufLink). Replaces the old url + invent-a-name pair.
+  const [customLink, setCustomLink] = useState("");
+  // HF repo picker (#3): after "Browse", holds the repo's .gguf listing.
+  // Shape: { repo, loading, error, files:[{path,size,sha256}], mmproj:{…}|null }.
+  const [hfBrowse, setHfBrowse] = useState(null);
+  // Engine catalog view controls: a filter box and a fold for the long tail.
+  const [catalogFilter, setCatalogFilter] = useState("");
+  const [catalogExpanded, setCatalogExpanded] = useState(false);
   const refreshCatalog = () => {
     if (!invoke) return;
     invoke("engine_catalog")
@@ -323,12 +340,44 @@ function ModelManagerPanel({ activeModel }) {
   };
 
   const startCustomDownload = () => {
-    const url = customUrl.trim();
-    const name = customName.trim();
-    if (!url || !name) return;
-    setCustomUrl("");
-    setCustomName("");
-    ekPullModel(name, { customUrl: url });
+    const parsed = parseHfGgufLink(customLink);
+    if (!parsed) return;
+    setCustomLink("");
+    ekPullModel(parsed.name, { customUrl: parsed.url });
+  };
+
+  // "Browse" a pasted org/model: list its .gguf files (Rust hits the HF tree
+  // API, which also gives us each file's sha256 for verified downloads).
+  const browseHfRepo = () => {
+    const repo = parseHfRepo(customLink);
+    if (!repo || !invoke) return;
+    setHfBrowse({ repo, loading: true, error: "", files: [], mmproj: null });
+    invoke("engine_hf_repo_files", { repo })
+      .then((r) =>
+        setHfBrowse({
+          repo: (r && r.repo) || repo,
+          loading: false,
+          error: "",
+          files: (r && r.files) || [],
+          mmproj: (r && r.mmproj) || null,
+        }),
+      )
+      .catch((e) =>
+        setHfBrowse({
+          repo,
+          loading: false,
+          error: String((e && e.message) || e || "Couldn't read that repo."),
+          files: [],
+          mmproj: null,
+        }),
+      );
+  };
+
+  const downloadHfFile = (file) => {
+    if (!hfBrowse) return;
+    const name = ggufNameFromFile((file.path || "").split("/").pop());
+    if (!name) return;
+    ekPullModel(name, { hf: { repo: hfBrowse.repo, file: file.path } });
   };
 
   const installed = models || [];
@@ -348,6 +397,281 @@ function ModelManagerPanel({ activeModel }) {
   const datalistNames = Array.from(
     new Set([...CURATED_MODELS.map((c) => c.name), ...installed.map((m) => m.name)]),
   ).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+
+  // ── Engine catalog view (fit-first, foldable) ────────────────────────────
+  // Split chat vs embeddings, rank the chat models so the best pick for THIS
+  // Mac leads and oversized ones sink, then fold the long tail so a growing
+  // catalog stays scannable in the tab's limited vertical space.
+  const catalogAll = engineCatalog || [];
+  const chatCatalog = catalogAll.filter((c) => c.purpose !== "embed");
+  const embedCatalog = catalogAll.filter((c) => c.purpose === "embed");
+  const recommendedModel = chatCatalog.find((c) => c.recommended);
+  const recFits =
+    recommendedModel && (ramGb === null || ramGb >= recommendedModel.minRamGb);
+  let heroId = recFits ? recommendedModel.id : null;
+  if (!heroId && chatCatalog.length) {
+    // The curated pick can't run here → lead with the largest that fits.
+    const rec = recommendEngineModel(catalogAll, ramGb ? ramGb * 1073741824 : 0);
+    if (rec && !rec.lowRam) heroId = rec.id;
+  }
+  const withFit = (c) => ({ ...c, lowRam: ramGb !== null && ramGb < c.minRamGb });
+  const rankedChat = chatCatalog.map(withFit).sort((a, b) => {
+    if (a.id === heroId) return -1;
+    if (b.id === heroId) return 1;
+    // Fitting before oversized; within a group, larger (more capable) first.
+    return (
+      (a.lowRam ? 1 : 0) - (b.lowRam ? 1 : 0) ||
+      (b.totalBytes || 0) - (a.totalBytes || 0)
+    );
+  });
+  const cq = catalogFilter.trim().toLowerCase();
+  const matchCat = (c) =>
+    !cq ||
+    (c.label || "").toLowerCase().includes(cq) ||
+    (c.blurb || "").toLowerCase().includes(cq);
+  const filteredChat = rankedChat.filter(matchCat);
+  // Fold only in the plain, unfiltered view; a search shows every match.
+  const FOLD_AT = 4;
+  const folding = !cq && !catalogExpanded && filteredChat.length > FOLD_AT;
+  const shownChat = folding ? filteredChat.slice(0, FOLD_AT) : filteredChat;
+  const hiddenChat = filteredChat.length - shownChat.length;
+  const hiddenTooBig = folding
+    ? filteredChat.slice(FOLD_AT).filter((c) => c.lowRam).length
+    : 0;
+  const parsedLink = parseHfGgufLink(customLink);
+  // A direct .gguf link → one-shot "Add"; else an org/model → "Browse".
+  const parsedRepo = parsedLink ? null : parseHfRepo(customLink);
+  const linkMode = parsedLink ? "add" : parsedRepo ? "browse" : "none";
+
+  const catalogButton = (c) => {
+    const pull = EK_ACTIVE_PULLS.get(c.id);
+    if (c.installed) {
+      return (
+        <span
+          data-catalog-installed
+          style={{ fontFamily: T.mono, fontSize: 10.5, color: T.green, whiteSpace: "nowrap" }}
+        >
+          ✓ installed
+        </span>
+      );
+    }
+    if (pull) {
+      return (
+        <button
+          onClick={() => ekCancelPull(c.id)}
+          style={{
+            padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
+            background: "transparent", color: T.fg3, fontFamily: T.sans,
+            fontSize: 11.5, cursor: "pointer",
+          }}
+        >
+          Cancel
+        </button>
+      );
+    }
+    return (
+      <button
+        data-catalog-download={c.id}
+        onClick={() => ekPullModel(c.id, { engine: true })}
+        style={{
+          padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
+          background: "transparent", color: T.fg2, fontFamily: T.sans,
+          fontSize: 11.5, cursor: "pointer",
+        }}
+      >
+        Download
+      </button>
+    );
+  };
+
+  const catalogChatRow = (c) => {
+    const isHero = c.id === heroId;
+    return (
+      <div
+        key={c.id}
+        data-catalog-model={c.id}
+        style={{
+          display: "grid", gridTemplateColumns: "1fr auto", gap: 8,
+          alignItems: "center",
+          padding: isHero ? "10px 12px" : "7px 8px",
+          borderRadius: isHero ? 8 : 4,
+          border: isHero ? "1px solid var(--ek-accent)" : "none",
+          marginBottom: isHero ? 6 : 0,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500 }}>
+              {c.label}
+            </span>
+            <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+              {formatBytes(c.totalBytes)}
+            </span>
+            {isHero && (
+              <span
+                data-catalog-hero
+                style={{
+                  fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                  background: T.bg2, color: "var(--ek-accent)",
+                  border: "1px solid var(--ek-accent)",
+                  textTransform: "uppercase", letterSpacing: 0.4,
+                }}
+              >
+                {ramGb !== null ? "best for your Mac" : "recommended"}
+              </span>
+            )}
+            {c.lowRam && (
+              <span
+                data-catalog-ram-warning
+                style={{
+                  fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                  background: T.amber + "26", color: T.amber,
+                  textTransform: "uppercase", letterSpacing: 0.4,
+                }}
+                title={`This model wants ${c.minRamGb} GB of RAM; this Mac has ${ramGb} GB.`}
+              >
+                needs {c.minRamGb} GB RAM
+              </span>
+            )}
+          </div>
+          <div style={{ fontFamily: T.sans, fontSize: 11.5, color: T.fg2, marginTop: 1 }}>
+            {c.blurb}
+          </div>
+        </div>
+        {catalogButton(c)}
+      </div>
+    );
+  };
+
+  const catalogEmbedRow = (c) => (
+    <div
+      key={c.id}
+      data-catalog-model={c.id}
+      style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 8px", borderRadius: 4 }}
+    >
+      <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500 }}>
+        {c.label}
+      </span>
+      <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+        {formatBytes(c.totalBytes)}
+      </span>
+      <span
+        style={{
+          fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+          background: T.blue + "26", color: T.blue,
+          textTransform: "uppercase", letterSpacing: 0.4,
+        }}
+      >
+        embeddings
+      </span>
+      <span style={{ flex: 1 }} />
+      {catalogButton(c)}
+    </div>
+  );
+
+  // Which quant to badge "recommended" in the HF picker: a sensible balanced
+  // default if present, else the median by size.
+  const hfRecommendedIndex = (files) => {
+    const pref = ["q4_k_m", "q4_0", "q5_k_m", "q4_k_s"];
+    for (const p of pref) {
+      const i = files.findIndex((f) => (f.path || "").toLowerCase().includes(p));
+      if (i >= 0) return i;
+    }
+    if (!files.length) return -1;
+    const bySize = files.map((f, i) => [f.size || 0, i]).sort((a, b) => a[0] - b[0]);
+    return bySize[Math.floor(bySize.length / 2)][1];
+  };
+
+  const hfFileRow = (file, opts) => {
+    const recommended = !!(opts && opts.recommended);
+    const vision = !!(opts && opts.vision);
+    const base = (file.path || "").split("/").pop();
+    const name = ggufNameFromFile(base);
+    const quant = ggufQuantLabel(file.path);
+    const installed = name && installedNames.has(name);
+    const pull = name && EK_ACTIVE_PULLS.get(name);
+    const verified = !!(file.sha256 && file.sha256.length >= 32);
+    return (
+      <div
+        key={file.path}
+        data-hf-file={file.path}
+        style={{
+          display: "grid", gridTemplateColumns: "1fr auto", gap: 8,
+          alignItems: "center", padding: "7px 8px", borderRadius: 4,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: T.mono, fontSize: 11.5, color: T.fg }} title={base}>
+              {quant || base}
+            </span>
+            {recommended && (
+              <span
+                style={{
+                  fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                  background: T.bg2, color: "var(--ek-accent)",
+                  border: "1px solid var(--ek-accent)",
+                  textTransform: "uppercase", letterSpacing: 0.4,
+                }}
+              >
+                recommended
+              </span>
+            )}
+            {vision && (
+              <span
+                data-hf-vision
+                style={{
+                  fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                  background: T.blue + "26", color: T.blue,
+                  textTransform: "uppercase", letterSpacing: 0.4,
+                }}
+                title="This repo ships a vision projector; it downloads with the model."
+              >
+                vision
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+            <span>{formatBytes(file.size)}</span>
+            {verified && (
+              <span data-hf-verified style={{ color: T.green }}>· ✓ hash-verified</span>
+            )}
+          </div>
+        </div>
+        {installed ? (
+          <span
+            data-catalog-installed
+            style={{ fontFamily: T.mono, fontSize: 10.5, color: T.green, whiteSpace: "nowrap" }}
+          >
+            ✓ installed
+          </span>
+        ) : pull ? (
+          <button
+            onClick={() => ekCancelPull(name)}
+            style={{
+              padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
+              background: "transparent", color: T.fg3, fontFamily: T.sans,
+              fontSize: 11.5, cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+        ) : (
+          <button
+            data-hf-download={file.path}
+            onClick={() => downloadHfFile(file)}
+            style={{
+              padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
+              background: "transparent", color: T.fg2, fontFamily: T.sans,
+              fontSize: 11.5, cursor: "pointer",
+            }}
+          >
+            Download
+          </button>
+        )}
+      </div>
+    );
+  };
 
   const sectionLabel = (text) => (
     <div
@@ -500,162 +824,201 @@ function ModelManagerPanel({ activeModel }) {
       {engineBackend && engineCatalog !== null && (
         <>
           {sectionLabel("Model catalog")}
-          {engineCatalog.map((c) => {
-            const pull = EK_ACTIVE_PULLS.get(c.id);
-            const lowRam = ramGb !== null && ramGb < c.minRamGb;
-            return (
-              <div
-                key={c.id}
-                data-catalog-model={c.id}
-                style={{
-                  display: "grid", gridTemplateColumns: "1fr auto", gap: 8,
-                  alignItems: "center", padding: "6px 8px", borderRadius: 4,
-                }}
-              >
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
-                    <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500 }}>
-                      {c.label}
-                    </span>
-                    <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
-                      {formatBytes(c.totalBytes)}
-                    </span>
-                    {c.recommended && (
-                      <span
-                        style={{
-                          fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
-                          background: T.bg2, color: "var(--ek-accent)",
-                          border: "1px solid var(--ek-accent)",
-                          textTransform: "uppercase", letterSpacing: 0.4,
-                        }}
-                      >
-                        recommended
-                      </span>
-                    )}
-                    {c.purpose === "embed" && (
-                      <span
-                        style={{
-                          fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
-                          background: T.blue + "26", color: T.blue,
-                          textTransform: "uppercase", letterSpacing: 0.4,
-                        }}
-                      >
-                        embeddings
-                      </span>
-                    )}
-                    {lowRam && (
-                      <span
-                        data-catalog-ram-warning
-                        style={{
-                          fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
-                          background: T.amber + "26", color: T.amber,
-                          textTransform: "uppercase", letterSpacing: 0.4,
-                        }}
-                        title={`This model wants ${c.minRamGb} GB of RAM; this Mac has ${ramGb} GB.`}
-                      >
-                        needs {c.minRamGb} GB RAM
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontFamily: T.sans, fontSize: 11.5, color: T.fg2, marginTop: 1 }}>
-                    {c.blurb}
-                  </div>
-                </div>
-                {c.installed ? (
-                  <span
-                    data-catalog-installed
-                    style={{ fontFamily: T.mono, fontSize: 10.5, color: T.green, whiteSpace: "nowrap" }}
-                  >
-                    ✓ installed
-                  </span>
-                ) : pull ? (
-                  <button
-                    onClick={() => ekCancelPull(c.id)}
-                    style={{
-                      padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
-                      background: "transparent", color: T.fg3, fontFamily: T.sans,
-                      fontSize: 11.5, cursor: "pointer",
-                    }}
-                  >
-                    Cancel
-                  </button>
-                ) : (
-                  <button
-                    data-catalog-download={c.id}
-                    onClick={() => ekPullModel(c.id, { engine: true })}
-                    style={{
-                      padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
-                      background: "transparent", color: T.fg2, fontFamily: T.sans,
-                      fontSize: 11.5, cursor: "pointer",
-                    }}
-                  >
-                    Download
-                  </button>
-                )}
-              </div>
-            );
-          })}
+          {chatCatalog.length > FOLD_AT && (
+            <input
+              data-catalog-filter
+              value={catalogFilter}
+              onChange={(e) => setCatalogFilter(e.target.value)}
+              placeholder="Filter models…"
+              spellCheck={false}
+              autoComplete="off"
+              style={{
+                width: "100%", boxSizing: "border-box", margin: "0 0 8px",
+                padding: "6px 10px", borderRadius: 6, border: `1px solid ${T.border}`,
+                background: T.bg2, color: T.fg, fontFamily: T.sans, fontSize: 12, outline: "none",
+              }}
+            />
+          )}
+          {shownChat.map(catalogChatRow)}
+          {shownChat.length === 0 && (
+            <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3, padding: "6px 8px" }}>
+              No models match that filter.
+            </div>
+          )}
+          {folding && (
+            <div
+              data-catalog-showmore
+              onClick={() => setCatalogExpanded(true)}
+              style={{
+                display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+                padding: "8px 8px", marginTop: 2, borderTop: `1px solid ${T.border}`,
+                fontFamily: T.sans, fontSize: 11.5, color: T.fg2,
+              }}
+            >
+              <span aria-hidden="true" style={{ color: T.fg3 }}>▸</span>
+              Show {hiddenChat} more
+              {hiddenTooBig > 0 && (
+                <span style={{ marginLeft: "auto", fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+                  {hiddenTooBig} need &gt; {ramGb} GB
+                </span>
+              )}
+            </div>
+          )}
+          {!folding && catalogExpanded && !cq && filteredChat.length > FOLD_AT && (
+            <div
+              data-catalog-showless
+              onClick={() => setCatalogExpanded(false)}
+              style={{
+                display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+                padding: "8px 8px", marginTop: 2, borderTop: `1px solid ${T.border}`,
+                fontFamily: T.sans, fontSize: 11.5, color: T.fg2,
+              }}
+            >
+              <span aria-hidden="true" style={{ color: T.fg3 }}>▾</span>
+              Show less
+            </div>
+          )}
+          {embedCatalog.length > 0 && (
+            <>
+              {sectionLabel("Embeddings")}
+              {embedCatalog.map(catalogEmbedRow)}
+            </>
+          )}
         </>
       )}
 
       {engineBackend && (
         <div
           data-engine-hint
-          style={{
-            fontFamily: T.sans, fontSize: 11, color: T.fg3,
-            lineHeight: 1.5, marginTop: 10,
-            display: "flex", flexDirection: "column", gap: 8,
-          }}
+          style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}
         >
-          <span>
-            Downloads land in Ekorbia's models folder — you can also drop
-            any .gguf file in yourself (add a matching{" "}
-            <span style={{ fontFamily: T.mono }}>name.mmproj.gguf</span> to
-            enable vision). Custom models are best-effort: quality depends
-            on the file's built-in chat template.
-          </span>
-          <span style={{ display: "flex", gap: 6 }}>
+          {sectionLabel("Add from a link")}
+          <div style={{ display: "flex", gap: 6, padding: "0 2px" }}>
             <input
               data-custom-gguf-url
-              value={customUrl}
-              onChange={(e) => setCustomUrl(e.target.value)}
-              placeholder="https://huggingface.co/…/model.gguf"
-              spellCheck={false}
-              autoComplete="off"
-              style={{
-                flex: 2, minWidth: 0, padding: "6px 9px", borderRadius: 6,
-                border: `1px solid ${T.border}`, background: T.bg2, color: T.fg,
-                fontFamily: T.mono, fontSize: 11, outline: "none",
+              value={customLink}
+              onChange={(e) => {
+                const v = e.target.value;
+                setCustomLink(v);
+                // Editing away from the browsed repo clears its stale results.
+                if (hfBrowse && parseHfRepo(v) !== hfBrowse.repo) setHfBrowse(null);
               }}
-            />
-            <input
-              data-custom-gguf-name
-              value={customName}
-              onChange={(e) => setCustomName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") startCustomDownload(); }}
-              placeholder="local name"
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                if (linkMode === "browse") browseHfRepo();
+                else if (linkMode === "add") startCustomDownload();
+              }}
+              placeholder="huggingface.co/org/model  ·  or a direct …/model.gguf link"
               spellCheck={false}
               autoComplete="off"
               style={{
-                flex: 1, minWidth: 0, padding: "6px 9px", borderRadius: 6,
+                flex: 1, minWidth: 0, padding: "7px 10px", borderRadius: 6,
                 border: `1px solid ${T.border}`, background: T.bg2, color: T.fg,
-                fontFamily: T.mono, fontSize: 11, outline: "none",
+                fontFamily: T.mono, fontSize: 11.5, outline: "none",
               }}
             />
             <button
               data-custom-gguf-download
-              onClick={startCustomDownload}
-              disabled={!customUrl.trim() || !customName.trim()}
+              onClick={linkMode === "browse" ? browseHfRepo : startCustomDownload}
+              disabled={linkMode === "none"}
               style={{
-                padding: "5px 12px", borderRadius: 6, border: `1px solid ${T.border}`,
-                background: T.bg2, color: T.fg, fontFamily: T.sans,
-                fontSize: 11.5, cursor: "pointer", flexShrink: 0,
+                padding: "7px 16px", borderRadius: 6, border: "none",
+                background: linkMode !== "none" ? T.amber : T.bg3,
+                color: linkMode !== "none" ? T.bg0 : T.fg3,
+                fontFamily: T.sans, fontSize: 12.5, fontWeight: 600,
+                cursor: linkMode !== "none" ? "pointer" : "default", flexShrink: 0,
               }}
             >
-              Download
+              {linkMode === "browse" ? "Browse" : "Add"}
             </button>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          </div>
+          <div
+            data-custom-gguf-status
+            style={{ fontFamily: T.sans, fontSize: 11, color: T.fg3, padding: "0 2px", lineHeight: 1.5 }}
+          >
+            {parsedLink ? (
+              <>
+                Installs as{" "}
+                <span style={{ fontFamily: T.mono, color: T.fg2 }}>{parsedLink.name}</span>{" "}
+                — named from the file. Best-effort: quality depends on the
+                file's built-in chat template. For vision, add a matching{" "}
+                <span style={{ fontFamily: T.mono }}>{parsedLink.name}.mmproj.gguf</span>{" "}
+                to the models folder.
+              </>
+            ) : parsedRepo ? (
+              <>
+                Browse{" "}
+                <span style={{ fontFamily: T.mono, color: T.fg2 }}>{parsedRepo}</span>{" "}
+                to pick a quant — downloads are checksum-verified, and its vision
+                projector (if any) comes with the model.
+              </>
+            ) : customLink.trim() ? (
+              "Paste a Hugging Face model (org/model) or a direct link to a .gguf file."
+            ) : (
+              <>
+                Paste a Hugging Face model —{" "}
+                <span style={{ fontFamily: T.mono }}>org/model</span> to browse its
+                quants, or a direct{" "}
+                <span style={{ fontFamily: T.mono }}>.gguf</span> link to add one
+                straight away. You can also drop files into the models folder.
+              </>
+            )}
+          </div>
+
+          {hfBrowse && (
+            <div
+              data-hf-results
+              style={{
+                border: `1px solid ${T.border}`, borderRadius: 6,
+                padding: "8px 8px 4px", marginTop: 2,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 4px" }}>
+                <span
+                  style={{
+                    fontFamily: T.mono, fontSize: 10.5, color: T.fg2,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}
+                >
+                  {hfBrowse.repo}
+                </span>
+                {!hfBrowse.loading && !hfBrowse.error && (
+                  <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+                    {hfBrowse.files.length} model{hfBrowse.files.length === 1 ? "" : "s"}
+                    {hfBrowse.mmproj ? " · vision" : ""}
+                  </span>
+                )}
+                <span style={{ flex: 1 }} />
+                <button
+                  data-hf-close
+                  onClick={() => setHfBrowse(null)}
+                  aria-label="Close repo results"
+                  style={{ border: "none", background: "transparent", color: T.fg3, fontSize: 13, cursor: "pointer", padding: "0 2px" }}
+                >
+                  ✕
+                </button>
+              </div>
+              {hfBrowse.loading && (
+                <div style={{ padding: "6px 8px", fontFamily: T.mono, fontSize: 11, color: T.fg3 }}>
+                  Reading repo…
+                </div>
+              )}
+              {hfBrowse.error && (
+                <div style={{ padding: "6px 8px", fontFamily: T.sans, fontSize: 11.5, color: T.amber }}>
+                  {hfBrowse.error}
+                </div>
+              )}
+              {!hfBrowse.loading && !hfBrowse.error &&
+                (() => {
+                  const recIdx = hfRecommendedIndex(hfBrowse.files);
+                  return hfBrowse.files.map((f, i) =>
+                    hfFileRow(f, { recommended: i === recIdx, vision: !!hfBrowse.mmproj }),
+                  );
+                })()}
+            </div>
+          )}
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
             <button
               data-engine-reveal
               onClick={() => invoke && invoke("engine_models_dir_reveal").catch(() => {})}
@@ -678,7 +1041,7 @@ function ModelManagerPanel({ activeModel }) {
                 {engineInfo.modelsDir}
               </span>
             )}
-          </span>
+          </div>
         </div>
       )}
       {!byoBackend && !engineBackend && sectionLabel("Download a model")}

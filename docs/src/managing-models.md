@@ -16,13 +16,24 @@ Three ways in:
 
 ## Downloading a model
 
-On the bundled engine, the manager shows the built-in **catalog** — the Gemma 4 family plus the `nomic-embed-text` embedding model that folder attachments and search rely on. Each entry lists its download size and how much memory it wants, with the recommended pick flagged. Click **Download** on any of them.
+On the bundled engine, the manager shows the built-in **catalog** — the Gemma 4 family, Qwen3.5, plus the `nomic-embed-text` embedding model that folder attachments and search rely on. The catalog leads with the best pick for **your** Mac (sized to your memory), ranks the rest by fit, and folds the long tail behind **Show more** — with a filter box once the list grows. Each entry lists its download size and how much memory it wants. Click **Download** on any of them.
 
 While a download runs you'll see a live progress bar with percentage and bytes. Downloads keep running if you close the manager — reopen it any time to check progress, and a notification toast appears when the model is ready. Downloads are **checksummed** (a corrupted file never looks installed) and **resumable**: **Cancel** stops immediately but keeps what's already downloaded, so retrying later picks up where it left off.
 
 You can queue several downloads at once; each gets its own progress row.
 
 <!-- TODO: screenshot of the model manager mid-download -->
+
+## Adding a model from Hugging Face
+
+Beyond the catalog, you can pull almost any GGUF model straight from [Hugging Face](https://huggingface.co) using the **Add from a link** box:
+
+- **Browse a repo.** Paste a model id (`org/model`) or its Hugging Face page URL and click **Browse**. Ekorbia lists the repo's `.gguf` files with their sizes and quantization, flags a sensible default, and — when the repo ships a vision projector (`mmproj`) — pairs it automatically so vision just works. Pick a quant and click **Download**.
+- **Add a direct link.** Paste a direct link to a single `.gguf` file (a Hugging Face page or download link both work) and click **Add**; Ekorbia names it from the file.
+
+Repo downloads are **checksum-verified** against the hashes Hugging Face publishes for each file — the same integrity guarantee as the built-in catalog. Direct links are best-effort (there's no published hash to check against), and either way the quality of a custom model depends on the chat template baked into the file.
+
+> **What leaves your machine.** Browsing or downloading contacts `huggingface.co` — first to read a repo's public file list, then to fetch the files you choose. That's the only time Ekorbia reaches the network for models, and it never sends your chats or documents. To stay fully offline, drop `.gguf` files into the models folder yourself (**Reveal models folder**) and skip this box.
 
 ## Deleting a model
 

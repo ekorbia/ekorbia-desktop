@@ -385,6 +385,232 @@ pub(crate) async fn engine_download_custom(
     }
 }
 
+// ── Hugging Face repo browse (add-from-a-repo, verified) ─────────────────────
+//
+// The catalog above is curated + hash-pinned. This path lets a user paste ANY
+// GGUF repo (`org/model`) and pick a quant — and because the HF tree API hands
+// back each LFS file's sha256 (`lfs.oid`) plus its size, these downloads are
+// checksum-verified too, unlike the raw-URL `engine_download_custom` path.
+// Metadata only: one GET to huggingface.co/api; the files themselves ride the
+// same verified `download_file` road as the catalog.
+
+#[derive(Debug, Deserialize)]
+struct HfTreeEntry {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    size: u64,
+    #[serde(default)]
+    lfs: Option<HfLfs>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HfLfs {
+    #[serde(default)]
+    oid: String,
+    #[serde(default)]
+    size: u64,
+}
+
+#[derive(Debug, Clone)]
+struct HfFile {
+    path: String,
+    size: u64,
+    sha256: String,
+}
+
+struct HfListing {
+    files: Vec<HfFile>,
+    mmproj: Option<HfFile>,
+}
+
+/// Reduce a user-pasted repo ref to a canonical `org/model`. Accepts a bare
+/// `org/model` or a huggingface.co URL (any `/tree`, `/blob`, … suffix). Any
+/// other host is rejected — we only ever talk to Hugging Face.
+fn normalize_repo(input: &str) -> Result<String, String> {
+    let s = input
+        .trim()
+        .trim_matches(|c: char| c == '"' || c == '\'' || c == '<' || c == '>')
+        .trim();
+    let tail = if let Some(rest) = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+    {
+        let (host, path) = rest
+            .split_once('/')
+            .ok_or_else(|| format!("Not a Hugging Face repo: {input}"))?;
+        if !host.eq_ignore_ascii_case("huggingface.co") {
+            return Err(format!(
+                "Only huggingface.co repos are supported (got {host})"
+            ));
+        }
+        path
+    } else if let Some(rest) = s.strip_prefix("huggingface.co/") {
+        rest
+    } else {
+        s
+    };
+    let mut segs = tail.split('/').filter(|x| !x.is_empty());
+    let org = segs.next().unwrap_or("");
+    let repo = segs.next().unwrap_or("");
+    let ok = |x: &str| {
+        !x.is_empty()
+            && x.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    if !ok(org) || !ok(repo) {
+        return Err(format!("Not a Hugging Face repo: {input}"));
+    }
+    Ok(format!("{org}/{repo}"))
+}
+
+/// Of several projector files, prefer a full-precision one (best vision
+/// quality), else the largest.
+fn choose_mmproj(mut v: Vec<HfFile>) -> Option<HfFile> {
+    if let Some(i) = v.iter().position(|f| {
+        let l = f.path.to_ascii_lowercase();
+        l.contains("f16") || l.contains("bf16") || l.contains("f32")
+    }) {
+        return Some(v.remove(i));
+    }
+    v.sort_by_key(|f| f.size);
+    v.pop()
+}
+
+/// Split a repo tree into downloadable `.gguf` model files + an optional
+/// paired vision projector. Pure (no I/O) so it's unit-tested off fixtures.
+fn parse_hf_tree(entries: Vec<HfTreeEntry>) -> Result<HfListing, String> {
+    let mut files = Vec::new();
+    let mut mmprojs = Vec::new();
+    for e in entries {
+        if e.kind != "file" || !e.path.to_ascii_lowercase().ends_with(".gguf") {
+            continue;
+        }
+        let sha = e.lfs.as_ref().map(|l| l.oid.clone()).unwrap_or_default();
+        // Prefer the LFS content size; top-level `size` can be the pointer
+        // size on some responses.
+        let size = e
+            .lfs
+            .as_ref()
+            .map(|l| l.size)
+            .filter(|s| *s > 0)
+            .unwrap_or(e.size);
+        let f = HfFile {
+            path: e.path,
+            size,
+            sha256: sha,
+        };
+        if f.path.to_ascii_lowercase().contains("mmproj") {
+            mmprojs.push(f);
+        } else {
+            files.push(f);
+        }
+    }
+    if files.is_empty() {
+        return Err("No .gguf model files found in that repo.".into());
+    }
+    // Smallest first — a size-ordered pick list reads naturally.
+    files.sort_by_key(|f| f.size);
+    Ok(HfListing {
+        files,
+        mmproj: choose_mmproj(mmprojs),
+    })
+}
+
+async fn fetch_hf_gguf(repo: &str) -> Result<HfListing, String> {
+    let url = format!("https://huggingface.co/api/models/{repo}/tree/main?recursive=true");
+    let resp = dl_client()
+        .get(&url)
+        .header("User-Agent", "Ekorbia")
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Hugging Face: {e}"))?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(format!(
+            "No repo named {repo} on Hugging Face (or it's private)."
+        ));
+    }
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Hugging Face returned {} for {repo}",
+            resp.status()
+        ));
+    }
+    let entries: Vec<HfTreeEntry> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Couldn't read the repo file list: {e}"))?;
+    parse_hf_tree(entries)
+}
+
+/// List a Hugging Face repo's downloadable `.gguf` files (+ a paired vision
+/// projector, if any) for the model manager's "browse a repo" picker.
+#[tauri::command]
+pub(crate) async fn engine_hf_repo_files(repo: String) -> Result<serde_json::Value, String> {
+    let repo = normalize_repo(&repo)?;
+    let listing = fetch_hf_gguf(&repo).await?;
+    let files: Vec<serde_json::Value> = listing
+        .files
+        .iter()
+        .map(|f| serde_json::json!({ "path": f.path, "size": f.size, "sha256": f.sha256 }))
+        .collect();
+    let mmproj = listing
+        .mmproj
+        .as_ref()
+        .map(|m| serde_json::json!({ "path": m.path, "size": m.size, "sha256": m.sha256 }));
+    Ok(serde_json::json!({ "repo": repo, "files": files, "mmproj": mmproj }))
+}
+
+/// Download one chosen `.gguf` from a repo (plus the auto-paired vision
+/// projector), checksum-verified against the repo's published hashes. Re-reads
+/// the tree so the hashes are authoritative, never trusted from the client.
+#[tauri::command]
+pub(crate) async fn engine_download_hf(
+    repo: String,
+    file: String,
+    name: String,
+    request_id: String,
+    on_progress: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<(), String> {
+    let repo = normalize_repo(&repo)?;
+    crate::engine::validate_model_name(&name)?;
+    let listing = fetch_hf_gguf(&repo).await?;
+    let model = listing
+        .files
+        .iter()
+        .find(|f| f.path == file)
+        .ok_or_else(|| format!("{file} isn't a .gguf model in {repo}"))?
+        .clone();
+    let dir = crate::engine::models_dir()?;
+    let _ = std::fs::create_dir_all(&dir);
+
+    let token = crate::providers::register_cancel(&request_id);
+    let cancel = token.flag.clone();
+
+    // Model file first, then the paired projector — named to match so the
+    // engine's dir scan turns vision on (the Phase 2 `<id>.mmproj.gguf`
+    // convention).
+    let mut plan = vec![(model, format!("{name}.gguf"))];
+    if let Some(mm) = listing.mmproj.clone() {
+        plan.push((mm, format!("{name}.mmproj.gguf")));
+    }
+    for (f, dest) in plan {
+        let url = format!("https://huggingface.co/{repo}/resolve/main/{}", f.path);
+        match download_file(&dir, &url, &dest, &f.sha256, f.size, &cancel, &on_progress).await {
+            Ok(FileOutcome::Done) => {}
+            Ok(FileOutcome::Cancelled) => return Ok(()),
+            Err(e) => {
+                let _ = on_progress.send(serde_json::json!({ "error": e }));
+                return Err(e);
+            }
+        }
+    }
+    let _ = on_progress.send(serde_json::json!({ "status": "success" }));
+    Ok(())
+}
+
 /// Cancel an in-flight download at the next chunk boundary. The partial
 /// file is KEPT so a later attempt resumes.
 #[tauri::command]
@@ -427,6 +653,75 @@ pub(crate) async fn engine_model_delete(name: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_repo_accepts_bare_and_urls() {
+        assert_eq!(
+            normalize_repo("Qwen/Qwen3.5-4B-GGUF").unwrap(),
+            "Qwen/Qwen3.5-4B-GGUF"
+        );
+        assert_eq!(
+            normalize_repo("https://huggingface.co/org/repo/tree/main").unwrap(),
+            "org/repo"
+        );
+        assert_eq!(
+            normalize_repo("huggingface.co/org/repo").unwrap(),
+            "org/repo"
+        );
+        assert_eq!(
+            normalize_repo("  https://huggingface.co/a/b/blob/main/x.gguf  ").unwrap(),
+            "a/b"
+        );
+        // Only Hugging Face; a bare word / other host is rejected.
+        assert!(normalize_repo("https://evil.example.com/a/b").is_err());
+        assert!(normalize_repo("not-a-repo").is_err());
+        assert!(normalize_repo("").is_err());
+    }
+
+    #[test]
+    fn parse_hf_tree_filters_ggufs_and_pairs_mmproj() {
+        let sample = r#"[
+          {"type":"file","path":"README.md","size":100},
+          {"type":"file","path":"model-Q4_K_M.gguf","size":135,"lfs":{"oid":"aaa","size":2700000000}},
+          {"type":"file","path":"model-Q8_0.gguf","size":135,"lfs":{"oid":"bbb","size":5000000000}},
+          {"type":"file","path":"mmproj-F16.gguf","size":135,"lfs":{"oid":"ccc","size":600000000}},
+          {"type":"directory","path":"sub"}
+        ]"#;
+        let entries: Vec<HfTreeEntry> = serde_json::from_str(sample).unwrap();
+        let listing = parse_hf_tree(entries).unwrap();
+        // Two model ggufs (README + dir excluded, mmproj split out), smallest first,
+        // and the LFS content size + sha256 are surfaced (not the pointer size).
+        assert_eq!(listing.files.len(), 2);
+        assert_eq!(listing.files[0].path, "model-Q4_K_M.gguf");
+        assert_eq!(listing.files[0].size, 2700000000);
+        assert_eq!(listing.files[0].sha256, "aaa");
+        let mm = listing.mmproj.unwrap();
+        assert_eq!(mm.path, "mmproj-F16.gguf");
+        assert_eq!(mm.sha256, "ccc");
+    }
+
+    #[test]
+    fn parse_hf_tree_errors_when_no_model_gguf() {
+        let sample = r#"[{"type":"file","path":"README.md","size":100}]"#;
+        let entries: Vec<HfTreeEntry> = serde_json::from_str(sample).unwrap();
+        assert!(parse_hf_tree(entries).is_err());
+    }
+
+    #[test]
+    fn choose_mmproj_prefers_full_precision_then_largest() {
+        let mk = |p: &str, s: u64| HfFile {
+            path: p.into(),
+            size: s,
+            sha256: String::new(),
+        };
+        // f16 wins even when it's the smaller file.
+        let v = vec![mk("mmproj-Q8_0.gguf", 900), mk("mmproj-f16.gguf", 500)];
+        assert_eq!(choose_mmproj(v).unwrap().path, "mmproj-f16.gguf");
+        // No full-precision projector → the largest.
+        let v = vec![mk("mmproj-Q4_0.gguf", 300), mk("mmproj-Q8_0.gguf", 900)];
+        assert_eq!(choose_mmproj(v).unwrap().path, "mmproj-Q8_0.gguf");
+        assert!(choose_mmproj(vec![]).is_none());
+    }
 
     #[test]
     fn baked_catalog_parses_and_is_sane() {

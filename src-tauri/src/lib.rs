@@ -154,6 +154,8 @@ pub fn run() {
             engine::downloads::engine_catalog,
             engine::downloads::engine_download,
             engine::downloads::engine_download_custom,
+            engine::downloads::engine_hf_repo_files,
+            engine::downloads::engine_download_hf,
             engine::downloads::engine_download_cancel,
             engine::downloads::engine_model_delete,
             system::system_profile,

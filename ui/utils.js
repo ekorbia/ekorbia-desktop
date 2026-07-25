@@ -1077,6 +1077,103 @@ async function instantiateSpacePinnedAttachments(invokeFn, chatId, pinned, opts)
   if (opts.onComplete) opts.onComplete();
 }
 
+// Derive a valid local model name from a .gguf file name: drop the
+// extension, lowercase, fold anything outside [a-z0-9._-] to a single dash,
+// and trim stray separators. Guaranteed slash-free and either non-empty or
+// null, so the result always satisfies engine::validate_model_name (which
+// rejects '/', '\\', '\0', a leading '.', and the empty string).
+function ggufNameFromFile(file) {
+  const base = String(file || "").replace(/\.gguf$/i, "");
+  const name = base
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-.]+/, "")
+    .replace(/[-.]+$/g, "");
+  return name || null;
+}
+
+// Parse a user-pasted Hugging Face link (or scheme-less host path) that
+// points at a single .gguf file, and derive a safe local model name from the
+// file name. Returns { url, name, file } or null when the input isn't a
+// usable .gguf link. This is the "add from a link" path — the user pastes
+// one thing and we figure out the download URL and a name for it.
+//
+// Accepts:
+//   https://huggingface.co/org/repo/resolve/main/model.gguf   (as-is)
+//   https://huggingface.co/org/repo/blob/main/model.gguf      (blob → resolve)
+//   huggingface.co/org/repo/resolve/main/model.gguf           (adds https://)
+// engine_download_custom requires https:// and a slash-free name, so we
+// reject non-https and non-.gguf up front and always hand back a safe name.
+function parseHfGgufLink(raw) {
+  let s = (raw || "").trim().replace(/^["'<]+/, "").replace(/["'>]+$/, "");
+  if (!s) return null;
+  // Bare "host.tld/…" with no scheme → assume https (people paste the
+  // address-bar text without the protocol).
+  if (!/^https?:\/\//i.test(s) && /^[\w-]+(\.[\w-]+)+\//.test(s)) {
+    s = "https://" + s;
+  }
+  let url;
+  try {
+    url = new URL(s);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:") return null;
+  if (!/\.gguf$/i.test(url.pathname)) return null;
+  // On Hugging Face the shareable page URL is /blob/; the downloadable one is
+  // /resolve/. Rewrite so a pasted page link just works.
+  if (/(^|\.)huggingface\.co$/i.test(url.hostname)) {
+    url.pathname = url.pathname.replace("/blob/", "/resolve/");
+  }
+  let file = "";
+  try {
+    file = decodeURIComponent(url.pathname.split("/").pop() || "");
+  } catch {
+    file = url.pathname.split("/").pop() || "";
+  }
+  const name = ggufNameFromFile(file);
+  if (!name) return null;
+  return { url: url.toString(), name, file };
+}
+
+// Reduce a pasted repo ref to a canonical `org/model`, or null. Accepts a bare
+// `org/model` or a huggingface.co URL (any /tree, /blob, … suffix); rejects
+// other hosts and anything ending in .gguf (that's a direct file → the caller
+// uses parseHfGgufLink instead). Mirrors engine::downloads::normalize_repo.
+function parseHfRepo(raw) {
+  let s = (raw || "").trim().replace(/^["'<]+/, "").replace(/["'>]+$/, "").trim();
+  if (!s) return null;
+  if (/\.gguf$/i.test(s.split(/[?#]/)[0])) return null; // a direct file, not a repo
+  let path = s;
+  if (/^https?:\/\//i.test(s)) {
+    let url;
+    try {
+      url = new URL(s);
+    } catch {
+      return null;
+    }
+    if (!/(^|\.)huggingface\.co$/i.test(url.hostname)) return null;
+    path = url.pathname.replace(/^\/+/, "");
+  } else if (/^huggingface\.co\//i.test(s)) {
+    path = s.replace(/^huggingface\.co\//i, "");
+  }
+  const segs = path.split("/").filter(Boolean);
+  if (segs.length < 2) return null;
+  const [org, repo] = segs;
+  const ok = (x) => /^[\w.-]+$/.test(x);
+  if (!ok(org) || !ok(repo)) return null;
+  return `${org}/${repo}`;
+}
+
+// Pull a quantization tag (Q4_K_M, Q8_0, IQ4_XS, F16, …) out of a .gguf file
+// name for display, or "" when none is present. Purely cosmetic.
+function ggufQuantLabel(path) {
+  const f = String(path || "").split("/").pop() || "";
+  const m = f.match(/(IQ\d+[A-Z0-9_]*|Q\d+(?:_[A-Z0-9]+)*|BF16|F16|F32)/i);
+  return m ? m[1].toUpperCase() : "";
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     detectPlatform,
@@ -1106,6 +1203,10 @@ if (typeof module !== "undefined" && module.exports) {
     applyThinkPref,
     recommendGemmaModel,
     recommendEngineModel,
+    ggufNameFromFile,
+    parseHfGgufLink,
+    parseHfRepo,
+    ggufQuantLabel,
     recipeToFormDefaults,
     buildTodayDigest,
     ekFilesGroupByPath,
