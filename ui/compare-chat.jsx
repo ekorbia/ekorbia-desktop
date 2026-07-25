@@ -196,6 +196,7 @@ function CompareChatPane({
               message={message}
               onStop={() => message?.id && onStopColumn?.(message.id)}
               onKeep={() => message?.id && onKeep?.(message.id)}
+              engineCtx={engineCtx}
             />
           ))}
         </div>
@@ -448,7 +449,7 @@ function CompareEmptyState({ models }) {
   );
 }
 
-function CompareColumn({ model, message, onStop, onKeep }) {
+function CompareColumn({ model, message, onStop, onKeep, engineCtx = null }) {
   // A column is "in flight" while its stream is still going. The
   // streaming flag rides on the in-memory message; the persisted row
   // never carries it (handleSendMultiModel clears it on finalize).
@@ -457,6 +458,17 @@ function CompareColumn({ model, message, onStop, onKeep }) {
   // non-empty content (an errored stream that completed with no text
   // shouldn't be pickable — pick a sibling instead).
   const canKeep = !!message && !streaming && !!message.content;
+
+  // Auto-scroll this column to the bottom as its reply streams in, so a
+  // response that grows past the viewport keeps its tail visible — same
+  // behaviour ChatPane gives single-model chats. Each column owns its
+  // scroller (see the content region below), so they follow independently.
+  // Keyed on the message content (grows per delta) + the streaming flag.
+  const scrollerRef = React.useRef(null);
+  React.useEffect(() => {
+    if (scrollerRef.current)
+      scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
+  }, [message?.content, streaming]);
 
   return (
     <div
@@ -527,6 +539,8 @@ function CompareColumn({ model, message, onStop, onKeep }) {
           around. minHeight:0 is mandatory for flex-child overflow to
           actually clip — without it the column grows to fit content. */}
       <div
+        ref={scrollerRef}
+        data-compare-scroll
         style={{
           flex: 1,
           minHeight: 0,

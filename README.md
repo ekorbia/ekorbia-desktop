@@ -9,7 +9,7 @@
 A native desktop chat and productivity environment for local AI models. Ekorbia runs models **on your own machine** with a bundled engine — pick one from the built-in catalog and it downloads, no separate install and no terminal (prefer [Ollama](https://ollama.com) or an OpenAI-compatible endpoint? those work too, under Settings → Backend). No cloud, no API keys. It pairs multi-tab local chat with the features that set it apart — background **Watches** over folders, feeds, and web pages, a **Spotlight-style quick-query overlay**, and **ephemeral chats, model comparison mode, prompt library** — all fully offline, with no telemetry and no CDN calls.
 
 <p align="center">
-  <img src="docs/screenshots/ekorbia-screenshot-0.1.png" alt="Ekorbia main chat panel" width="800">
+  <img src="docs/screenshots/ekorbia-screenshot-0.7.png" alt="Ekorbia main chat panel" width="800">
 </p>
 
 ## Install

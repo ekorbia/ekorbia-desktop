@@ -147,6 +147,36 @@ function removeChatFromHistory(hs, chatId) {
   };
 }
 
+// Live-refresh an existing sidebar chat after activity in it: set its
+// preview to the newest message and float it to the top of Today. This
+// mirrors exactly what a `db_load_chats` reload produces (preview tracks
+// the newest message, `updated_at DESC` ordering bumps the just-touched
+// chat to the top) — so the row no longer appears to change only when a
+// reload happens to fire (e.g. on a Space switch). No-op when the chat
+// isn't in the sidebar: ephemeral chats never appear there, and a chat
+// filtered out of the active Space simply isn't present to touch.
+function touchChatInHistory(hs, chatId, preview) {
+  let found = null;
+  const sections = (hs.dateSections || [])
+    .map((s) => ({
+      ...s,
+      items: s.items.filter((c) => {
+        if (c.id === chatId) {
+          found = c;
+          return false;
+        }
+        return true;
+      }),
+    }))
+    .filter((s) => s.items.length);
+  if (!found) return hs;
+  // Preserve every other field on the row (title, model, spaceId, …); only
+  // the preview + freshness move. Keep the prior preview if the new one is
+  // empty (e.g. a whitespace-only message) so the line doesn't blank out.
+  const updated = { ...found, preview: preview || found.preview, when: 'now' };
+  return prependChatToToday({ ...hs, dateSections: sections }, updated);
+}
+
 // Persist a piece of state to localStorage so it survives app restart.
 // Initial value comes from localStorage if present; otherwise falls back to
 // `defaultValue`. localStorage in the Tauri webview is stored in the app's
@@ -1753,6 +1783,12 @@ function App() {
         };
         setHistory(hs => prependChatToToday(hs, newItem));
       }
+    } else if (!ephemeral) {
+      // Existing chat: bump it to the top of Today and show the just-sent
+      // user text as the preview, matching what a db_load_chats reload
+      // would produce (updated_at DESC + newest-message preview). The
+      // assistant reply replaces this preview when the stream finalizes.
+      setHistory(hs => touchChatInHistory(hs, activeTab, previewSnippet(text)));
     }
     // Awaited (was fire-and-forget): the assistant placeholder persist
     // below runs immediately after and carries a messages.chat_id FK to
@@ -2149,6 +2185,19 @@ function App() {
       };
       return { ...c, messages: msgs };
     });
+
+    // Refresh the sidebar row's preview to the assistant's reply — the
+    // newest message, which is what a db_load_chats reload now shows for a
+    // single-model chat — and keep the chat pinned to the top of Today.
+    // Skipped for ephemeral chats (never in the sidebar) and for an empty
+    // reply (error/stopped-with-nothing), where touchChatInHistory would
+    // keep the prior preview anyway. Compare-mode finalize lives in
+    // handleSendMultiModel and deliberately doesn't touch the preview: those
+    // rows preview the prompt (set at send time), matching the mode-aware
+    // db_load_chats query.
+    if (!ephemeral && (finalContent || '').trim()) {
+      setHistory(hs => touchChatInHistory(hs, activeTab, previewSnippet(finalContent)));
+    }
 
     // Persist assistant message. sources_json is a JSON object wrapping
     // both the citation array and a flag for skipped images so historical
@@ -2717,6 +2766,14 @@ function App() {
         : t,
     ));
     setModelId(pickedModel);
+
+    // The chat is no longer 'multi-pending', so a reload now previews the
+    // newest canonical message — the kept reply. Update the sidebar row to
+    // match (and bump it to the top of Today) instead of leaving the prompt
+    // it showed while the comparison was unresolved.
+    if (!isEphemeralChat(activeTab)) {
+      setHistory(hs => touchChatInHistory(hs, activeTab, previewSnippet(variant.content)));
+    }
 
     // Persist the chat row's new tabType. multi_models is preserved so
     // future "▸ N alternatives" rendering knows which models participated.

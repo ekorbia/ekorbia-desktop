@@ -105,24 +105,49 @@ pub(crate) struct MessageRow {
     is_picked: Option<i64>,
 }
 
+/// The correlated-subquery expression that computes a chat's sidebar
+/// preview. Interpolated into `db_load_chats`'s SELECT (correlated on the
+/// outer `chats` row) and reused verbatim by the unit test, so both
+/// exercise the same deterministic rule. See `db_load_chats` for why the
+/// two filters (canonical variants, prompt-for-multi-pending) exist.
+const PREVIEW_SUBQUERY: &str = "(SELECT SUBSTR(content, 1, 200) FROM messages m \
+     WHERE m.chat_id = chats.id AND m.role IN ('user', 'assistant') \
+       AND TRIM(m.content) <> '' \
+       AND (m.is_picked IS NULL OR m.is_picked = 1) \
+       AND (chats.tab_type IS NOT 'multi-pending' OR m.role = 'user') \
+     ORDER BY m.seq DESC LIMIT 1)";
+
 #[tauri::command]
 pub(crate) fn db_load_chats(state: tauri::State<'_, DbState>) -> Result<Vec<ChatRow>, String> {
     let db = state.0.lock().map_err(|e| e.to_string())?;
-    // The correlated subquery pulls the newest non-empty user/assistant
-    // message per chat for the sidebar preview line. It rides the
+    // The correlated subquery pulls the newest non-empty message per chat
+    // for the sidebar row's preview line. It rides the
     // idx_messages_chat(chat_id, seq) index; tool/system rows and empty
     // assistant placeholders are excluded. SUBSTR bounds the bytes read;
     // preview_snippet does the final whitespace collapse + char-safe truncate.
-    let mut stmt = db
-        .prepare(
-            "SELECT id, title, model, created_at, updated_at, tab_type, multi_models, space_id, \
-             (SELECT SUBSTR(content, 1, 200) FROM messages m \
-              WHERE m.chat_id = chats.id AND m.role IN ('user', 'assistant') \
-                AND TRIM(m.content) <> '' \
-              ORDER BY m.seq DESC LIMIT 1) AS preview \
-             FROM chats ORDER BY updated_at DESC",
-        )
-        .map_err(|e| e.to_string())?;
+    //
+    // Two filters keep the preview DETERMINISTIC in every chat state, so
+    // the UI's optimistic in-place update matches this reload exactly and
+    // the row never appears to rewrite itself when a reload happens to fire
+    // (e.g. on a Space switch):
+    //
+    //   • Canonical variants only (`is_picked IS NULL OR is_picked = 1`).
+    //     A resolved compare chat keeps its losing variants on disk for the
+    //     "N alternatives" disclosure; excluding them means the winner (or a
+    //     later single-model follow-up) drives the preview, never a loser.
+    //
+    //   • Unresolved compare chats (`tab_type = 'multi-pending'`) preview the
+    //     newest USER message — the prompt. Their turn produces N equal-`seq`
+    //     assistant variants with no winner yet, so any assistant-based
+    //     preview would be ambiguous. Every other state (single-model, and
+    //     `single-from-multi` once a winner is kept) previews the newest
+    //     user OR assistant message, so a finished turn shows the reply.
+    let sql = format!(
+        "SELECT id, title, model, created_at, updated_at, tab_type, multi_models, space_id, \
+         {PREVIEW_SUBQUERY} AS preview \
+         FROM chats ORDER BY updated_at DESC"
+    );
+    let mut stmt = db.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
             let raw_preview: Option<String> = row.get(8)?;
@@ -526,7 +551,107 @@ fn render_json(chat: &ChatRow, messages: &[MessageRow]) -> Result<String, String
 
 #[cfg(test)]
 mod tests {
-    use super::preview_snippet;
+    use super::{preview_snippet, PREVIEW_SUBQUERY};
+    use crate::db::SCHEMA;
+    use rusqlite::{params, Connection};
+
+    fn fresh_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA)
+            .expect("SCHEMA must apply cleanly");
+        conn
+    }
+
+    fn add_chat(conn: &Connection, id: &str, tab_type: Option<&str>, multi: Option<&str>) {
+        conn.execute(
+            "INSERT INTO chats (id, title, tab_type, multi_models) VALUES (?1, ?2, ?3, ?4)",
+            params![id, id, tab_type, multi],
+        )
+        .unwrap();
+    }
+
+    fn add_msg(
+        conn: &Connection,
+        id: &str,
+        chat_id: &str,
+        role: &str,
+        content: &str,
+        seq: i64,
+        is_picked: Option<i64>,
+    ) {
+        conn.execute(
+            "INSERT INTO messages (id, chat_id, role, content, seq, is_picked) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, chat_id, role, content, seq, is_picked],
+        )
+        .unwrap();
+    }
+
+    /// Run the SAME preview subquery `db_load_chats` uses (shared const, so
+    /// no drift) and return the raw preview for one chat.
+    fn preview_of(conn: &Connection, chat_id: &str) -> Option<String> {
+        let sql = format!("SELECT {PREVIEW_SUBQUERY} FROM chats WHERE id = ?1");
+        conn.query_row(&sql, params![chat_id], |r| r.get::<_, Option<String>>(0))
+            .unwrap()
+    }
+
+    // The sidebar preview must be DETERMINISTIC in every chat state so the
+    // UI's optimistic in-place update matches a db_load_chats reload — the
+    // fix for "the row content changes only when I switch Spaces".
+    #[test]
+    fn preview_is_deterministic_across_chat_states() {
+        let db = fresh_db();
+
+        // Single-model: newest user/assistant is the reply. The empty
+        // assistant placeholder (TRIM = '') must be ignored.
+        add_chat(&db, "single", None, None);
+        add_msg(&db, "s-u", "single", "user", "the question", 0, None);
+        add_msg(&db, "s-a", "single", "assistant", "the reply", 1, None);
+        add_msg(&db, "s-ph", "single", "assistant", "   ", 2, None);
+        assert_eq!(preview_of(&db, "single").as_deref(), Some("the reply"));
+
+        // Compare, unresolved (multi-pending): two equal-seq variants with
+        // no winner → preview the PROMPT, not an arbitrary variant.
+        add_chat(&db, "multi", Some("multi-pending"), Some("[\"a\",\"b\"]"));
+        add_msg(&db, "m-u", "multi", "user", "compare this", 0, None);
+        add_msg(&db, "m-a", "multi", "assistant", "variant A", 1, None);
+        add_msg(&db, "m-b", "multi", "assistant", "variant B", 1, None);
+        assert_eq!(preview_of(&db, "multi").as_deref(), Some("compare this"));
+
+        // Winner kept (single-from-multi): the canonical filter drops the
+        // losing variant, so the winner drives the preview.
+        add_chat(
+            &db,
+            "kept",
+            Some("single-from-multi"),
+            Some("[\"a\",\"b\"]"),
+        );
+        add_msg(&db, "k-u", "kept", "user", "which is better", 0, None);
+        add_msg(
+            &db,
+            "k-win",
+            "kept",
+            "assistant",
+            "winner reply",
+            1,
+            Some(1),
+        );
+        add_msg(
+            &db,
+            "k-lose",
+            "kept",
+            "assistant",
+            "loser reply",
+            1,
+            Some(0),
+        );
+        assert_eq!(preview_of(&db, "kept").as_deref(), Some("winner reply"));
+
+        // …and a single-model follow-up in that same chat wins as newest.
+        add_msg(&db, "k-u2", "kept", "user", "and now", 2, None);
+        add_msg(&db, "k-a2", "kept", "assistant", "follow-up reply", 3, None);
+        assert_eq!(preview_of(&db, "kept").as_deref(), Some("follow-up reply"));
+    }
 
     #[test]
     fn snippet_collapses_whitespace_and_newlines() {

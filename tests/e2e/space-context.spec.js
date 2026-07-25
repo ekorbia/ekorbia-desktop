@@ -1,8 +1,8 @@
 // Smokes for Phase 3 (Space context inheritance at send time):
 //   • ChatPane renders the Space badge when the chat lives in a Space.
 //   • ChatPane omits the badge when chat.spaceId is null.
-//   • Sidebar hides the "New private" lock button when a Space is active.
-//   • Sidebar shows the lock button again when "All chats" is active.
+//   • Sidebar always shows the "New private" lock button — in a Space and
+//     in "All chats" alike (a private chat is ephemeral and Space-agnostic).
 //
 // What's NOT covered here (would require a full App mount with mocked
 // invoke responses for db_load_chats / space_list / prompts_list /
@@ -130,14 +130,15 @@ test("Sidebar: private/lock button is visible when no Space is active", async ({
   await expect(page.getByLabel("New private chat")).toBeVisible();
 });
 
-test("Sidebar: private/lock button is HIDDEN when a Space is active", async ({ page }) => {
+test("Sidebar: private/lock button is ALSO visible when a Space is active", async ({ page }) => {
+  // A private chat is ephemeral and Space-agnostic, so the affordance
+  // stays available inside a Space too — starting one just opens a
+  // scratch chat that doesn't inherit the Space.
   await mountSidebar(page, {
     spaces: [
       { id: "s1", name: "Novel", slug: "novel", color: "amber", sortIndex: 0, createdAt: 1, updatedAt: 1 },
     ],
     activeSpaceId: "s1",
   });
-  // Lock button has aria-label="New private chat"; toHaveCount(0) is
-  // the authoritative absence check.
-  await expect(page.getByLabel("New private chat")).toHaveCount(0);
+  await expect(page.getByLabel("New private chat")).toBeVisible();
 });

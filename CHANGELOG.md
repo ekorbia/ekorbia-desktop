@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-25
+
+### Fixed
+
+- **Comparison chats no longer go blank when a column finishes.** A
+  side-by-side comparison could crash to a black screen the moment one
+  model's reply completed; the columns now render their token footer
+  cleanly.
+- **Comparison columns now follow along as they answer.** Each column
+  auto-scrolls to keep the latest text in view while a reply streams past
+  the bottom of the viewport — the same behaviour single-model chats
+  already had.
+- **Sidebar rows now keep up with the conversation.** A chat's one-line
+  preview and its spot in the list refresh the moment you send or receive a
+  message, instead of only catching up the next time the list happened to
+  reload — most visibly when switching Spaces.
+- **The private-chat button is always available.** It used to disappear
+  while you were inside a Space; now it's there wherever you are. A private
+  chat stays ephemeral and Space-agnostic — it opens a scratch conversation
+  that isn't saved and doesn't inherit the Space.
+
 ## [0.7.0] - 2026-07-25
 
 ### Added
@@ -476,6 +497,7 @@ First public release. Local-first AI desktop built on Tauri 2 + Ollama.
   Ekorbia-tinted), built via `./scripts/build-docs.sh` and uploaded
   manually to ekorbia.com.
 
+[0.7.1]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.4.0...v0.5.0

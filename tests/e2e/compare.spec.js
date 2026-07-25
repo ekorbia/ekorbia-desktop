@@ -359,6 +359,115 @@ test.describe("CompareChatPane (Phase 4)", () => {
     await expect(page.locator("[data-compare-column]")).toHaveCount(1);
     expect(pageErrors).toEqual([]);
   });
+
+  test("a streaming column auto-scrolls to keep the reply tail visible", async ({
+    page,
+  }) => {
+    // Bound the mount so the column's flex scroller actually clips:
+    // #test-root is a plain 100vh div and the pane root is flex:1, so
+    // without a short flex-column parent the scroller never overflows and
+    // the assertion would be vacuous.
+    await page.evaluate(() => {
+      const root = document.getElementById("test-root");
+      root.style.display = "flex";
+      root.style.flexDirection = "column";
+      root.style.height = "300px";
+    });
+    // Load the UI font BEFORE mounting so the column's content height is
+    // final when the one-shot scroll effect runs. A late font swap would
+    // reflow the text taller after the scroll and leave a residual gap — a
+    // test artifact (in the real app, every streaming delta re-scrolls).
+    await page.evaluate(() => document.fonts.ready.then(() => true));
+
+    const longReply = "This is a long streaming reply line. ".repeat(200);
+    await page.evaluate((text) => {
+      window.__TEST_MOUNT("CompareChatPane", {
+        chat: {
+          id: "c1",
+          title: "x",
+          tabType: "multi-pending",
+          models: ["a"],
+          messages: [
+            { id: "u1", role: "user", content: "go" },
+            {
+              id: "v-a",
+              role: "assistant",
+              model: "a",
+              content: text,
+              variantGroupId: "g1",
+              streaming: true,
+            },
+          ],
+        },
+        isStreaming: true,
+      });
+    }, longReply);
+
+    const scroller = page.locator('[data-model="a"] [data-compare-scroll]');
+    // The reply really overflows its column (else the check below is moot).
+    await expect
+      .poll(() => scroller.evaluate((el) => el.scrollHeight - el.clientHeight))
+      .toBeGreaterThan(50);
+    // The auto-scroll effect pins the column to the bottom, so the freshest
+    // text stays on screen instead of streaming off below the fold. The
+    // content overflows by thousands of px, so a small tolerance (sub-pixel
+    // clamping / rounding) still cleanly distinguishes "pinned to the
+    // bottom" from "sitting at the top".
+    await expect
+      .poll(() =>
+        scroller.evaluate(
+          (el) => el.scrollHeight - el.clientHeight - el.scrollTop,
+        ),
+      )
+      .toBeLessThan(16);
+  });
+
+  test("REGRESSION: a finished column's token footer renders with the engine ctx budget", async ({
+    page,
+  }) => {
+    // The black-screen bug: CompareColumn referenced `engineCtx` without
+    // receiving it as a prop, and the reference only executes on the
+    // `message.tokens` truthy branch (i.e. AFTER a column's stream
+    // finalizes) — so mount-with-streaming smokes missed it and the whole
+    // React tree unmounted on `ReferenceError: Can't find variable:
+    // engineCtx` the moment the first column completed. Pin: a finished
+    // variant WITH tokens must render, throw nothing, and — when engineCtx
+    // is threaded through — show the input as a budget against it.
+    const pageErrors = [];
+    page.on("pageerror", (err) => pageErrors.push(err.message));
+
+    await page.evaluate(() => {
+      window.__TEST_MOUNT("CompareChatPane", {
+        chat: {
+          id: "c1",
+          title: "x",
+          tabType: "multi-pending",
+          models: ["a"],
+          messages: [
+            { id: "u1", role: "user", content: "go" },
+            {
+              id: "v-a",
+              role: "assistant",
+              model: "a",
+              content: "done",
+              variantGroupId: "g1",
+              streaming: false,
+              tokens: { in: 1731, out: 1118, ms: 1300 },
+            },
+          ],
+        },
+        isStreaming: false,
+        engineCtx: 8192,
+      });
+    });
+
+    // The footer rendered (no crash) and shows the budget form, proving
+    // engineCtx reached CompareColumn → TokenFooter.
+    await expect(
+      page.locator('[data-model="a"] [data-message-tokens]'),
+    ).toContainText("1,731 / 8,192 ctx");
+    expect(pageErrors).toEqual([]);
+  });
 });
 
 test.describe("Phase 5: missing-model banner", () => {

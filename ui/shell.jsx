@@ -365,14 +365,13 @@ function Sidebar({
           <span style={{ flex: 1 }} />
           <span style={{ color: T.amber + "99", fontSize: 10 }}>{MOD_GLYPH}N</span>
         </button>
-        {/* Private chat is disabled inside a Space — the Space's whole
-            point is persistent context (system prompt, pinned attachments,
-            pinned prompts, memory), all of which assume the chat reaches
-            the DB. Surfacing the lock would invite the user to create
-            ephemeral chats that mysteriously DON'T inherit the Space.
-            Cleaner: hide the affordance, the user can leave the Space
-            (click "All chats") first if they want a private chat. */}
-        {onNewPrivate && !activeSpaceId && (
+        {/* Private chat is ALWAYS available, including inside a Space.
+            A private chat is ephemeral — it never reaches the DB — so it
+            deliberately does NOT inherit the active Space's context
+            (system prompt, pinned attachments/prompts, memory). It's a
+            scratch conversation regardless of where you launch it from,
+            and starting one doesn't move you out of the Space you're in. */}
+        {onNewPrivate && (
           <button
             onClick={onNewPrivate}
             title="Private chat — not saved to disk"
