@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Command palette.** Press **⌘K** to search and run everything from the
+  keyboard — new chat, private chat, model comparison, Settings, your
+  Spaces, themes, and recent chats. Fuzzy matching included ("npc" finds
+  *New private chat*).
+- **Continue cut-off replies.** When a reply stops because it hit the
+  model's length limit, a **Continue →** chip appears under it — one click
+  picks up right where the reply left off, even in a conversation that had
+  filled the context window.
+
 ## [0.7.1] - 2026-07-25
 
 ### Fixed

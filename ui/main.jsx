@@ -476,6 +476,11 @@ function App() {
   ]);
   const [activeTab, setActiveTab] = useS(welcomeId);
   const [sidebarOpen, setSidebarOpen] = usePersistedState('ekorbia.sidebar.open', true);
+  // Command palette (⌘K). Declared next to sidebarOpen because the same
+  // deps-free keydown effect below toggles both; the commands list and
+  // its runner map are built further down (buildPaletteCommands), below
+  // every handler they reference.
+  const [paletteOpen, setPaletteOpen] = useS(false);
   const [rightPanelOpen, setRightPanelOpen] = usePersistedState('ekorbia.rightpanel.open', true);
   const [sidebarWidth, setSidebarWidth] = usePersistedState('ekorbia.sidebar.width', 220);
   const [rightPanelWidth, setRightPanelWidth] = usePersistedState('ekorbia.rightpanel.width', 380);
@@ -1279,6 +1284,13 @@ function App() {
     const onKey = (e) => {
       const meta = e.metaKey || e.ctrlKey;
       if (meta && e.key === '\\') { e.preventDefault(); setSidebarOpen(o => !o); }
+      // ⌘K toggles the command palette. Functional update keeps this
+      // effect deps-free; a guard effect below force-closes the palette
+      // whenever a first-run gate / tour takes the screen.
+      if (meta && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen(o => !o);
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -1664,7 +1676,21 @@ function App() {
     const title = isNewChat && !hasCustomTitle
       ? (text.trim().slice(0, 40) || 'New chat')
       : chat.title;
-    const priorMessages = baseMessages.map(m => ({ role: m.role, content: m.content }));
+    // `options.tailContext` (the Continue chip) narrows the REQUEST window
+    // to the last user turn + everything after it (i.e. the cut-off reply).
+    // A reply cut by the ctx limit means the full history already fills the
+    // window — resending all of it plus a "continue" turn would exceed it
+    // again. Dropping the earlier turns frees the room the continuation
+    // needs, and the last prompt + partial reply is exactly the context a
+    // "keep going" turn requires. REQUEST-only: chat state, persistence,
+    // and seq numbering all still see the full conversation.
+    const requestBase = options.tailContext
+      ? (() => {
+          const lastUser = baseMessages.map(m => m.role).lastIndexOf('user');
+          return lastUser >= 0 ? baseMessages.slice(lastUser) : baseMessages;
+        })()
+      : baseMessages;
+    const priorMessages = requestBase.map(m => ({ role: m.role, content: m.content }));
     // Prompt system content keeps its historical "first-send-only" treatment
     // — re-sending the same prompt prefix each turn would waste tokens. The
     // attachment system block is different: its content can change between
@@ -1802,7 +1828,10 @@ function App() {
       console.error('chat persist failed:', e);
     }
 
-    const seq = priorMessages.length;
+    // Seq numbering comes from the FULL message list, never the (possibly
+    // tail-trimmed) request window — a Continue send must append after the
+    // cut-off reply, not collide with earlier rows' seq values.
+    const seq = baseMessages.length;
     persistMessage({
       id: userId, chatId: activeTab, role: 'user', content: text,
       model: null, time: userMsg.time,
@@ -1851,6 +1880,10 @@ function App() {
 
     let accumulated = '';
     let tokensIn = 0, tokensOut = 0, genMs = 0, startMs = Date.now();
+    // Why the last turn ended ('stop' | 'length' | 'tool_calls' | '').
+    // Overwritten per iteration so the FINAL turn's reason wins —
+    // intermediate tool_calls turns are not what the chip cares about.
+    let doneReason = '';
     let ollamaOk = false;
     // In-band provider error message (StreamEvent type:'error'). Distinct
     // from transport failure (!ollamaOk): the HTTP exchange succeeded but
@@ -2027,6 +2060,9 @@ function App() {
             // iterations (each is its own stream). 0 when the provider
             // reports no timings — we fall back to wall-clock below.
             genMs += ev.genMs ?? 0;
+            // 'length' here means the reply was cut by the token/ctx
+            // limit — chat.jsx renders the Continue chip off this.
+            doneReason = ev.doneReason || '';
           }
         };
         channel.onmessage = consumeChunk;
@@ -2178,6 +2214,10 @@ function App() {
         streaming: false,
         statusText: undefined, // transient engine progress — never persists
         tokens: finalTokens,
+        // 'length' drives the "reply hit the length limit — Continue"
+        // chip on the last assistant message. undefined keeps the
+        // message object compact for the common natural-stop case.
+        doneReason: doneReason || undefined,
         // toolResults drives the saved-file chips above the assistant text
         // in chat.jsx Message. undefined when the model didn't use tools
         // so the chip strip simply isn't rendered.
@@ -2220,6 +2260,7 @@ function App() {
       content: finalContent || streamAccumulatedRef.current,
       model: modelId, time: now(),
       tokensIn: finalTokens?.in ?? null, tokensOut: finalTokens?.out ?? null, tokensMs: finalTokens?.ms ?? null,
+      doneReason: doneReason || null,
       promptsJson: null,
       sourcesJson: sourcesBlob,
       toolCallsJson: toolCallsBlob,
@@ -2343,6 +2384,19 @@ function App() {
     if (userIdx < 0) return;
     const userText = msgs[userIdx].content || '';
     truncateAndResend(userIdx, userText);
+  };
+
+  // Continue: called from chat.jsx's Message component when the most-recent
+  // assistant reply was cut by the token/context limit (doneReason
+  // 'length'). Sends a canned follow-up through the NORMAL send path —
+  // a visible user turn + a fresh assistant reply, so history and exports
+  // stay honest — with `tailContext` narrowing the request window to the
+  // last turn (see handleSend): a context-exhausted chat has no room for
+  // its full history plus a continuation, but the last prompt + cut reply
+  // is exactly the context "keep going" needs. No-op while streaming.
+  const handleContinue = () => {
+    if (streamingRef.current) return;
+    handleSend('Continue exactly where you left off.', { tailContext: true });
   };
 
   // ── Multi-model parallel send pipeline (Phase 3) ─────────────────────
@@ -3481,6 +3535,9 @@ function App() {
             model: r.model,
             time: r.time,
             tokens: (r.tokensIn || r.tokensOut) ? { in: r.tokensIn, out: r.tokensOut, ms: r.tokensMs } : undefined,
+            // 'length' re-arms the Continue chip after a reload (only
+            // rendered when this is still the last message).
+            doneReason: r.doneReason || undefined,
             prompts: r.promptsJson ? tryParseJson(r.promptsJson, undefined) : undefined,
             sources: blob?.items?.length ? blob.items : undefined,
             imagesSkipped: blob?.imagesSkipped || undefined,
@@ -4209,6 +4266,78 @@ function App() {
     warmModel(id);
   };
 
+  // ── Command palette (⌘K) — commands + runners ────────────────────────
+  // Built fresh each render (cheap: a few dozen entries) and placed HERE,
+  // below every handler and piece of state it reads, per the TDZ rule.
+  // The palette component gets DATA ONLY ({id,label,section,hint,keywords});
+  // execution routes back through runPaletteCommand → this map, so the
+  // component stays presentation-only and Playwright can mount it with
+  // plain JSON props.
+  //
+  // Force-close whenever a first-run surface takes the screen — the tour
+  // and gates own the keyboard (Esc/Enter) while open.
+  useE(() => {
+    if (onboardingOpen || setupGateOpen || migrationOfferOpen) setPaletteOpen(false);
+  }, [onboardingOpen, setupGateOpen, migrationOfferOpen]);
+
+  const paletteCommands = [];
+  const paletteRunners = {};
+  {
+    const add = (id, label, section, run, opts) => {
+      paletteCommands.push({
+        id, label, section,
+        hint: opts?.hint, keywords: opts?.keywords,
+      });
+      paletteRunners[id] = run;
+    };
+    add('new-chat', 'New chat', 'Actions', () => newTab(),
+      { keywords: 'create start blank' });
+    add('new-private', 'New private chat', 'Actions', () => newPrivateTab(),
+      { keywords: 'ephemeral incognito lock secret' });
+    add('new-compare', 'Compare models side-by-side', 'Actions', () => setCompareModalOpen(true),
+      { keywords: 'comparison versus multi' });
+    add('open-settings', 'Open Settings', 'Actions',
+      () => window.postMessage({ type: '__activate_edit_mode' }, '*'),
+      { keywords: 'preferences options config backend' });
+    add('toggle-sidebar', 'Toggle sidebar', 'Actions', () => setSidebarOpen(o => !o),
+      { keywords: 'history panel hide show' });
+    // Spaces — jump the sidebar scope. "All chats" mirrors the rail's
+    // home row; each Space by its display name.
+    add('space-all', 'Go to All chats', 'Spaces', () => setActiveSpaceId(null),
+      { keywords: 'space home everything' });
+    for (const s of (spaces || [])) {
+      add(`space-${s.id}`, s.name || 'Space', 'Spaces', () => setActiveSpaceId(s.id),
+        { keywords: 'space workspace go' });
+    }
+    // Themes — THEMES labels + Match System, current one flagged.
+    add('theme-system', 'Match System', 'Theme', () => setTweak('theme', 'system'),
+      { keywords: 'theme appearance auto light dark', hint: tweaks.theme === 'system' ? 'current' : undefined });
+    for (const key of Object.keys(THEMES)) {
+      add(`theme-${key}`, THEMES[key].label || key, 'Theme', () => setTweak('theme', key),
+        { keywords: 'theme appearance color', hint: tweaks.theme === key ? 'current' : undefined });
+    }
+    // Recent chats — sidebar order (already recency-bucketed), capped so
+    // the browse view stays scannable; typing searches only this set.
+    const recentChats = [];
+    for (const sec of (history.dateSections || [])) {
+      for (const c of sec.items) {
+        if (recentChats.length >= 15) break;
+        recentChats.push(c);
+      }
+      if (recentChats.length >= 15) break;
+    }
+    for (const c of recentChats) {
+      add(`chat-${c.id}`, c.title || 'New chat', 'Recent chats',
+        () => openChatInTab(c),
+        { hint: c.preview || undefined, keywords: 'open chat recent' });
+    }
+  }
+  const runPaletteCommand = (id) => {
+    setPaletteOpen(false);
+    const run = paletteRunners[id];
+    if (run) run();
+  };
+
   return (
     <>
       {/* First-run setup gate — the bundled-engine EngineGate or the Ollama
@@ -4271,6 +4400,15 @@ function App() {
       {/* First-launch onboarding tour (Phase 6). State lives in App so the
           Settings modal can reopen it via window.ekOpenOnboarding. */}
       <OnboardingTour open={onboardingOpen} onClose={closeOnboarding} />
+
+      {/* Command palette (⌘K) — data-only props; execution routes through
+          runPaletteCommand so the component never touches app state. */}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        commands={paletteCommands}
+        onRun={runPaletteCommand}
+      />
       {/* write_file permission modal — appears when a tool-using model
           first tries to save a file in a chat with no output_dir.
           onClose receives the resolution: a path string (Allow), "" (Block
@@ -4517,6 +4655,10 @@ function App() {
                   // doesn't need to know.
                   onEditMessage={handleEditAndResubmit}
                   onRetryMessage={handleRetryAssistant}
+                  // Continue a reply the provider cut at the token/ctx
+                  // limit (doneReason 'length' on the last assistant
+                  // message — the chip renders only there).
+                  onContinue={handleContinue}
                   // Resolved Space row for this chat (or null). Used by
                   // ChatPane to render the Space badge in the header.
                   // Resolved at the parent so ChatPane stays presentation-

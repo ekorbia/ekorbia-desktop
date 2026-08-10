@@ -255,6 +255,9 @@ pub(crate) struct SseNorm {
     /// Server-measured processing time (ms) from llama-server's `timings`
     /// (prompt-eval + generation). 0 for servers that don't report it.
     gen_ms: u64,
+    /// Last non-null `choices[0].finish_reason` seen ("stop", "length",
+    /// "tool_calls", …); "" when the server never reports one.
+    finish_reason: String,
     finished: bool,
 }
 
@@ -266,6 +269,7 @@ impl SseNorm {
             prompt_tokens: 0,
             output_tokens: 0,
             gen_ms: 0,
+            finish_reason: String::new(),
             finished: false,
         }
     }
@@ -316,6 +320,17 @@ impl SseNorm {
         {
             for c in calls {
                 self.complete_calls.push(c.clone());
+            }
+        }
+        // Finish reason rides the chunk that ends generation (null on
+        // earlier chunks). Keep the last non-empty one — a post-finish
+        // usage chunk carries finish_reason: null and must not erase it.
+        if let Some(reason) = v
+            .pointer("/choices/0/finish_reason")
+            .and_then(|r| r.as_str())
+        {
+            if !reason.is_empty() {
+                self.finish_reason = reason.to_string();
             }
         }
         // Token counts: `usage` may arrive on the final content chunk OR
@@ -398,6 +413,7 @@ impl SseNorm {
             prompt_tokens: self.prompt_tokens,
             output_tokens: self.output_tokens,
             gen_ms: self.gen_ms,
+            done_reason: std::mem::take(&mut self.finish_reason),
         });
         out
     }
@@ -819,7 +835,8 @@ mod tests {
             vec![E::Done {
                 prompt_tokens: 12,
                 output_tokens: 34,
-                gen_ms: 0
+                gen_ms: 0,
+                done_reason: "stop".into()
             }]
         );
         assert!(n.finalize().is_empty(), "finalize must be idempotent");
@@ -839,7 +856,8 @@ mod tests {
             vec![E::Done {
                 prompt_tokens: 7,
                 output_tokens: 21,
-                gen_ms: 0
+                gen_ms: 0,
+                done_reason: "stop".into()
             }]
         );
     }
@@ -860,7 +878,33 @@ mod tests {
             vec![E::Done {
                 prompt_tokens: 5,
                 output_tokens: 9,
-                gen_ms: 841
+                gen_ms: 841,
+                done_reason: "".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn norm_finish_reason_length_survives_usage_chunk() {
+        // A generation cut by the token/ctx limit ends with
+        // finish_reason: "length"; the post-finish usage chunk carries
+        // finish_reason: null and must not erase it.
+        let mut n = SseNorm::new();
+        ingest_all(
+            &mut n,
+            &[
+                r#"{"choices":[{"delta":{"content":"trunc"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"length"}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":null}],"usage":{"prompt_tokens":3,"completion_tokens":4}}"#,
+            ],
+        );
+        assert_eq!(
+            n.finalize(),
+            vec![E::Done {
+                prompt_tokens: 3,
+                output_tokens: 4,
+                gen_ms: 0,
+                done_reason: "length".into()
             }]
         );
     }

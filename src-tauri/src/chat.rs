@@ -74,6 +74,12 @@ pub(crate) struct MessageRow {
     tokens_in: Option<i64>,
     tokens_out: Option<i64>,
     tokens_ms: Option<i64>,
+    /// Why generation ended for an assistant row: "stop" / "length" /
+    /// "tool_calls". None on non-assistant rows, on replies where the
+    /// provider didn't say, and on pre-column historical rows. "length"
+    /// drives the UI's Continue affordance.
+    #[serde(default)]
+    done_reason: Option<String>,
     prompts_json: Option<String>,
     /// JSON-encoded array of citation sources for assistant messages, as
     /// returned by attachment_prepare_for_send. None on user messages and on
@@ -188,7 +194,7 @@ pub(crate) fn db_load_messages(
     let mut stmt = db
         .prepare(
             "SELECT id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, \
-                prompts_json, sources_json, tool_calls_json, tool_call_id, seq, \
+                done_reason, prompts_json, sources_json, tool_calls_json, tool_call_id, seq, \
                 variant_group_id, is_picked \
          FROM messages WHERE chat_id = ?1 ORDER BY seq ASC, id ASC",
         )
@@ -205,13 +211,14 @@ pub(crate) fn db_load_messages(
                 tokens_in: row.get(6)?,
                 tokens_out: row.get(7)?,
                 tokens_ms: row.get(8)?,
-                prompts_json: row.get(9)?,
-                sources_json: row.get(10)?,
-                tool_calls_json: row.get(11)?,
-                tool_call_id: row.get(12)?,
-                seq: row.get(13)?,
-                variant_group_id: row.get(14)?,
-                is_picked: row.get(15)?,
+                done_reason: row.get(9)?,
+                prompts_json: row.get(10)?,
+                sources_json: row.get(11)?,
+                tool_calls_json: row.get(12)?,
+                tool_call_id: row.get(13)?,
+                seq: row.get(14)?,
+                variant_group_id: row.get(15)?,
+                is_picked: row.get(16)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -281,8 +288,8 @@ pub(crate) fn db_upsert_message(
     // cheaper and matches the chats-table convention.
     db.execute(
         "INSERT INTO messages \
-         (id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, prompts_json, sources_json, tool_calls_json, tool_call_id, seq, variant_group_id, is_picked) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
+         (id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, done_reason, prompts_json, sources_json, tool_calls_json, tool_call_id, seq, variant_group_id, is_picked) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
          ON CONFLICT(id) DO UPDATE SET \
             chat_id = excluded.chat_id, \
             role = excluded.role, \
@@ -292,6 +299,7 @@ pub(crate) fn db_upsert_message(
             tokens_in = excluded.tokens_in, \
             tokens_out = excluded.tokens_out, \
             tokens_ms = excluded.tokens_ms, \
+            done_reason = excluded.done_reason, \
             prompts_json = excluded.prompts_json, \
             sources_json = excluded.sources_json, \
             tool_calls_json = excluded.tool_calls_json, \
@@ -299,15 +307,18 @@ pub(crate) fn db_upsert_message(
             seq = excluded.seq, \
             variant_group_id = excluded.variant_group_id, \
             is_picked = excluded.is_picked",
-        (
+        // rusqlite's plain-tuple Params impl stops at 16 elements; the
+        // params! macro has no such cap.
+        rusqlite::params![
             &msg.id, &msg.chat_id, &msg.role, &msg.content,
             &msg.model, &msg.time,
             msg.tokens_in, msg.tokens_out, msg.tokens_ms,
+            &msg.done_reason,
             &msg.prompts_json, &msg.sources_json,
             &msg.tool_calls_json, &msg.tool_call_id,
             msg.seq,
             &msg.variant_group_id, msg.is_picked,
-        ),
+        ],
     ).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -446,7 +457,7 @@ pub(crate) fn chat_export_to_path(
     let mut stmt = db
         .prepare(
             "SELECT id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, \
-                    prompts_json, sources_json, tool_calls_json, tool_call_id, seq, \
+                    done_reason, prompts_json, sources_json, tool_calls_json, tool_call_id, seq, \
                     variant_group_id, is_picked \
              FROM messages WHERE chat_id = ?1 ORDER BY seq ASC, id ASC",
         )
@@ -463,13 +474,14 @@ pub(crate) fn chat_export_to_path(
                 tokens_in: row.get(6)?,
                 tokens_out: row.get(7)?,
                 tokens_ms: row.get(8)?,
-                prompts_json: row.get(9)?,
-                sources_json: row.get(10)?,
-                tool_calls_json: row.get(11)?,
-                tool_call_id: row.get(12)?,
-                seq: row.get(13)?,
-                variant_group_id: row.get(14)?,
-                is_picked: row.get(15)?,
+                done_reason: row.get(9)?,
+                prompts_json: row.get(10)?,
+                sources_json: row.get(11)?,
+                tool_calls_json: row.get(12)?,
+                tool_call_id: row.get(13)?,
+                seq: row.get(14)?,
+                variant_group_id: row.get(15)?,
+                is_picked: row.get(16)?,
             })
         })
         .map_err(|e| e.to_string())?

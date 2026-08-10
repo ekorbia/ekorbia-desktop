@@ -510,6 +510,13 @@ impl StreamNorm {
                     .unwrap_or(0),
                 output_tokens: raw.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0),
                 gen_ms: gen_ns / 1_000_000,
+                // Ollama's `done_reason` ("stop" | "length" | "load" | …)
+                // maps straight onto the contract field; "" when absent.
+                done_reason: raw
+                    .get("done_reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             });
         }
         out
@@ -997,7 +1004,31 @@ mod tests {
                 E::Done {
                     prompt_tokens: 12,
                     output_tokens: 34,
-                    gen_ms: 0
+                    gen_ms: 0,
+                    done_reason: "".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn norm_done_reason_maps_to_contract() {
+        // Ollama's done_reason rides the done chunk; "length" is the one
+        // the UI acts on (Continue affordance).
+        let evs = ingest_all(&[
+            r#"{"message":{"content":"trunc"},"done":true,"done_reason":"length","eval_count":9}"#,
+        ]);
+        assert_eq!(
+            evs,
+            vec![
+                E::Delta {
+                    text: "trunc".into()
+                },
+                E::Done {
+                    prompt_tokens: 0,
+                    output_tokens: 9,
+                    gen_ms: 0,
+                    done_reason: "length".into()
                 },
             ]
         );
@@ -1011,7 +1042,8 @@ mod tests {
             vec![E::Done {
                 prompt_tokens: 0,
                 output_tokens: 0,
-                gen_ms: 0
+                gen_ms: 0,
+                done_reason: "".into()
             }]
         );
     }
@@ -1029,7 +1061,8 @@ mod tests {
                 E::Done {
                     prompt_tokens: 3,
                     output_tokens: 7,
-                    gen_ms: 840
+                    gen_ms: 840,
+                    done_reason: "".into()
                 },
             ]
         );
@@ -1061,7 +1094,8 @@ mod tests {
             E::Done {
                 prompt_tokens: 0,
                 output_tokens: 5,
-                gen_ms: 0
+                gen_ms: 0,
+                done_reason: "".into()
             }
         );
     }
@@ -1136,10 +1170,11 @@ mod tests {
             serde_json::to_value(E::Done {
                 prompt_tokens: 1,
                 output_tokens: 2,
-                gen_ms: 3
+                gen_ms: 3,
+                done_reason: "length".into()
             })
             .unwrap(),
-            serde_json::json!({"type":"done","promptTokens":1,"outputTokens":2,"genMs":3})
+            serde_json::json!({"type":"done","promptTokens":1,"outputTokens":2,"genMs":3,"doneReason":"length"})
         );
         assert_eq!(
             serde_json::to_value(E::Error {

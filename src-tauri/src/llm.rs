@@ -184,11 +184,13 @@ fn endpoint_cfg(cfg: &BackendConfig) -> Result<EndpointCfg, String> {
 ///   - every call's `function.arguments` is ALWAYS a JSON object — never a
 ///     JSON-encoded string, never null (unparseable args become `{}`).
 ///   - `done` carries the request's token counts (0 when the provider
-///     omits them) and `genMs`, the SERVER-measured processing time in
+///     omits them), `genMs`, the SERVER-measured processing time in
 ///     milliseconds (prompt-eval + generation, excluding model load; 0
-///     when the provider reports no timings). The UI prefers it over its
-///     own wall-clock so a cold engine spawn's load time doesn't inflate
-///     the footer.
+///     when the provider reports no timings), and `doneReason` — why
+///     generation ended ("stop" | "length" | "tool_calls" | "" unknown).
+///     The UI prefers genMs over its own wall-clock so a cold engine
+///     spawn's load time doesn't inflate the footer, and shows a
+///     Continue affordance on "length".
 ///   - in-band provider errors surface as an `error` event; transport
 ///     failures still reject the invoke promise as before.
 ///   - `status` (Phase 2) is OPTIONAL pre-content progress ("loading
@@ -211,6 +213,11 @@ pub(crate) enum StreamEvent {
         /// excluding model-load latency. 0 when the provider reports no
         /// timings (the UI then falls back to its own wall-clock).
         gen_ms: u64,
+        /// Why generation ended: `"stop"` (natural), `"length"` (token/ctx
+        /// limit — the UI offers Continue), `"tool_calls"`, or `""` when the
+        /// provider doesn't say. Ollama's `done_reason` and OpenAI-dialect
+        /// `finish_reason` both normalize into this field.
+        done_reason: String,
     },
     #[serde(rename = "error")]
     Error { message: String },

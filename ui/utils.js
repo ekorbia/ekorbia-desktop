@@ -960,6 +960,40 @@ function previewSnippet(text) {
   return collapsed.length > 100 ? collapsed.slice(0, 100) + "…" : collapsed;
 }
 
+// Fuzzy match scorer for the command palette (ui/command-palette.jsx).
+// Returns a score (higher = better) or -1 for "no match". Every match
+// scores ≥ 1 so callers can use `< 0` as the reject test; the empty
+// query matches everything with a neutral 0 (palette keeps its authored
+// order in that case).
+//
+// Two tiers, deliberately far apart so they never interleave:
+//   • substring (base 1000): the query appears verbatim — earlier is
+//     better, a word-boundary start better still, and shorter targets
+//     edge out longer ones at equal position.
+//   • subsequence (base 500): every non-space query char appears in
+//     order ("npc" → "New private chat"); tighter packing wins.
+function paletteFuzzyScore(query, text) {
+  const q = String(query == null ? "" : query).toLowerCase().trim();
+  const t = String(text == null ? "" : text).toLowerCase();
+  if (!q) return 0;
+  if (!t) return -1;
+  const idx = t.indexOf(q);
+  if (idx >= 0) {
+    const wordStart = idx === 0 || /[\s/-]/.test(t[idx - 1]);
+    return Math.max(1, 1000 + (wordStart ? 200 : 0) - idx * 4 - Math.min(t.length, 99));
+  }
+  const chars = q.replace(/\s+/g, "");
+  let pos = -1;
+  let gaps = 0;
+  for (const ch of chars) {
+    const next = t.indexOf(ch, pos + 1);
+    if (next < 0) return -1;
+    if (pos >= 0) gaps += next - pos - 1;
+    pos = next;
+  }
+  return Math.max(1, 500 - gaps * 2 - Math.min(t.length, 99));
+}
+
 // ── Publish on window (browser) and module.exports (Node) ──────────────────
 //
 // `typeof window` lets the same file work as both a global-scope script
@@ -1013,6 +1047,7 @@ if (typeof window !== "undefined") {
   window.isLocalEndpoint = isLocalEndpoint;
   window.greetingForHour = greetingForHour;
   window.previewSnippet = previewSnippet;
+  window.paletteFuzzyScore = paletteFuzzyScore;
 }
 
 // ── instantiateSpacePinnedAttachments ────────────────────────────────────
@@ -1225,5 +1260,6 @@ if (typeof module !== "undefined" && module.exports) {
     isLocalEndpoint,
     greetingForHour,
     previewSnippet,
+    paletteFuzzyScore,
   };
 }

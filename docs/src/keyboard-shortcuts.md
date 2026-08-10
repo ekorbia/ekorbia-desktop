@@ -33,11 +33,19 @@ Both global shortcuts are **customizable** in **Settings → General**.
 
 | Shortcut | Action |
 |---|---|
+| **Cmd+K** | Open the command palette (see below) |
 | **Cmd+N** | New chat (same as the `+ New chat` button) |
 | **Cmd+W** | Close the active tab |
 | **Cmd+T** | Reopen the most recently closed tab (where supported) |
 | **Cmd+,** | Open Settings |
 | **Cmd+F** | Focus the search box in the History sidebar |
+| **Cmd+\\** | Show / hide the History sidebar |
+
+## The command palette
+
+**Cmd+K** opens a search box over everything you can do: start a new chat (regular, private, or a model comparison), open Settings, jump to one of your Spaces, switch the theme, or reopen a recent chat.
+
+Type to filter — matching is fuzzy, so `npc` finds **New private chat**. Use **↑/↓** to move, **Enter** to run, **Esc** to close.
 
 ## In the History sidebar
 

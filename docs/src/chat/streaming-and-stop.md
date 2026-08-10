@@ -14,6 +14,14 @@ When you stop:
 
 > **Stopping is non-destructive.** You can edit the user message and resend, retry the assistant message to regenerate, or just keep going — the stopped reply is preserved as if the model had ended there on its own.
 
+## When a reply hits the length limit
+
+Sometimes a reply ends mid-sentence not because you stopped it, but because the model ran out of room — every model has a limit on how much it can hold in one exchange. When that happens, Ekorbia shows **`Reply hit the length limit`** under the message with a **Continue →** button.
+
+Click **Continue** and the model picks up where it left off, as a new reply in the same conversation. Behind the scenes Ekorbia narrows what it re-sends to just the last exchange, so continuing works even when the conversation itself is what filled the model's memory.
+
+The chip only appears on the newest reply — once you've continued (or sent anything else), it retires.
+
 ## What happens behind the scenes
 
 Ekorbia streams tokens from the model as they're produced. Each chunk is rendered into the UI as soon as it arrives, with Markdown re-parsed on every chunk so headings, lists, and code blocks render correctly while the reply is still being written.

@@ -48,7 +48,7 @@ function ExportMenuItem({ label, onClick }) {
 }
 
 // ─── Chat Pane ──────────────────────────────────────────────
-function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, space, showDetails = false, onStarter, engineCtx = null }) {
+function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, onContinue, space, showDetails = false, onStarter, engineCtx = null }) {
   const scrollerRef = useRef(null);
   const lastContent = chat.messages[chat.messages.length - 1]?.content;
   useEffect(() => {
@@ -620,6 +620,10 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                 isStreaming={isStreaming}
                 onEditMessage={onEditMessage}
                 onRetryMessage={isLastAssistant ? onRetryMessage : null}
+                // Continue is gated the same way as Retry: only the last
+                // assistant message can be continued (the chip itself also
+                // requires doneReason === 'length' — see Message).
+                onContinue={isLastAssistant ? onContinue : null}
                 showDetails={showDetails}
                 engineCtx={engineCtx}
               />
@@ -1232,7 +1236,7 @@ function TokenFooter({ tokens, engineCtx = null }) {
   );
 }
 
-function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetryMessage, showDetails = false, engineCtx = null }) {
+function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetryMessage, onContinue, showDetails = false, engineCtx = null }) {
   const isUser = m.role === "user";
   // Per-message reveal for the token/timing footer when the global
   // "Show technical details" pref is off. Keeps the details one click away
@@ -1472,6 +1476,62 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
             // or the engine's real status ("loading model…") when present.
             <ThinkingIndicator statusText={m.statusText} />
           )}
+          {!isUser && m.doneReason === "length" && !m.streaming &&
+            !isStreaming && onContinue && (
+              // The provider reported finish reason 'length' — the reply was
+              // cut by the token/context limit, not finished. Offer a
+              // one-click continuation (parent gates onContinue to the last
+              // assistant message, same as Retry; once the continuation
+              // sends, this message is no longer last and the chip goes).
+              <div
+                data-continue-chip
+                style={{
+                  marginTop: 8,
+                  paddingTop: 6,
+                  borderTop: `1px dashed ${T.border}`,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: T.mono,
+                    fontSize: 10.5,
+                    color: T.fg3,
+                    fontStyle: "italic",
+                    letterSpacing: 0.3,
+                  }}
+                >
+                  Reply hit the length limit.
+                </span>
+                <button
+                  data-continue-button
+                  onClick={onContinue}
+                  title="Keep going from where the reply was cut off"
+                  style={{
+                    padding: "3px 10px",
+                    borderRadius: 999,
+                    border: `1px solid ${T.amber}55`,
+                    background: T.amber + "18",
+                    color: T.amber,
+                    fontFamily: T.mono,
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    letterSpacing: 0.3,
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) =>
+                    (e.currentTarget.style.background = T.amber + "2e")
+                  }
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background = T.amber + "18")
+                  }
+                >
+                  Continue →
+                </button>
+              </div>
+            )}
           {!isUser && m.incomplete && !m.streaming && (
             // "Stopped" marker for assistant messages where the user clicked
             // Stop mid-generation. Italic + muted so it doesn't compete with

@@ -65,6 +65,8 @@
       "onClose", "onCancel", "onConfirm", "onSend", "onRetry",
       "onEdit", "onEditMessage", "onRetryMessage", "onChange",
       "onSendDemo", "onRename", "onScrollToMessage",
+      // Continue chip (length-cut replies)
+      "onContinue",
       // Multi-model compare-mode (Phase 4) handlers
       "onKeep", "onStopAll", "onStopColumn",
       // OllamaGate / EngineGate (guided first-run) handlers
@@ -102,6 +104,8 @@
       "onClose", "onCancel", "onConfirm", "onSend", "onRetry",
       "onEdit", "onEditMessage", "onRetryMessage", "onChange",
       "onSendDemo", "onRename", "onScrollToMessage",
+      // Continue chip (length-cut replies)
+      "onContinue",
       // Multi-model compare-mode (Phase 4) handlers
       "onKeep", "onStopAll", "onStopColumn",
     ].forEach(function (name) {
@@ -157,6 +161,7 @@
 <script type="text/babel" data-presets="react" src="/ui/settings.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/onboarding.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/toast.jsx"></script>
+<script type="text/babel" data-presets="react" src="/ui/command-palette.jsx"></script>
 
 <!-- ─── Readiness flag.
      Babel-standalone processes text/babel scripts in order, asynchronously.

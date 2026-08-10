@@ -38,6 +38,7 @@ const {
   isLocalEndpoint,
   greetingForHour,
   previewSnippet,
+  paletteFuzzyScore,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -1187,4 +1188,44 @@ test("previewSnippet: collapses whitespace, trims, caps at 100 chars", () => {
   const s100 = "x".repeat(100);
   assert.equal(previewSnippet(s100), s100);
   assert.equal(previewSnippet("y".repeat(101)), "y".repeat(100) + "…");
+});
+
+// ── paletteFuzzyScore ──────────────────────────────────────────────────────
+test("paletteFuzzyScore: empty query is a neutral match-all", () => {
+  assert.equal(paletteFuzzyScore("", "New chat"), 0);
+  assert.equal(paletteFuzzyScore("   ", "New chat"), 0);
+  assert.equal(paletteFuzzyScore(null, "New chat"), 0);
+});
+
+test("paletteFuzzyScore: no match returns -1, every match is positive", () => {
+  assert.equal(paletteFuzzyScore("zzz", "New chat"), -1);
+  assert.equal(paletteFuzzyScore("chat", ""), -1);
+  assert.ok(paletteFuzzyScore("chat", "New chat") > 0);
+  // Deep-but-real matches must never sink to the -1 sentinel.
+  assert.ok(paletteFuzzyScore("z", "a".repeat(500) + "z") > 0);
+});
+
+test("paletteFuzzyScore: substring beats subsequence, early beats late", () => {
+  // verbatim substring ("set" in "Settings") outranks scattered chars
+  assert.ok(
+    paletteFuzzyScore("set", "Settings") > paletteFuzzyScore("set", "Slate theme"),
+  );
+  // earlier occurrence wins at the same tier
+  assert.ok(
+    paletteFuzzyScore("chat", "Chat history") > paletteFuzzyScore("chat", "New private chat"),
+  );
+});
+
+test("paletteFuzzyScore: word-boundary start outranks mid-word hit", () => {
+  assert.ok(
+    paletteFuzzyScore("side", "Toggle sidebar") > paletteFuzzyScore("side", "Besides"),
+  );
+});
+
+test("paletteFuzzyScore: subsequence matches initials-style queries", () => {
+  assert.ok(paletteFuzzyScore("npc", "New private chat") > 0);
+  // case-insensitive both ways
+  assert.ok(paletteFuzzyScore("NPC", "new private chat") > 0);
+  // order matters: reversed initials don't match
+  assert.equal(paletteFuzzyScore("cpn", "New private chat"), -1);
 });

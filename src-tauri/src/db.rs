@@ -183,6 +183,10 @@ CREATE TABLE IF NOT EXISTS messages (
     tokens_in INTEGER,
     tokens_out INTEGER,
     tokens_ms INTEGER,
+    -- Why generation ended for an assistant row: 'stop' (natural),
+    -- 'length' (token/ctx limit — the UI offers Continue), 'tool_calls'.
+    -- NULL for non-assistant rows and replies that predate the column.
+    done_reason TEXT,
     prompts_json TEXT,
     -- JSON array of attachment citations the assistant message drew on:
     -- [{ id, label, path, kind, citationIndex }, ...]. Null when the
@@ -563,6 +567,12 @@ pub(crate) fn apply_migrations(conn: &Connection) -> Result<(), String> {
     if table_exists(conn, "watches")? {
         add_column_if_missing(conn, "watches", "ignore_before", "INTEGER")?;
     }
+
+    // ── Reply finish reason (Continue affordance) ───────────────────────
+    // Why generation ended for an assistant message ('stop' / 'length' /
+    // 'tool_calls'; NULL = unknown or pre-column). Persisted so the
+    // "reply hit the length limit — Continue" chip survives a reload.
+    add_column_if_missing(conn, "messages", "done_reason", "TEXT")?;
 
     Ok(())
 }
