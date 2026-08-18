@@ -19,6 +19,30 @@ The Markdown renderer supports the full common set:
 
 Anything potentially unsafe — `<script>` tags, `javascript:` links, inline event handlers — is **sanitized** before rendering. The assistant cannot inject code that runs in the app, no matter what it puts in its reply.
 
+## Math
+
+Replies can include real typeset math, rendered by KaTeX — entirely offline, like everything else in Ekorbia:
+
+- **Inline**: `$E = mc^2$` or `\(E = mc^2\)` renders inside the sentence
+- **Display**: `$$ \int_0^1 x^2\,dx = \tfrac{1}{3} $$` or `\[ … \]` gets its own centered line; long equations scroll sideways instead of overflowing
+
+A few sensible guardrails: dollar amounts like `$5 and $10` stay ordinary text, and anything inside code blocks or `` `inline code` `` is left exactly as written. Math appears when the reply finishes — while it's still streaming you see the raw TeX.
+
+If an expression has a typo, KaTeX shows the source in red rather than hiding it.
+
+## Diagrams
+
+Fenced blocks tagged ` ```mermaid ` render as **diagrams** — flowcharts, sequence diagrams, state machines, pie charts, and the rest of the [Mermaid](https://mermaid.js.org) family:
+
+````markdown
+```mermaid
+flowchart LR
+  Draft --> Review --> Publish
+```
+````
+
+The diagram appears once the reply finishes streaming, themed to match the app. If the diagram source doesn't parse, Ekorbia keeps the code block as-is — you can read it, copy it, and ask the model to fix it. Diagram rendering is local like everything else; nothing is sent anywhere.
+
 ## Code blocks
 
 Fenced code blocks (` ```python `, ` ```rust `, etc.) get the deluxe treatment:

@@ -94,6 +94,129 @@ function ensureMarkedConfigured() {
 // escapeHtml + escapeAttr live in `ui/utils.js` so they're unit-testable
 // under node:test. They're on `window` before this file loads.
 
+// Render one extracted math segment ({tex, display}) to HTML. Called by
+// restoreMathSegments AFTER DOMPurify has sanitized the document — that's
+// safe because katex.renderToString with the default trust:false escapes
+// everything and renders trust-gated commands (\href, \includegraphics)
+// inert, and throwOnError:false turns TeX parse errors into an escaped
+// red rendering of the source instead of a throw. If KaTeX failed to
+// load, degrade to the literal $-delimited source (escaped).
+function renderKatexSegment(seg) {
+  const fallback = () => {
+    const d = seg.display ? "$$" : "$";
+    return escapeHtml(d + seg.tex + d);
+  };
+  if (typeof katex === "undefined") return fallback();
+  try {
+    return katex.renderToString(seg.tex, {
+      displayMode: seg.display,
+      throwOnError: false,
+      strict: "ignore",
+    });
+  } catch (_) {
+    return fallback();
+  }
+}
+
+// Swap every ```mermaid code block under `root` for its rendered SVG.
+// Runs from MarkdownMessage's post-mount effect, so only on FINALIZED
+// messages (streaming renders plaintext). Async: mermaid.render parses +
+// lays out off-DOM; a message that re-renders mid-await leaves a detached
+// <pre>, which we detect via isConnected and skip.
+//
+// Failure posture: invalid diagram source keeps the original code block
+// (source + copy button stay visible) — a wrong diagram should read as
+// code, not vanish. Theme is whatever's active when the reply finalizes;
+// already-rendered diagrams keep their theme until the message remounts
+// (tab reopen) — deliberate, to avoid re-laying-out every diagram on
+// theme switch.
+let ekMermaidSeq = 0;
+async function renderMermaidBlocks(root) {
+  if (typeof mermaid === "undefined") return;
+  const pres = root.querySelectorAll('pre.ek-code[data-lang="mermaid"]');
+  if (!pres.length) return;
+  // initialize() is a config setter — re-invoked per batch so the theme
+  // tracks T at render time. securityLevel 'strict' is mermaid's
+  // sanitizing mode (label text cleaned, click/script directives
+  // disabled); htmlLabels:false keeps the output pure SVG (no
+  // <foreignObject>), which scrubSvg relies on.
+  try {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: typeof T !== "undefined" && T.isLight ? "default" : "dark",
+      fontFamily:
+        (typeof T !== "undefined" && T.sans) || "system-ui, sans-serif",
+      // BOTH flags: mermaid v11's unified renderer reads the top-level
+      // htmlLabels for some diagram types and flowchart.htmlLabels for
+      // others — miss one and node labels come out as <foreignObject>
+      // HTML, which scrubSvg strips (labels silently vanish; pinned by
+      // the math-mermaid spec's label assertions).
+      htmlLabels: false,
+      flowchart: { htmlLabels: false },
+    });
+  } catch (_) {
+    return;
+  }
+  for (const pre of pres) {
+    const codeEl = pre.querySelector("code");
+    // textContent recovers the raw source even after hljs auto-detect
+    // wrapped it in token spans.
+    const src = (codeEl ? codeEl.textContent : pre.textContent) || "";
+    if (!src.trim()) continue;
+    const id = `ek-mermaid-${++ekMermaidSeq}`;
+    let svg;
+    try {
+      const res = await mermaid.render(id, src.trim());
+      svg = res && res.svg;
+    } catch (_) {
+      // Parse/render failure — clean up any scratch nodes mermaid left
+      // behind (it appends a temp container under body on some paths)
+      // and keep the code block.
+      document.getElementById(id)?.remove();
+      document.getElementById("d" + id)?.remove();
+      continue;
+    }
+    if (!svg || !pre.isConnected) continue;
+    const wrap = document.createElement("div");
+    wrap.className = "ek-mermaid";
+    wrap.innerHTML = svg;
+    scrubSvg(wrap);
+    pre.replaceWith(wrap);
+  }
+}
+
+// Defense-in-depth over mermaid's strict-mode output. DOMPurify's SVG
+// profile is a bad fit (it strips the <style> element every mermaid SVG
+// carries its look in), so scrub narrowly instead: no scripts, no
+// foreignObject (htmlLabels:false means none should exist anyway), no
+// on* handlers, no non-fragment hrefs. Anything this removes would
+// already mean a mermaid sanitizer bypass — belt to its suspenders.
+function scrubSvg(container) {
+  container
+    .querySelectorAll("script, foreignObject")
+    .forEach((n) => n.remove());
+  const walker = document.createTreeWalker(
+    container,
+    NodeFilter.SHOW_ELEMENT,
+    null,
+  );
+  let node;
+  while ((node = walker.nextNode())) {
+    for (const attr of Array.from(node.attributes)) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith("on")) {
+        node.removeAttribute(attr.name);
+      } else if (
+        (name === "href" || name === "xlink:href") &&
+        !attr.value.trim().startsWith("#")
+      ) {
+        node.removeAttribute(attr.name);
+      }
+    }
+  }
+}
+
 // Add a "Copy" button to every code block in `root`. Idempotent: bails if
 // a button already exists on a given <pre> (so re-runs from the useEffect
 // don't stack buttons).
@@ -260,16 +383,22 @@ function MarkdownMessage({ content, highlightRegex, sources, streaming }) {
       // user still sees their message. Escapes HTML to keep this safe.
       return escapeHtml(content).replace(/\n/g, '<br>');
     }
+    // Math leaves the document BEFORE marked runs — otherwise `$a_i$`
+    // becomes `$a<em>i$</em>`-ish wreckage before KaTeX ever sees it —
+    // and returns AFTER DOMPurify as katex.renderToString output, which
+    // is safe by construction (trust:false; see renderKatexSegment).
+    const { text: mathless, segments } = extractMathSegments(content);
     let raw;
     try {
-      raw = marked.parse(content);
+      raw = marked.parse(mathless);
     } catch (_) {
       return escapeHtml(content).replace(/\n/g, '<br>');
     }
     // DOMPurify defaults already block <script>, event handlers, javascript:
     // URLs, etc. We add data-lang to ADD_ATTR so our code-block language
     // badge survives sanitization.
-    return DOMPurify.sanitize(raw, { ADD_ATTR: ['data-lang'] });
+    const clean = DOMPurify.sanitize(raw, { ADD_ATTR: ['data-lang'] });
+    return restoreMathSegments(clean, segments, renderKatexSegment);
   }, [content, streaming]);
 
   // Post-mount annotation pass. Order matters: copy buttons first (they
@@ -285,6 +414,11 @@ function MarkdownMessage({ content, highlightRegex, sources, streaming }) {
     addCopyButtons(ref.current);
     if (sources && sources.length) wrapCitations(ref.current, sources);
     if (highlightRegex) applySearchHighlight(ref.current, highlightRegex);
+    // Mermaid swap runs LAST and async — failed diagrams keep the code
+    // block (with its copy button from above). Re-runs from dep changes
+    // are no-ops: replaced blocks no longer match the selector, and the
+    // DOM only resets when `html` itself changes.
+    renderMermaidBlocks(ref.current);
   }, [html, sources, highlightRegex, streaming]);
 
   // Streaming branch: render as plaintext via the existing helper so the

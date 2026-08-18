@@ -19,6 +19,8 @@ upstream URLs, and SHA-256 checksums.
 | `marked.min.js` | marked | 13.0.0 | MIT |
 | `highlight.min.js`, `github-dark.min.css` | @highlightjs/cdn-assets | 11.10.0 | BSD-3-Clause |
 | `purify.min.js` | dompurify | 3.1.6 | Apache-2.0 OR MPL-2.0 |
+| `katex.min.js`, `katex.min.css`, `fonts/KaTeX_*.woff2` | katex | 0.18.4 | MIT |
+| `mermaid.min.js` | mermaid | 11.16.1 | MIT |
 | `fonts/inter-latin.woff2` | Inter | v20 | OFL-1.1 |
 | `fonts/jetbrains-mono-latin.woff2` | JetBrains Mono | v24 | OFL-1.1 |
 | `fonts/instrument-serif-latin.woff2` | Instrument Serif | v5 | OFL-1.1 |
@@ -30,6 +32,8 @@ upstream URLs, and SHA-256 checksums.
 - **marked** — Copyright (c) 2018+, MarkedJS (https://github.com/markedjs/); Copyright (c) 2011-2018, Christopher Jeffrey (https://github.com/chjj/).
 - **highlight.js** (@highlightjs/cdn-assets) — Copyright (c) 2006, Ivan Sagalaev. All rights reserved.
 - **dompurify** — Copyright (c) 2015 Mario Heiderich. Dual-licensed; you may use it under **either** the Apache License 2.0 **or** the Mozilla Public License 2.0. The Apache-2.0 text is reproduced below; the MPL-2.0 text is available at https://www.mozilla.org/MPL/2.0/.
+- **katex** (incl. the `fonts/KaTeX_*.woff2` math fonts) — Copyright (c) 2013-2020 Khan Academy and other contributors.
+- **mermaid** — Copyright (c) 2014 - 2022 Knut Sveidqvist.
 - **Inter** — Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter).
 - **JetBrains Mono** — Copyright (c) 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono).
 - **Instrument Serif** — Copyright (c) 2022 The Instrument Serif Project Authors (https://github.com/Instrument/instrument-serif).

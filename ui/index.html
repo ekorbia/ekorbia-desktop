@@ -37,6 +37,7 @@
      messages. Pinned to the same version as the JS bundle below so theme
      classnames stay in sync (hljs-keyword, hljs-string, etc.). -->
 <link href="vendor/github-dark.min.css" rel="stylesheet">
+<link href="vendor/katex.min.css" rel="stylesheet">
 <style>
   /* Theme accent bridge. The React side mutates T (tokens.jsx) for inline
      styles, but the static rules below can't read T — App() mirrors the
@@ -248,6 +249,29 @@
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     margin: 12px 0;
   }
+  /* KaTeX math (vendor/katex.min.css provides the glyph layout; these
+     scope it to chat). Long display equations scroll sideways rather
+     than blowing out the bubble; overflow-y hidden stops a phantom
+     vertical scrollbar WebKit adds for sub/superscript overhang. */
+  .ek-md .katex { font-size: 1.06em; }
+  .ek-md .katex-display {
+    margin: 12px 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 2px 0;
+  }
+  /* Mermaid diagrams (markdown.jsx swaps ```mermaid code blocks for
+     rendered SVG once a reply finalizes). The SVG carries its own
+     theme-matched styles; we just size and center it. */
+  .ek-mermaid {
+    margin: 12px 0;
+    text-align: center;
+    overflow-x: auto;
+  }
+  .ek-mermaid svg {
+    max-width: 100%;
+    height: auto;
+  }
   .ek-md table {
     border-collapse: collapse;
     margin: 8px 0;
@@ -385,6 +409,15 @@
 <script src="vendor/marked.min.js"></script>
 <script src="vendor/highlight.min.js"></script>
 <script src="vendor/purify.min.js"></script>
+<!-- Math + diagram rendering (offline). katex.min.js pairs with the
+     katex.min.css link in <head> (fonts under vendor/fonts/KaTeX_*).
+     mermaid.min.js is the IIFE build — sets globalThis.mermaid; rendering
+     is invoked per-message by markdown.jsx with securityLevel 'strict'
+     and startOnLoad:false (nothing auto-scans the DOM). Both degrade
+     gracefully: with the scripts absent, math shows as its TeX source
+     and mermaid blocks stay ordinary code blocks. -->
+<script src="vendor/katex.min.js"></script>
+<script src="vendor/mermaid.min.js"></script>
 
 <!-- Pure helpers extracted from the JSX so they can be unit-tested under
      Node. Loads as a plain script (not text/babel) so it's synchronous

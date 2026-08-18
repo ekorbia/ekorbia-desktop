@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Math and diagrams in replies.** `$…$` / `$$…$$` TeX renders as real
+  typeset math (KaTeX), and ` ```mermaid ` code blocks render as diagrams —
+  flowcharts, sequence diagrams, and friends — themed to the app. Both are
+  fully offline; a diagram that doesn't parse stays a readable code block,
+  and dollar amounts stay dollar amounts.
 - **Command palette.** Press **⌘K** to search and run everything from the
   keyboard — new chat, private chat, model comparison, Settings, your
   Spaces, themes, and recent chats. Fuzzy matching included ("npc" finds

@@ -960,6 +960,178 @@ function previewSnippet(text) {
   return collapsed.length > 100 ? collapsed.slice(0, 100) + "…" : collapsed;
 }
 
+// ── Math extraction (KaTeX pipeline, ui/markdown.jsx) ──────────────────────
+//
+// TeX must be pulled OUT of the markdown before `marked` runs: marked has
+// no idea `$a_i + b_i$` is math, so the underscores become <em> tags and
+// the TeX is destroyed before KaTeX ever sees it. extractMathSegments
+// replaces each math span with an inert sentinel token (`ekmath<N>htamke`
+// — pure word chars, so marked passes it through untouched in paragraphs,
+// list items, table cells, and headings alike), and restoreMathSegments
+// swaps the sentinels for rendered HTML AFTER DOMPurify has sanitized the
+// document. The injected HTML comes from katex.renderToString with
+// default trust:false, which is XSS-safe by construction — that's why
+// injecting post-sanitize is sound. (A message that literally contains a
+// sentinel-shaped word would be substituted — accepted as vanishingly
+// rare; the digits are index-bound so stray look-alikes almost never
+// resolve.)
+//
+// Recognized delimiters:
+//   $$…$$   display (may span lines)     \[…\]  display (may span lines)
+//   $…$     inline (single line)         \(…\)  inline
+//
+// Deliberately NOT math:
+//   • anything inside ``` / ~~~ fences or `inline code`
+//   • $…$ with whitespace hugging either delimiter ("5 and " in
+//     "$5 and $10") — also kills most currency false-positives
+//   • $…$ whose body is a bare number ("$5"), and \$-escaped dollars
+function extractMathSegments(md) {
+  const src = String(md == null ? "" : md);
+  const segments = [];
+  let out = "";
+  let i = 0;
+  const n = src.length;
+  let inFence = false;
+  let fenceChar = "";
+  const sentinel = (k) => `ekmath${k}htamke`;
+
+  while (i < n) {
+    // Fence lines toggle fence state and are copied whole.
+    if (i === 0 || src[i - 1] === "\n") {
+      let nl = src.indexOf("\n", i);
+      if (nl === -1) nl = n;
+      const line = src.slice(i, nl);
+      const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (fence) {
+        if (!inFence) {
+          inFence = true;
+          fenceChar = fence[1][0];
+        } else if (fence[1][0] === fenceChar) {
+          inFence = false;
+        }
+        out += line;
+        i = nl;
+        continue;
+      }
+    }
+    if (inFence) {
+      let nl = src.indexOf("\n", i);
+      const end = nl === -1 ? n : nl + 1;
+      out += src.slice(i, end);
+      i = end;
+      continue;
+    }
+    const ch = src[i];
+    // Inline code spans: copy through the matching backtick run.
+    if (ch === "`") {
+      const ticks = /^`+/.exec(src.slice(i))[0];
+      const close = src.indexOf(ticks, i + ticks.length);
+      if (close !== -1) {
+        out += src.slice(i, close + ticks.length);
+        i = close + ticks.length;
+      } else {
+        out += ticks;
+        i += ticks.length;
+      }
+      continue;
+    }
+    if (ch === "\\") {
+      const next = src[i + 1];
+      if (next === "(") {
+        const close = src.indexOf("\\)", i + 2);
+        if (close !== -1) {
+          const tex = src.slice(i + 2, close).trim();
+          if (tex) {
+            out += sentinel(segments.length);
+            segments.push({ tex, display: false });
+            i = close + 2;
+            continue;
+          }
+        }
+      } else if (next === "[") {
+        const close = src.indexOf("\\]", i + 2);
+        if (close !== -1) {
+          const tex = src.slice(i + 2, close).trim();
+          if (tex) {
+            out += sentinel(segments.length);
+            segments.push({ tex, display: true });
+            i = close + 2;
+            continue;
+          }
+        }
+      }
+      // Any other escape (incl. \$): copy the pair so marked's own
+      // escape handling still applies.
+      out += next === undefined ? ch : ch + next;
+      i += next === undefined ? 1 : 2;
+      continue;
+    }
+    if (ch === "$") {
+      if (src[i + 1] === "$") {
+        const close = src.indexOf("$$", i + 2);
+        if (close !== -1) {
+          const tex = src.slice(i + 2, close).trim();
+          if (tex) {
+            out += sentinel(segments.length);
+            segments.push({ tex, display: true });
+            i = close + 2;
+            continue;
+          }
+        }
+        out += "$$";
+        i += 2;
+        continue;
+      }
+      // Single-$ inline: closing $ must sit on the same line; honor \$.
+      let j = i + 1;
+      let close = -1;
+      while (j < n && src[j] !== "\n") {
+        if (src[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (src[j] === "$") {
+          close = j;
+          break;
+        }
+        j++;
+      }
+      if (close !== -1) {
+        const tex = src.slice(i + 1, close);
+        const usable =
+          tex.length > 0 &&
+          !/^\s/.test(tex) &&
+          !/\s$/.test(tex) &&
+          !/^\d[\d,.]*$/.test(tex);
+        if (usable) {
+          out += sentinel(segments.length);
+          segments.push({ tex, display: false });
+          i = close + 1;
+          continue;
+        }
+      }
+      out += "$";
+      i += 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return { text: out, segments };
+}
+
+// Swap the sentinels back for rendered math. `renderSegment({tex,display})`
+// returns an HTML string (markdown.jsx passes a katex.renderToString
+// wrapper); unknown indices leave the sentinel visible rather than eating
+// text.
+function restoreMathSegments(html, segments, renderSegment) {
+  if (!segments || segments.length === 0) return html;
+  return String(html).replace(/ekmath(\d+)htamke/g, (match, num) => {
+    const seg = segments[Number(num)];
+    return seg ? renderSegment(seg) : match;
+  });
+}
+
 // Fuzzy match scorer for the command palette (ui/command-palette.jsx).
 // Returns a score (higher = better) or -1 for "no match". Every match
 // scores ≥ 1 so callers can use `< 0` as the reject test; the empty
@@ -1048,6 +1220,8 @@ if (typeof window !== "undefined") {
   window.greetingForHour = greetingForHour;
   window.previewSnippet = previewSnippet;
   window.paletteFuzzyScore = paletteFuzzyScore;
+  window.extractMathSegments = extractMathSegments;
+  window.restoreMathSegments = restoreMathSegments;
 }
 
 // ── instantiateSpacePinnedAttachments ────────────────────────────────────
@@ -1261,5 +1435,7 @@ if (typeof module !== "undefined" && module.exports) {
     greetingForHour,
     previewSnippet,
     paletteFuzzyScore,
+    extractMathSegments,
+    restoreMathSegments,
   };
 }

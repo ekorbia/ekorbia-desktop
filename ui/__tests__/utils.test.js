@@ -39,6 +39,8 @@ const {
   greetingForHour,
   previewSnippet,
   paletteFuzzyScore,
+  extractMathSegments,
+  restoreMathSegments,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -1228,4 +1230,89 @@ test("paletteFuzzyScore: subsequence matches initials-style queries", () => {
   assert.ok(paletteFuzzyScore("NPC", "new private chat") > 0);
   // order matters: reversed initials don't match
   assert.equal(paletteFuzzyScore("cpn", "New private chat"), -1);
+});
+
+// ── extractMathSegments / restoreMathSegments ──────────────────────────────
+// TeX leaves the document before marked runs (sentinel tokens) and comes
+// back as rendered HTML after DOMPurify — these pin the extraction rules.
+
+const texOf = (md) => extractMathSegments(md).segments.map((s) => s.tex);
+
+test("extractMathSegments: inline and display dollars", () => {
+  const r = extractMathSegments("Euler: $e^{i\\pi}+1=0$ and $$\\int_0^1 x\\,dx$$ done");
+  assert.equal(r.segments.length, 2);
+  assert.deepEqual(r.segments[0], { tex: "e^{i\\pi}+1=0", display: false });
+  assert.equal(r.segments[1].display, true);
+  assert.match(r.text, /ekmath0htamke/);
+  assert.match(r.text, /ekmath1htamke/);
+  assert.ok(!r.text.includes("$"), "no raw dollars left");
+});
+
+test("extractMathSegments: underscores survive for KaTeX", () => {
+  // The whole point: marked would turn _i … _j into <em>. Extraction keeps
+  // the TeX byte-for-byte.
+  assert.deepEqual(texOf("sum $a_i + b_j$ here"), ["a_i + b_j"]);
+});
+
+test("extractMathSegments: backslash-paren and bracket delimiters", () => {
+  const r = extractMathSegments("inline \\(x^2\\) and block \\[\ny = mx\n\\]");
+  assert.equal(r.segments.length, 2);
+  assert.equal(r.segments[0].display, false);
+  assert.equal(r.segments[0].tex, "x^2");
+  assert.equal(r.segments[1].display, true);
+  assert.equal(r.segments[1].tex, "y = mx");
+});
+
+test("extractMathSegments: display math spans multiple lines", () => {
+  const r = extractMathSegments("$$\na = b\nc = d\n$$");
+  assert.equal(r.segments.length, 1);
+  assert.equal(r.segments[0].display, true);
+  assert.match(r.segments[0].tex, /a = b/);
+});
+
+test("extractMathSegments: currency and spaced dollars stay literal", () => {
+  // "5 and " ends with a space → rejected; "$10" never closes.
+  assert.deepEqual(texOf("I paid $5 and $10 yesterday"), []);
+  assert.deepEqual(texOf("a $ x$ b"), []);
+  assert.deepEqual(texOf("a $x $ b"), []);
+  assert.deepEqual(texOf("just $5"), []);
+  // …but a real expression with digits inside still extracts.
+  assert.deepEqual(texOf("$5+5$"), ["5+5"]);
+});
+
+test("extractMathSegments: code fences and inline code are off-limits", () => {
+  const fenced = "```python\nprice = \"$x$\"\n```\nafter $y$";
+  assert.deepEqual(texOf(fenced), ["y"]);
+  assert.deepEqual(texOf("use `$HOME` and `$PATH`"), []);
+  const tilde = "~~~\n$z$\n~~~";
+  assert.deepEqual(texOf(tilde), []);
+});
+
+test("extractMathSegments: escaped dollars pass through to marked", () => {
+  const r = extractMathSegments("cost \\$5 to \\$10");
+  assert.deepEqual(r.segments, []);
+  assert.equal(r.text, "cost \\$5 to \\$10");
+});
+
+test("extractMathSegments: unclosed math stays literal", () => {
+  assert.deepEqual(texOf("lonely $x and more"), []);
+  assert.deepEqual(texOf("open $$never closed"), []);
+  assert.deepEqual(texOf("open \\(never"), []);
+});
+
+test("restoreMathSegments: sentinels swap for rendered HTML", () => {
+  const { text, segments } = extractMathSegments("so $a_i$ and $$b$$");
+  const html = "<p>" + text + "</p>";
+  const out = restoreMathSegments(html, segments, (s) =>
+    `[${s.display ? "D" : "I"}:${s.tex}]`);
+  assert.equal(out, "<p>so [I:a_i] and [D:b]</p>");
+});
+
+test("restoreMathSegments: unknown index leaves the sentinel", () => {
+  assert.equal(
+    restoreMathSegments("x ekmath7htamke y", [{ tex: "a", display: false }], () => "R"),
+    "x ekmath7htamke y",
+  );
+  // No segments → untouched string, renderer never called.
+  assert.equal(restoreMathSegments("plain", [], () => { throw new Error("no"); }), "plain");
 });
