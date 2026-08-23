@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Space ambient tinting.** Colored Spaces now color the room: the chat
+  pane's ambient glow takes the Space's hue, and the sidebar wears a soft
+  wash of the active Space's color. Dark themes only, whisper-level by
+  design.
 - **Math and diagrams in replies.** `$…$` / `$$…$$` TeX renders as real
   typeset math (KaTeX), and ` ```mermaid ` code blocks render as diagrams —
   flowcharts, sequence diagrams, and friends — themed to the app. Both are

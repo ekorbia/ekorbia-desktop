@@ -193,8 +193,18 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
     [searchQuery],
   );
 
+  // Space ambient tint — when this chat lives in a colored Space, the
+  // pane's ambient glows take that color so the whole room reads as
+  // "inside {Space}", not just the badge. Resolver handles the guards
+  // (light themes, no Space, no/unknown color → null = default duo).
+  const spaceTint = window.spaceAmbientTint
+    ? window.spaceAmbientTint(space, window.SPACE_COLORS, T.isLight)
+    : null;
+
   return (
     <div
+      data-chat-pane
+      data-space-tint={spaceTint || undefined}
       style={{
         flex: 1,
         minWidth: 0,
@@ -202,12 +212,16 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
         display: "flex",
         flexDirection: "column",
         // Whisper-level ambient tints (site hero glow, heavily muted) —
-        // warm top-left, cool bottom-right. Dark themes only: on light
-        // surfaces the same tints read as stains, so they collapse to
-        // the flat bg0.
+        // warm top-left, cool bottom-right by default; both take the
+        // Space's color (slightly stronger up top, so the shift is
+        // perceptible when switching tabs) when the chat is in a colored
+        // Space. Dark themes only: on light surfaces the same tints read
+        // as stains, so they collapse to the flat bg0.
         background: T.isLight
           ? T.bg0
-          : `radial-gradient(ellipse 55% 45% at 18% -5%, ${T.amber}0d, transparent), radial-gradient(ellipse 55% 45% at 88% 108%, ${T.blue}0a, transparent), ${T.bg0}`,
+          : spaceTint
+            ? `radial-gradient(ellipse 55% 45% at 18% -5%, ${spaceTint}1f, transparent), radial-gradient(ellipse 55% 45% at 88% 108%, ${spaceTint}10, transparent), ${T.bg0}`
+            : `radial-gradient(ellipse 55% 45% at 18% -5%, ${T.amber}0d, transparent), radial-gradient(ellipse 55% 45% at 88% 108%, ${T.blue}0a, transparent), ${T.bg0}`,
       }}
     >
       {/* Header */}

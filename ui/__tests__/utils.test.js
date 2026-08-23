@@ -39,6 +39,7 @@ const {
   greetingForHour,
   previewSnippet,
   paletteFuzzyScore,
+  spaceAmbientTint,
   extractMathSegments,
   restoreMathSegments,
 } = require("../utils.js");
@@ -1315,4 +1316,43 @@ test("restoreMathSegments: unknown index leaves the sentinel", () => {
   );
   // No segments → untouched string, renderer never called.
   assert.equal(restoreMathSegments("plain", [], () => { throw new Error("no"); }), "plain");
+});
+
+// ── spaceAmbientTint ─────────────────────────────────────────────────────
+
+const TINT_PALETTE = { amber: "#f0934a", purple: "#c281f5", green: "#7dd17a" };
+
+test("spaceAmbientTint: colored Space on a dark theme resolves its hex", () => {
+  assert.equal(
+    spaceAmbientTint({ id: "s1", color: "purple" }, TINT_PALETTE, false),
+    "#c281f5",
+  );
+});
+
+test("spaceAmbientTint: light themes never tint (stain covenant)", () => {
+  assert.equal(
+    spaceAmbientTint({ id: "s1", color: "purple" }, TINT_PALETTE, true),
+    null,
+  );
+});
+
+test("spaceAmbientTint: no Space → null (default ambience)", () => {
+  assert.equal(spaceAmbientTint(null, TINT_PALETTE, false), null);
+  assert.equal(spaceAmbientTint(undefined, TINT_PALETTE, false), null);
+});
+
+test("spaceAmbientTint: Space without a color → null", () => {
+  assert.equal(spaceAmbientTint({ id: "s1", color: null }, TINT_PALETTE, false), null);
+  assert.equal(spaceAmbientTint({ id: "s1" }, TINT_PALETTE, false), null);
+});
+
+test("spaceAmbientTint: unknown/purged color key → null, not a gray smudge", () => {
+  assert.equal(
+    spaceAmbientTint({ id: "s1", color: "magenta" }, TINT_PALETTE, false),
+    null,
+  );
+});
+
+test("spaceAmbientTint: missing palette → null", () => {
+  assert.equal(spaceAmbientTint({ id: "s1", color: "purple" }, null, false), null);
 });

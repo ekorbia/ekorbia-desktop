@@ -284,12 +284,28 @@ function Sidebar({
     onDelete(m.chat.id);
   };
 
+  // Space ambient tint — while a Space filter is active, the rail wears
+  // a whisper wash of that Space's color at the top (where the Spaces
+  // section lives), so the browsing context reads ambiently and matches
+  // the chat pane's tinted glows. Same resolver + guards as the pane:
+  // dark themes only, colored Spaces only, else the flat bg1.
+  const activeSpaceRow = activeSpaceId
+    ? (spaces || []).find((s) => s.id === activeSpaceId) || null
+    : null;
+  const railTint = window.spaceAmbientTint
+    ? window.spaceAmbientTint(activeSpaceRow, window.SPACE_COLORS, T.isLight)
+    : null;
+
   return (
     <aside
+      data-sidebar
+      data-space-tint={railTint || undefined}
       style={{
         width: width || 220,
         flexShrink: 0,
-        background: T.bg1,
+        background: railTint
+          ? `radial-gradient(ellipse 130% 24% at 50% 0%, ${railTint}1a, transparent), ${T.bg1}`
+          : T.bg1,
         borderRight: `1px solid ${T.border}`,
         display: "flex",
         flexDirection: "column",

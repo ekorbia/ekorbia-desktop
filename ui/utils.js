@@ -1166,6 +1166,27 @@ function paletteFuzzyScore(query, text) {
   return Math.max(1, 500 - gaps * 2 - Math.min(t.length, 99));
 }
 
+// ── spaceAmbientTint ────────────────────────────────────────────────────────
+//
+// Resolve the ambient-tint hex for a Space, or null for "use the default
+// ambience". The chat pane and sidebar tint their whisper-level glows
+// with the Space's color so being inside a Space reads ambiently, not
+// just as a highlighted row. Null (no tint) whenever:
+//   • the theme is light — tints read as stains on light surfaces (the
+//     long-standing chat-pane covenant, see ui/chat.jsx);
+//   • there is no Space, or it has no color set;
+//   • the color key isn't in the palette (unknown/purged keys) — the
+//     spaceColorHex fallback (muted fg2) would render as a gray smudge,
+//     worse than no tint at all.
+// `palette` is SPACE_COLORS (injected for testability; frozen at the
+// one_dark accents by tokens.jsx load order, which is fine here — the
+// tint only ever renders on dark themes, where those vivid values sit
+// correctly).
+function spaceAmbientTint(space, palette, isLight) {
+  if (isLight || !space || !space.color || !palette) return null;
+  return palette[space.color] || null;
+}
+
 // ── Publish on window (browser) and module.exports (Node) ──────────────────
 //
 // `typeof window` lets the same file work as both a global-scope script
@@ -1220,6 +1241,7 @@ if (typeof window !== "undefined") {
   window.greetingForHour = greetingForHour;
   window.previewSnippet = previewSnippet;
   window.paletteFuzzyScore = paletteFuzzyScore;
+  window.spaceAmbientTint = spaceAmbientTint;
   window.extractMathSegments = extractMathSegments;
   window.restoreMathSegments = restoreMathSegments;
 }
@@ -1435,6 +1457,7 @@ if (typeof module !== "undefined" && module.exports) {
     greetingForHour,
     previewSnippet,
     paletteFuzzyScore,
+    spaceAmbientTint,
     extractMathSegments,
     restoreMathSegments,
   };

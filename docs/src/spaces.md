@@ -32,6 +32,15 @@ Click any Space row in the sidebar to **activate** that Space:
 
 Click **All chats** to deactivate and see your full history. Ekorbia remembers your active Space across launches, so you'll land back where you left off.
 
+## Ambient tinting
+
+If a Space has a color, being inside it is something you can *feel*, not just read:
+
+- The sidebar wears a soft wash of the active Space's color at the top while its filter is on.
+- Any chat that lives in a colored Space tints the chat pane's ambient glow with that color — so a purple *Novel* chat glows faintly purple even when you reach it from All chats, and switching tabs between Spaces shifts the room's hue with it.
+
+The effect is deliberately whisper-level and appears on dark themes only — on light themes surfaces stay flat, where the same tints would read as smudges. Spaces created without a color (the ∅ swatch) keep the default ambience.
+
 ## Editing a Space
 
 Hover any Space row to reveal a **⋯** overflow button. Click it:
