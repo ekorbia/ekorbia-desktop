@@ -124,13 +124,13 @@ pub(crate) fn pack_embedding(v: &[f32]) -> Vec<u8> {
 
 /// Reverse of `pack_embedding`. SQLite hands back the BLOB as a `Vec<u8>`
 /// with 1-byte alignment, so we cannot use `bytemuck::cast_slice::<u8, f32>`
-/// directly — it would panic on the alignment mismatch. The `chunks_exact(4)`
-/// loop reads four bytes at a time without requiring any alignment, and
-/// `f32::from_le_bytes` keeps the byte order explicitly little-endian to
-/// match `pack_embedding` on every host we currently build for. Trailing
-/// bytes (`b.len() % 4 != 0`) are dropped silently — a corrupt BLOB would
-/// have to be wrong by exactly 1-3 bytes to hit this path, and degrading
-/// gracefully beats a panic mid-search.
+/// directly — it would panic on the alignment mismatch. The
+/// `as_chunks::<4>()` view reads four bytes at a time without requiring any
+/// alignment, and `f32::from_le_bytes` keeps the byte order explicitly
+/// little-endian to match `pack_embedding` on every host we currently build
+/// for. Trailing bytes (`b.len() % 4 != 0`, the `.1` remainder) are dropped
+/// silently — a corrupt BLOB would have to be wrong by exactly 1-3 bytes to
+/// hit this path, and degrading gracefully beats a panic mid-search.
 ///
 /// Test-only since the score-in-place retrieval path (`cosine_blob_with_query`)
 /// folds bytes directly without ever building a `Vec<f32>`. Kept around as
@@ -138,8 +138,10 @@ pub(crate) fn pack_embedding(v: &[f32]) -> Vec<u8> {
 /// in-place path's results.
 #[cfg(test)]
 pub(crate) fn unpack_embedding(b: &[u8]) -> Vec<f32> {
-    b.chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 
@@ -198,12 +200,12 @@ pub(crate) fn cosine_blob_with_query(q: &[f32], q_norm_sq: f32, blob: &[u8]) -> 
     let mut dot = 0.0_f32;
     let mut na = 0.0_f32;
     let mut count: usize = 0;
-    for c in blob.chunks_exact(4) {
+    for c in blob.as_chunks::<4>().0 {
         if count >= q.len() {
             // Candidate has more floats than the query — dimension mismatch.
             return None;
         }
-        let x = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+        let x = f32::from_le_bytes(*c);
         dot += q[count] * x;
         na += x * x;
         count += 1;
