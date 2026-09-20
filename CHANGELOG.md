@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Selection actions.** Copy text in any app, press **⌘⇧E**, and act on it
+  with the local model — summarize, rewrite, fix grammar, explain, type your
+  own instruction, or press Enter to run an attached library prompt. One
+  click copies the result back. macOS; no permissions needed.
 - **Space ambient tinting.** Colored Spaces now color the room: the chat
   pane's ambient glow takes the Space's hue, and the sidebar wears a soft
   wash of the active Space's color. Dark themes only, whisper-level by

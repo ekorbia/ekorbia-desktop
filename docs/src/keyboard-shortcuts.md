@@ -4,11 +4,13 @@ Two kinds of shortcut in Ekorbia: **global** (work in any app) and **in-app** (w
 
 ## Global shortcuts
 
-Both global shortcuts are **customizable** in **Settings → General**.
+Every global shortcut is **customizable** in **Settings → Hotkeys**.
 
 | Default | Action |
 |---|---|
 | **⌘⇧Space** | Open the [quick-query overlay](./overlay.md) |
+| **⌘⇧E** | Act on the copied text — [selection actions](./selection-actions.md) |
+| **⌘⇧V** | Open the overlay and start [voice dictation](./voice-input.md) |
 | **⌘⇧1** | Invoke macOS region [screenshot capture](./screenshots.md) → opens a new chat with the screenshot attached |
 
 > **Pick combinations that don't collide with macOS** (notably `Cmd+Shift+3/4/5` for built-in screenshots) or other apps you use frequently.
@@ -25,7 +27,7 @@ Both global shortcuts are **customizable** in **Settings → General**.
 
 | Shortcut | Action |
 |---|---|
-| **Enter** | Send the query |
+| **Enter** | Send the query — or, with text captured, run what you typed on it (nothing typed: run the attached prompt) |
 | **Shift+Enter** | Insert a newline |
 | **Esc** | Close the overlay without sending |
 

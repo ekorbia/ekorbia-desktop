@@ -20,6 +20,13 @@ const QUICK_DEFAULT_MODEL = "gemma4:e4b";
 const COLLAPSED_H = 100; // input row + context bar, no picker/response
 const PICKER_H = 360; //   picker open (model list or prompt list)
 const EXPANDED_H = 480; // streaming or response visible
+// Measured, not guessed: with the snippet at its 76px cap the selection panel
+// ends at y=260, so 268 leaves a hairline of room under its border. Expanded
+// keeps ~210px for the result above the 38px action bar. Re-measure if the
+// panel gains or loses a row.
+const SELECTION_H = 268; // captured selection + verb chips, no result yet
+const SELECTION_EXPANDED_H = 510; // selection panel AND a result on screen
+const SELECTION_HINT_H = 168; // "nothing copied yet" explainer only
 
 function QuickQuery() {
   // ── Query / streaming ──────────────────────────────────────────────────────
@@ -170,6 +177,82 @@ function QuickQuery() {
   // be open at a time anyway.
   const [picker, setPicker] = qS(null); // 'model' | 'prompt' | null
 
+  // ── Selection actions (⌘⇧E) ────────────────────────────────────────────────
+  // Rust reads the clipboard and pushes it here (see src/selection.rs). Four
+  // pieces of state:
+  //   selection      {text, chars, truncated} — what we're acting on, or null
+  //   selectionEmpty true when the hotkey fired over an empty clipboard, so
+  //                  we can explain that instead of looking broken
+  //   selectionReq   {question, title} from the run that produced `response`,
+  //                  so "Send to main" persists the instruction AND the text
+  //                  rather than an answer to an invisible question
+  //   ranAction      {id, label} of what produced `response`. The label
+  //                  ("Fix grammar", the attached prompt's name, or whatever
+  //                  the user typed) is shown above the result; the ID is
+  //                  what lights a verb chip — never the label, because the
+  //                  library ships a prompt named "Summarize" and running it
+  //                  must not mark the Summarize chip as the thing that ran
+  //
+  // None of these are cleared by the window-focus reset below. The capture
+  // event lands moments after the window takes focus, and a reset that
+  // touched them could wipe the payload we were just handed — the same race
+  // the voice hotkey's start-signal counter sidesteps. hide() owns clearing
+  // them, which is where an overlay session actually ends.
+  const [selection, setSelection] = qS(null);
+  const [selectionEmpty, setSelectionEmpty] = qS(false);
+  const [selectionReq, setSelectionReq] = qS(null);
+  const [ranAction, setRanAction] = qS(null);
+  const [copied, setCopied] = qS(false);
+
+  qE(() => {
+    const api = getEventApi();
+    if (!api) return;
+    const uns = [];
+    let cancelled = false;
+    const add = (name, fn) => {
+      api
+        .listen(name, fn)
+        .then((u) => {
+          if (cancelled) u();
+          else uns.push(u);
+        })
+        .catch(() => {});
+    };
+    // Shared reset: a fresh capture (or a failed one) always starts from a
+    // clean result area, whatever was on screen from the last invocation.
+    const begin = () => {
+      setSelectionReq(null);
+      setRanAction(null);
+      setResponse("");
+      setSentMessage("");
+      setPicker(null);
+      setCopied(false);
+    };
+    add("selection:captured", (ev) => {
+      const p = (ev && ev.payload) || {};
+      begin();
+      setSelectionEmpty(false);
+      setSelection({
+        text: p.text || "",
+        chars: p.chars || 0,
+        truncated: !!p.truncated,
+      });
+    });
+    add("selection:empty", () => {
+      begin();
+      setSelection(null);
+      setSelectionEmpty(true);
+    });
+    return () => {
+      cancelled = true;
+      uns.forEach((u) => {
+        try {
+          u();
+        } catch (_) {}
+      });
+    };
+  }, []);
+
   // Fallback to a rejecting stub so the rest of the component can use
   // `invoke(...)` unconditionally — the overlay window runs in non-Tauri
   // dev (pure-browser preview) where there's nothing to invoke.
@@ -235,11 +318,21 @@ function QuickQuery() {
     // slate on next ⌘⇧Space without flickering during the transition. We
     // *don't* reset attachedPromptId here — it's persisted across
     // invocations on purpose (see the localStorage hook above).
+    //
+    // The selection session ends here rather than in the focus reset: this
+    // is the one place that runs on every real dismissal (⎋, blur, and the
+    // window-hide that follows a toggle-away) but never in the window between
+    // the selection hotkey showing the overlay and its payload arriving.
     setTimeout(() => {
       setText("");
       setSentMessage("");
       setResponse("");
       setPromptSearch("");
+      setSelection(null);
+      setSelectionEmpty(false);
+      setSelectionReq(null);
+      setRanAction(null);
+      setCopied(false);
     }, 120);
   };
 
@@ -304,9 +397,12 @@ function QuickQuery() {
   qE(() => {
     let h = COLLAPSED_H;
     if (picker) h = PICKER_H;
+    else if (selection)
+      h = response || streaming ? SELECTION_EXPANDED_H : SELECTION_H;
     else if (response || streaming) h = EXPANDED_H;
+    else if (selectionEmpty) h = SELECTION_HINT_H;
     invoke("overlay_resize", { height: h }).catch(() => {});
-  }, [picker, response, streaming]);
+  }, [picker, response, streaming, selection, selectionEmpty]);
 
   // Single-select toggle. Clicking the already-selected prompt clears it.
   const pickPrompt = (id) => {
@@ -342,7 +438,15 @@ function QuickQuery() {
     // fired (so the input is ready for the next question). text is the
     // *next* question (probably empty); sentMessage is the one whose
     // answer is on screen.
-    const title = (sentMessage.trim().slice(0, 40) || "Quick query").trim();
+    //
+    // A selection run has no sentMessage — the question was "this verb,
+    // applied to that text", which selectionReq carries in a form that
+    // still reads correctly as a chat a week from now.
+    const title = (
+      selectionReq?.title ||
+      sentMessage.trim().slice(0, 40) ||
+      "Quick query"
+    ).trim();
     const nowTs = Math.floor(Date.now() / 1000);
     const d = new Date();
     const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -378,7 +482,7 @@ function QuickQuery() {
           // question. sentMessage is the question the persisted assistant
           // reply actually answered.
           role: "user",
-          content: sentMessage,
+          content: selectionReq?.question ?? sentMessage,
           model: null,
           time: timeStr,
           tokensIn: null,
@@ -426,39 +530,22 @@ function QuickQuery() {
     }
   };
 
-  // ── Submit ─────────────────────────────────────────────────────────────────
-  // Single-turn ephemeral chat. The attached prompt's body becomes a system
-  // message — same shape the main app uses for new chats.
-  const submit = async (override) => {
-    // `override` lets voice auto-submit send the exact transcript without
-    // racing the setText state flush.
-    const q = typeof override === "string" ? override : text;
-    if (!q.trim() || streaming) return;
+  // ── Run one stream ─────────────────────────────────────────────────────────
+  // The shared streaming core behind both entry points: a typed question
+  // (submit) and a selection action (runAction). Callers own the state that
+  // describes WHAT was asked; this owns the request, the stream, and every
+  // failure path.
+  const runStream = async (messages) => {
     setStreaming(true);
     setResponse("");
     setPicker(null);
-    // Snapshot the question before clearing the input so we can show it
-    // above the streaming response. Each submit replaces the previous
-    // snapshot — only the most recent Q&A pair stays visible.
-    setSentMessage(q);
-    // Clear the input as soon as the request is fired so the user can start
-    // typing their next question while the answer is still streaming in.
-    // The `text` value is captured in this closure for the messages array
-    // below — clearing the state doesn't affect what gets sent.
-    setText("");
+    setCopied(false);
     // Phase B.2: cancellation now goes through llm_chat_stream_cancel.
     // abortRef holds the requestId (the overlay reuses a single id since
-    // it only ever has one in-flight stream — a submit while another
-    // streams is gated by the `streaming` state above).
+    // it only ever has one in-flight stream — a second run while one is
+    // streaming is gated by the `streaming` state in both callers).
     const requestId = `overlay-${Date.now().toString(36)}`;
     abortRef.current = requestId;
-
-    const messages = attached
-      ? [
-          { role: "system", content: attached.body },
-          { role: "user", content: q },
-        ]
-      : [{ role: "user", content: q }];
 
     let acc = "";
     try {
@@ -532,6 +619,99 @@ function QuickQuery() {
     setStreaming(false);
   };
 
+  // ── Run a selection action ─────────────────────────────────────────────────
+  // `action` is a SELECTION_ACTIONS verb, a one-off built from the input, or
+  // the attached prompt itself (id "attached" — see submit). Library prompts
+  // take part the same way they do everywhere else in the overlay: attached
+  // through the context bar's "+ prompt", they ride along ahead of the
+  // instruction. The one exception is when the attached prompt IS the
+  // instruction — sending its body twice, once as persona and once as the
+  // task, would just be the same paragraph stuttered at the model.
+  const runAction = async (action) => {
+    if (!selection || streaming) return;
+    const persona =
+      attached && action.id !== "attached" ? attached.body : null;
+    const req = buildSelectionRequest(selection.text, action, persona);
+    if (!req) return;
+    setRanAction({ id: action.id || "custom", label: action.label || "" });
+    setSelectionReq({ question: req.question, title: req.title });
+    await runStream(req.messages);
+  };
+
+  // ── Submit ─────────────────────────────────────────────────────────────────
+  // Single-turn ephemeral chat. The attached prompt's body becomes a system
+  // message — same shape the main app uses for new chats.
+  //
+  // With a selection captured, the typed text is an INSTRUCTION rather than a
+  // question: "translate to German", "turn this into bullets". It runs
+  // against the captured text exactly as a chip would, which is what makes
+  // the built-in verbs a starting set rather than a ceiling — and the only
+  // honest way to translate, since a chip can't ask for the target language.
+  //
+  // With a selection captured AND a prompt attached, Enter on an EMPTY input
+  // runs that prompt, by itself, on the captured text. A task-style library
+  // prompt ("turn this into meeting notes") needs no verb and no typed words
+  // — it already is the instruction. Because the attachment is sticky across
+  // invocations, a go-to prompt becomes three keystrokes: ⌘C, the selection
+  // hotkey, ⏎.
+  const submit = async (override) => {
+    // `override` lets voice auto-submit send the exact transcript without
+    // racing the setText state flush.
+    const q = typeof override === "string" ? override : text;
+    if (streaming) return;
+
+    if (!q.trim()) {
+      if (selection && attached) {
+        await runAction({
+          id: "attached",
+          label: attached.name,
+          instruction: attached.body,
+        });
+      }
+      return;
+    }
+
+    if (selection) {
+      const typed = q.trim();
+      setText("");
+      await runAction({ id: "custom", label: typed, instruction: typed });
+      return;
+    }
+
+    // Snapshot the question before clearing the input so we can show it
+    // above the streaming response. Each submit replaces the previous
+    // snapshot — only the most recent Q&A pair stays visible.
+    setSentMessage(q);
+    // Clear the input as soon as the request is fired so the user can start
+    // typing their next question while the answer is still streaming in.
+    // The `q` value is captured in this closure for the messages array
+    // below — clearing the state doesn't affect what gets sent.
+    setText("");
+
+    const messages = attached
+      ? [
+          { role: "system", content: attached.body },
+          { role: "user", content: q },
+        ]
+      : [{ role: "user", content: q }];
+    await runStream(messages);
+  };
+
+  // ── Copy the result ────────────────────────────────────────────────────────
+  // The point of a rewrite is to paste it back where the text came from, so
+  // this is the primary action in selection mode. Feedback is the button's
+  // own label — the overlay has no toast host of its own.
+  const copyResult = async () => {
+    if (!response.trim()) return;
+    try {
+      await navigator.clipboard.writeText(response);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch (e) {
+      console.error("Copy failed:", e);
+    }
+  };
+
   // ── Derived render data ────────────────────────────────────────────────────
   // The expanded body shows up as soon as we have *anything* to show:
   // the sent message, the streaming indicator, or the response itself.
@@ -562,6 +742,17 @@ function QuickQuery() {
     : prompts
   ).slice().sort((a, b) => a.name.localeCompare(b.name));
 
+  // The selection hotkey as the user actually has it bound. Both windows
+  // share an origin, so the overlay can read the value Settings persisted
+  // rather than hardcoding a default that a rebind would make a lie.
+  const selectionHotkeyLabel = (() => {
+    let spec = null;
+    try {
+      spec = localStorage.getItem("ekorbia.selection.hotkey");
+    } catch {}
+    return formatHotkey(spec || "Super+Shift+KeyE");
+  })();
+
   // ── Styles (defined once outside the JSX for readability) ──────────────────
   const ROW_PAD = "0 18px";
   const C_BG = "rgba(20, 23, 29, 0.94)";
@@ -577,6 +768,25 @@ function QuickQuery() {
   const C_AMBER = "#f0934a";
   const FONT_SANS = '"Inter", system-ui, sans-serif';
   const FONT_MONO = '"JetBrains Mono", monospace';
+
+  // Verb-chip styling; `active` marks the one whose result is on screen. A
+  // plain style helper, not a component — components defined during render
+  // lose focus on every keystroke (see CLAUDE.md).
+  const chipStyle = (active) => ({
+    display: "inline-flex",
+    alignItems: "center",
+    padding: "3px 10px",
+    borderRadius: 999,
+    border: `1px solid ${active ? C_AMBER + "88" : C_BORDER_STRONG}`,
+    background: active ? C_AMBER + "24" : C_BG2,
+    color: active ? C_AMBER : C_FG1,
+    fontFamily: FONT_SANS,
+    fontSize: 11.5,
+    lineHeight: 1.6,
+    cursor: streaming ? "default" : "pointer",
+    opacity: streaming && !active ? 0.5 : 1,
+    whiteSpace: "nowrap",
+  });
 
   return (
     <div
@@ -629,7 +839,16 @@ function QuickQuery() {
               submit();
             }
           }}
-          placeholder="Ask anything…"
+          placeholder={
+            // With a prompt attached, ⏎ on the empty input runs it — say so
+            // here, since nothing else on screen hints at it. The prompt's
+            // name leads so a long one ellipsizes the filler, not the cue.
+            selection
+              ? attached
+                ? `⏎ runs ${attached.name} — or type what to do…`
+                : "Or describe what to do with it…"
+              : "Ask anything…"
+          }
           autoFocus
           style={{
             flex: 1,
@@ -640,6 +859,11 @@ function QuickQuery() {
             fontSize: 17,
             outline: "none",
             padding: 0,
+            // A placeholder naming a long attached prompt should end in an
+            // ellipsis, not a letter sliced in half. minWidth lets the flex
+            // item actually shrink enough for the clip to be the input's.
+            minWidth: 0,
+            textOverflow: "ellipsis",
           }}
         />
         {/* Voice dictation — inserts the local Whisper transcript into the
@@ -712,7 +936,7 @@ function QuickQuery() {
               letterSpacing: 0.4,
             }}
           >
-            ⏎ ask · ⎋ close
+            {selection ? "⏎ run · ⎋ close" : "⏎ ask · ⎋ close"}
           </span>
         )}
       </div>
@@ -855,6 +1079,109 @@ function QuickQuery() {
 
         <span style={{ flex: 1 }} />
       </div>
+
+      {/* ── Selection panel ──────────────────────────────────────────────── */}
+      {/* What the selection hotkey captured, plus the verbs you can run on   */}
+      {/* it. The chips stay put while a result is on screen so switching     */}
+      {/* verbs is one click, not a click to go back and another to re-run.   */}
+      {!picker && selection && (
+        <div
+          data-selection-panel
+          style={{
+            flexShrink: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 7,
+            padding: "2px 16px 10px",
+            borderBottom: `1px solid ${C_BORDER}`,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              letterSpacing: 0.4,
+            }}
+          >
+            <span style={{ color: C_FG2, textTransform: "uppercase" }}>
+              Copied text
+            </span>
+            <span style={{ color: C_FG3 }}>
+              {selection.chars.toLocaleString()} characters
+              {selection.truncated ? " · trimmed to fit" : ""}
+            </span>
+          </div>
+
+          <div
+            data-selection-snippet
+            style={{
+              maxHeight: 76,
+              overflowY: "auto",
+              background: C_BG2,
+              border: `1px solid ${C_BORDER}`,
+              borderRadius: 8,
+              padding: "8px 10px",
+              fontFamily: FONT_SANS,
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: C_FG1,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {selection.text}
+          </div>
+
+          <div
+            data-selection-actions
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 5,
+            }}
+          >
+            {SELECTION_ACTIONS.map((a) => (
+              <button
+                key={a.id}
+                data-selection-action={a.id}
+                title={a.hint}
+                disabled={streaming}
+                onClick={() => runAction(a)}
+                style={chipStyle(ranAction?.id === a.id)}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Empty clipboard — say so rather than opening a panel that does    */}
+      {/* nothing, which would read as a broken hotkey.                     */}
+      {!picker && !selection && selectionEmpty && (
+        <div
+          data-selection-empty
+          style={{
+            flexShrink: 0,
+            padding: "6px 18px 14px",
+            fontFamily: FONT_SANS,
+            fontSize: 12.5,
+            lineHeight: 1.6,
+            color: C_FG1,
+          }}
+        >
+          Nothing to act on — the clipboard has no text in it. Copy something
+          in any app, then press{" "}
+          <span style={{ color: C_AMBER, fontFamily: FONT_MONO, fontSize: 11 }}>
+            {selectionHotkeyLabel}
+          </span>
+          .
+        </div>
+      )}
 
       {/* ── Bottom area: picker OR response ──────────────────────────────── */}
 
@@ -1187,6 +1514,25 @@ function QuickQuery() {
               {sentMessage}
             </div>
           )}
+          {/* What produced this. The chips above show it too, but a typed
+              instruction or an attached prompt has no chip to light up. */}
+          {ranAction?.label && (
+            <div
+              data-ran-action
+              style={{
+                marginBottom: 6,
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                letterSpacing: 0.4,
+                color: C_AMBER,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {ranAction.label}
+            </div>
+          )}
           <div style={{ whiteSpace: "pre-wrap" }}>
             {response || (streaming && "…")}
           </div>
@@ -1209,6 +1555,32 @@ function QuickQuery() {
             borderTop: `1px solid ${C_BORDER}`,
           }}
         >
+          {/* Copy leads in selection mode: a rewrite exists to be pasted
+              back where the text came from. The button's own label is the
+              confirmation — the overlay window has no toast host. */}
+          {selection && (
+            <button
+              onClick={copyResult}
+              data-copy-result
+              title="Copy the result to the clipboard"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                background: copied ? C_BG3 : C_AMBER,
+                border: `1px solid ${copied ? C_BORDER_STRONG : C_AMBER}`,
+                borderRadius: 5,
+                padding: "5px 10px",
+                cursor: "pointer",
+                color: copied ? C_FG : "#2a1505",
+                fontFamily: FONT_MONO,
+                fontSize: 11,
+                fontWeight: 500,
+              }}
+            >
+              {copied ? "Copied ✓" : "Copy result"}
+            </button>
+          )}
           <button
             onClick={sendToMain}
             title="Continue this conversation in the main window"

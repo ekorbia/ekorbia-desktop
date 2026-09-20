@@ -165,6 +165,10 @@
 <script type="text/babel" data-presets="react" src="/ui/onboarding.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/toast.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/command-palette.jsx"></script>
+<!-- overlay.jsx self-mounts ONLY in the window labelled "overlay"; the mock
+     exposes no window API, so its bottom-of-file gate returns early here and
+     QuickQuery is simply available on window for __TEST_MOUNT. -->
+<script type="text/babel" data-presets="react" src="/ui/overlay.jsx"></script>
 
 <!-- ─── Readiness flag.
      Babel-standalone processes text/babel scripts in order, asynchronously.

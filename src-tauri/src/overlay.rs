@@ -14,7 +14,8 @@
 //! `lib.rs::run()` calls it directly. The other commands are JS-callable.
 //!
 //! Hotkey registry: we keep track of EVERY shortcut we register (overlay
-//! toggle + screenshot capture) in a shared HOTKEY_REGISTRY so the
+//! toggle, screenshot capture, voice dictation, selection actions) in a
+//! shared HOTKEY_REGISTRY so the
 //! global-shortcut handler can dispatch on shortcut identity, and so a
 //! re-register call can surgically unregister just the previous binding
 //! for that slot rather than `unregister_all` (which would clobber the
@@ -30,6 +31,7 @@ pub(crate) struct HotkeyRegistry {
     pub overlay: Option<Shortcut>,
     pub screenshot: Option<Shortcut>,
     pub voice: Option<Shortcut>,
+    pub selection: Option<Shortcut>,
 }
 
 static HOTKEY_REGISTRY: OnceLock<Mutex<HotkeyRegistry>> = OnceLock::new();
@@ -174,6 +176,30 @@ pub(crate) fn register_voice_hotkey(app: tauri::AppHandle, shortcut: String) -> 
         gs.register(parsed)
             .map_err(|e| format!("Failed to register '{shortcut}': {e}"))?;
         reg.voice = Some(parsed);
+    }
+    Ok(())
+}
+
+/// Replace the current selection-actions hotkey. Same shape as
+/// `register_hotkey` but operates on the selection slot, independent of the
+/// overlay/screenshot/voice slots.
+#[tauri::command]
+pub(crate) fn register_selection_hotkey(
+    app: tauri::AppHandle,
+    shortcut: String,
+) -> Result<(), String> {
+    let parsed: Shortcut = shortcut
+        .parse()
+        .map_err(|e| format!("Invalid shortcut '{shortcut}': {e:?}"))?;
+    let gs = app.global_shortcut();
+    {
+        let mut reg = registry().lock().map_err(|e| e.to_string())?;
+        if let Some(prev) = reg.selection {
+            let _ = gs.unregister(prev);
+        }
+        gs.register(parsed)
+            .map_err(|e| format!("Failed to register '{shortcut}': {e}"))?;
+        reg.selection = Some(parsed);
     }
     Ok(())
 }

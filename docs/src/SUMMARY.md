@@ -32,6 +32,7 @@
 - [Prompts library](./prompts.md)
 - [Watches](./watches.md)
 - [Quick-query overlay](./overlay.md)
+- [Selection actions](./selection-actions.md)
 - [Voice input](./voice-input.md)
 - [Screenshot capture](./screenshots.md)
 - [Memory file](./memory.md)

@@ -21,6 +21,7 @@
 //! - `providers::`   — adapters: `ollama` (default engine + lifecycle), `openai_compat` (BYO /v1 servers), `engine` (bundled llama-server); shared cancel registry
 //! - `engine::`      — bundled llama-server sidecar: spawn/watchdog/kill-switch (mod.rs) + slot scheduler (supervisor.rs)
 //! - `overlay`       — overlay window + hotkey commands
+//! - `selection`     — clipboard capture for the overlay's selection actions
 //! - `attachments::` — types, config, cancel registry, pipeline, folder, commands
 //! - `watch::`       — types, commands, pipeline, folder/rss/url runners, HTTP
 //! - `files::`       — sandbox + write_file tool execution + chat_files commands
@@ -38,6 +39,7 @@ mod prompts;
 mod providers;
 mod screenshot;
 mod search;
+mod selection;
 mod settings;
 mod spaces;
 mod system;
@@ -107,6 +109,12 @@ pub fn run() {
                     } else if reg.voice.as_ref() == Some(shortcut) {
                         drop(reg);
                         let _ = overlay::start_voice_query(app);
+                    } else if reg.selection.as_ref() == Some(shortcut) {
+                        // Same reason as the screenshot arm: the dispatch
+                        // spawns a thread that outlives this handler, so
+                        // release the registry lock before handing off.
+                        drop(reg);
+                        selection::dispatch_selection(app.clone());
                     }
                 })
                 .build(),
@@ -184,6 +192,7 @@ pub fn run() {
             overlay::register_hotkey,
             overlay::register_screenshot_hotkey,
             overlay::register_voice_hotkey,
+            overlay::register_selection_hotkey,
             screenshot::screenshot_consumed,
             chat::db_load_chats,
             chat::db_load_messages,
@@ -339,7 +348,9 @@ pub fn run() {
             }
 
             // ── Global hotkeys ──────────────────────────────────────────────
-            // Two slots, both platform-gated for the L1/W1 MVP scope:
+            // Four slots, each platform-gated. The first two are spelled
+            // out here; voice dictation and selection actions carry their
+            // own notes at their registrations below.
             //
             //   • Overlay toggle: registered on macOS + Windows.
             //     - macOS:   ⌘⇧Space (Modifiers::SUPER | Modifiers::SHIFT).
@@ -428,6 +439,20 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let voice_opt: Option<Shortcut> = None;
 
+            // Selection-actions hotkey — macOS only, because the capture
+            // shells out to `pbpaste` (see `mod selection`). Defaults to
+            // ⌘⇧E, rebindable in Settings → Hotkeys. Like the voice
+            // default it shadows an app-local combo (⌘⇧E is Export or
+            // Reveal-in-sidebar in several apps) — the cost of a mnemonic
+            // default on a global shortcut.
+            #[cfg(target_os = "macos")]
+            let selection_opt: Option<Shortcut> = try_register(
+                Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyE),
+                "selection",
+            );
+            #[cfg(not(target_os = "macos"))]
+            let selection_opt: Option<Shortcut> = None;
+
             // Populate the registry so the handler can dispatch by
             // identity. Errors here would mean the OnceLock-init panicked,
             // which shouldn't happen — we log and proceed; the worst case
@@ -436,6 +461,7 @@ pub fn run() {
                 reg.overlay = overlay_toggle_opt;
                 reg.screenshot = screenshot_capture_opt;
                 reg.voice = voice_opt;
+                reg.selection = selection_opt;
             } else {
                 log_warn!("hotkey registry init failed");
             }

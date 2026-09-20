@@ -4,6 +4,8 @@ The **quick-query overlay** is a Spotlight-style panel that pops up over any app
 
 Press **⌘⇧Space** (default) anywhere on your Mac to open it. Press **Esc** or click elsewhere to dismiss.
 
+The same panel does double duty: press **⌘⇧E** instead and it opens on whatever text you've copied, ready to summarize, rewrite or explain it — see [selection actions](./selection-actions.md).
+
 <!-- TODO: screenshot of the overlay floating over another app -->
 
 ## Why it exists separately
@@ -52,5 +54,6 @@ Everything in the overlay is in-memory only. Closing it discards the conversatio
 ## Related pages
 
 - [Settings](./settings.md) — for the overlay hotkey and model
+- [Selection actions](./selection-actions.md) — the same panel, working on copied text
 - [Screenshot capture](./screenshots.md) — a sibling hotkey-driven feature
 - [Private chats](./private-chats.md) — for similarly ephemeral conversations in the main window

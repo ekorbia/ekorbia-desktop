@@ -24,6 +24,12 @@ const SCREENSHOT_HOTKEY_LS_KEY = "ekorbia.screenshot.hotkey";
 // listening. Default ⌘⇧V / Alt+Shift+V — must mirror the Rust setup() default.
 const VOICE_HOTKEY_DEFAULT = IS_WIN ? "Alt+Shift+KeyV" : "Super+Shift+KeyV";
 const VOICE_HOTKEY_LS_KEY = "ekorbia.voice.hotkey";
+// Fourth slot: selection actions. Opens the overlay on whatever text is on
+// the clipboard. Default ⌘⇧E — must mirror the Rust setup() default. The
+// overlay window reads this same key to name the hotkey in its empty-clipboard
+// hint, so both windows agree after a rebind.
+const SELECTION_HOTKEY_DEFAULT = "Super+Shift+KeyE";
+const SELECTION_HOTKEY_LS_KEY = "ekorbia.selection.hotkey";
 
 // Hotkey helpers (HOTKEY_MOD_CODES, formatHotkey, hotkeyFromEvent) live in
 // `ui/utils.js` so they're unit-testable under node:test. Re-published on
@@ -751,6 +757,18 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
     }
   });
   const [voiceHotkeyError, setVoiceHotkeyError] = useState(null);
+  // Selection-actions hotkey — same persistence pattern, own slot.
+  const [selectionHotkey, setSelectionHotkey] = useState(() => {
+    try {
+      return (
+        localStorage.getItem(SELECTION_HOTKEY_LS_KEY) ||
+        SELECTION_HOTKEY_DEFAULT
+      );
+    } catch {
+      return SELECTION_HOTKEY_DEFAULT;
+    }
+  });
+  const [selectionHotkeyError, setSelectionHotkeyError] = useState(null);
   const [activeTab, setActiveTab] = useState("general");
 
   useEffect(() => {
@@ -835,16 +853,38 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
     }
   };
 
+  // Apply a candidate selection-actions hotkey. Mirrors applyHotkey but
+  // routes through register_selection_hotkey so the selection slot stays
+  // independent.
+  const applySelectionHotkey = async (spec) => {
+    const invoke = getInvoke();
+    if (!invoke) {
+      setSelectionHotkeyError("Tauri runtime not available");
+      return;
+    }
+    try {
+      await invoke("register_selection_hotkey", { shortcut: spec });
+      setSelectionHotkey(spec);
+      setSelectionHotkeyError(null);
+      try {
+        localStorage.setItem(SELECTION_HOTKEY_LS_KEY, spec);
+      } catch {}
+    } catch (err) {
+      setSelectionHotkeyError(String(err));
+    }
+  };
+
   // Reset every applicable hotkey slot to its platform default. Each
   // apply* call re-registers with Rust and persists, so this is a true
   // reset, not just a UI value swap. Skips slots that don't apply on the
-  // current platform (Quick Query is hidden on Linux; dictation + screenshot
-  // are macOS-only).
+  // current platform (Quick Query is hidden on Linux; dictation, screenshot
+  // and selection actions are macOS-only).
   const resetHotkeys = () => {
     if (!IS_LINUX) applyHotkey(HOTKEY_DEFAULT);
     if (IS_MAC) {
       applyVoiceHotkey(VOICE_HOTKEY_DEFAULT);
       applyScreenshotHotkey(SCREENSHOT_HOTKEY_DEFAULT);
+      applySelectionHotkey(SELECTION_HOTKEY_DEFAULT);
     }
   };
 
@@ -1344,6 +1384,44 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                     }}
                   >
                     Opens the quick-query overlay and starts listening.
+                  </div>
+                </>
+              )}
+
+              {IS_MAC && (
+                <>
+                  <SectionLabel label="Selection actions" />
+                  <Row label="Hotkey">
+                    <HotkeyCapture
+                      value={selectionHotkey}
+                      onChange={applySelectionHotkey}
+                    />
+                  </Row>
+                  {selectionHotkeyError && (
+                    <div
+                      style={{
+                        marginTop: -2,
+                        padding: "4px 0",
+                        fontFamily: T.mono,
+                        fontSize: 10.5,
+                        color: T.red,
+                        textAlign: "right",
+                      }}
+                    >
+                      {selectionHotkeyError}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 10,
+                      color: T.fg3,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Copy text in any app, then press this to summarize,
+                    rewrite, fix or explain it — or type your own
+                    instruction for it.
                   </div>
                 </>
               )}

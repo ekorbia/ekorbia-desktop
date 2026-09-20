@@ -40,6 +40,8 @@ const {
   previewSnippet,
   paletteFuzzyScore,
   spaceAmbientTint,
+  SELECTION_ACTIONS,
+  buildSelectionRequest,
   extractMathSegments,
   restoreMathSegments,
 } = require("../utils.js");
@@ -1355,4 +1357,96 @@ test("spaceAmbientTint: unknown/purged color key → null, not a gray smudge", (
 
 test("spaceAmbientTint: missing palette → null", () => {
   assert.equal(spaceAmbientTint({ id: "s1", color: "purple" }, null, false), null);
+});
+
+// ── buildSelectionRequest (selection actions, ⌘⇧E) ─────────────────────────
+
+const FIX = SELECTION_ACTIONS.find((a) => a.id === "grammar");
+
+test("buildSelectionRequest: action instruction leads, text is the user turn", () => {
+  const req = buildSelectionRequest("i dont no", FIX, null);
+  assert.equal(req.messages.length, 2);
+  assert.equal(req.messages[0].role, "system");
+  assert.equal(req.messages[0].content, FIX.instruction);
+  assert.deepEqual(req.messages[1], { role: "user", content: "i dont no" });
+});
+
+test("buildSelectionRequest: attached persona precedes the action instruction", () => {
+  const req = buildSelectionRequest("some text", FIX, "You are a terse editor.");
+  assert.equal(
+    req.messages[0].content,
+    "You are a terse editor.\n\n" + FIX.instruction,
+  );
+});
+
+test("buildSelectionRequest: a typed instruction is its own label", () => {
+  const typed = "translate into German";
+  const req = buildSelectionRequest("hallo welt", { label: typed, instruction: typed }, null);
+  assert.equal(req.messages[0].content, typed);
+  assert.equal(req.question, "translate into German\n\nhallo welt");
+});
+
+test("buildSelectionRequest: question carries BOTH the verb and the text", () => {
+  // "Open as chat" persists this — an instruction with no text would read
+  // as a riddle when the chat is reopened later.
+  const req = buildSelectionRequest("i dont no", FIX, null);
+  assert.equal(req.question, "Fix grammar\n\ni dont no");
+});
+
+test("buildSelectionRequest: title fits the sidebar's 40-char budget", () => {
+  const req = buildSelectionRequest(
+    "The quarterly numbers arrived late on Friday and the deck still needs a pass",
+    FIX,
+    null,
+  );
+  assert.ok(req.title.length <= 40, `too long: ${req.title.length}`);
+  assert.ok(req.title.startsWith("Fix grammar: "));
+  assert.ok(req.title.endsWith("…"));
+});
+
+test("buildSelectionRequest: long typed instruction becomes the whole title", () => {
+  const typed = "translate this into German and keep the bullet formatting";
+  const req = buildSelectionRequest("hallo", { label: typed, instruction: typed }, null);
+  assert.ok(req.title.length <= 40, `too long: ${req.title.length}`);
+  assert.ok(!req.title.includes("hallo"));
+  assert.ok(req.title.endsWith("…"));
+});
+
+test("buildSelectionRequest: title collapses newlines out of the snippet", () => {
+  const req = buildSelectionRequest("line one\n\nline two", FIX, null);
+  assert.ok(!req.title.includes("\n"));
+});
+
+test("buildSelectionRequest: blank or instruction-less input → null", () => {
+  assert.equal(buildSelectionRequest("", FIX, null), null);
+  assert.equal(buildSelectionRequest("   \n ", FIX, null), null);
+  assert.equal(buildSelectionRequest(null, FIX, null), null);
+  assert.equal(buildSelectionRequest("text", { label: "Empty" }, null), null);
+  assert.equal(buildSelectionRequest("text", null, null), null);
+});
+
+test("buildSelectionRequest: selection text is trimmed before it is sent", () => {
+  const req = buildSelectionRequest("  padded  ", FIX, null);
+  assert.equal(req.messages[1].content, "padded");
+});
+
+test("SELECTION_ACTIONS: no verb that needs a parameter", () => {
+  // Translate means nothing without a target language and a chip can't ask
+  // for one — the typed instruction covers it. Pinned so it doesn't drift
+  // back in as "translate to English".
+  assert.deepEqual(
+    SELECTION_ACTIONS.map((a) => a.id),
+    ["summarize", "rewrite", "grammar", "explain"],
+  );
+});
+
+test("SELECTION_ACTIONS: every verb has a unique id, a label and an instruction", () => {
+  const ids = new Set();
+  for (const a of SELECTION_ACTIONS) {
+    assert.ok(a.id && !ids.has(a.id), `duplicate or missing id: ${a.id}`);
+    ids.add(a.id);
+    assert.ok(a.label && a.label.length <= 14, `unwieldy chip label: ${a.label}`);
+    assert.ok(a.instruction && a.instruction.length > 20);
+    assert.ok(a.hint, `no tooltip for ${a.id}`);
+  }
 });

@@ -1187,6 +1187,102 @@ function spaceAmbientTint(space, palette, isLight) {
   return palette[space.color] || null;
 }
 
+// ── Selection actions (quick-query overlay, ⌘⇧E) ───────────────────────────
+//
+// The built-in verbs offered on captured text. Each is a system instruction
+// applied to one user message containing the text itself.
+//
+// The instructions are written to produce a REPLACEMENT, not a commentary:
+// the result usually goes straight back into whatever the text came from, so
+// a preamble ("Sure! Here's the corrected text:") would have to be deleted by
+// hand every time.
+//
+// Only verbs that need no parameter belong here. Translate is deliberately
+// absent: it means nothing without a target language, and a chip can't ask
+// for one. "translate this into German" typed in the overlay input runs
+// against the same captured text and says which language in the same breath.
+const SELECTION_ACTIONS = [
+  {
+    id: "summarize",
+    label: "Summarize",
+    hint: "The short version of the copied text",
+    instruction:
+      "Summarize the text the user provides. Lead with the most important point, then add only the detail that changes what a reader would do about it. Be shorter than the original. Reply with the summary and nothing else.",
+  },
+  {
+    id: "rewrite",
+    label: "Rewrite",
+    hint: "Same meaning, clearer wording",
+    instruction:
+      "Rewrite the text the user provides so it reads clearly and naturally. Keep the author's meaning, facts, and approximate length; cut padding and fix awkward phrasing. Reply with the rewritten text and nothing else — no preamble and no notes about what you changed.",
+  },
+  {
+    id: "grammar",
+    label: "Fix grammar",
+    hint: "Spelling and punctuation only — wording untouched",
+    instruction:
+      "Correct the spelling, grammar, and punctuation of the text the user provides. Change nothing else: keep the wording, tone, structure, and formatting exactly as written. Reply with the corrected text and nothing else.",
+  },
+  {
+    id: "explain",
+    label: "Explain",
+    hint: "What it means, in plain language",
+    instruction:
+      "Explain the text the user provides in plain language: what it means and what a reader should take from it. Define any jargon in passing. Keep it brief — a short paragraph, or a few bullets when the text has distinct parts.",
+  },
+];
+
+// Build everything one selection-action run needs, or null when there's
+// nothing to act on (no text, or an action carrying no instruction).
+//
+// `action` is either a SELECTION_ACTIONS entry or a one-off
+// `{label, instruction}` built from whatever the user typed in the overlay
+// input — the same shape as far as this is concerned.
+//
+// `promptBody` is the library prompt attached through the overlay's
+// "+ prompt" control, if any — the one way library prompts take part here.
+// It leads the system message so the action instruction — the more specific,
+// more recent intent — is the last thing the model reads.
+//
+// Returns:
+//   messages  — what goes to the model
+//   question  — the user message "Open as chat" persists, so the chat still
+//               makes sense when it's reopened a week later (the instruction
+//               alone, with no text, would read as a riddle)
+//   title     — chat title for the same, pre-trimmed to the 40 chars the
+//               sidebar shows
+function buildSelectionRequest(selectionText, action, promptBody) {
+  const text = String(selectionText == null ? "" : selectionText).trim();
+  if (!text) return null;
+  const raw = action || {};
+  const instruction = String(raw.instruction || "").trim();
+  if (!instruction) return null;
+  const label = String(raw.label || "").trim();
+
+  const system = [String(promptBody || "").trim(), instruction]
+    .filter(Boolean)
+    .join("\n\n");
+  const messages = [
+    { role: "system", content: system },
+    { role: "user", content: text },
+  ];
+
+  const heading = label || instruction;
+  const flat = text.replace(/\s+/g, " ").trim();
+  // 40 = the sidebar's title budget; 2 = the ": " joining label and snippet.
+  const room = 40 - heading.length - 2;
+  let title;
+  if (room < 8) {
+    // A long typed instruction is its own best title — no room for a
+    // snippet of the text beside it.
+    title = heading.length > 40 ? heading.slice(0, 39) + "…" : heading;
+  } else {
+    const snippet = flat.length > room ? flat.slice(0, room - 1) + "…" : flat;
+    title = `${heading}: ${snippet}`;
+  }
+  return { messages, question: `${heading}\n\n${text}`, title };
+}
+
 // ── Publish on window (browser) and module.exports (Node) ──────────────────
 //
 // `typeof window` lets the same file work as both a global-scope script
@@ -1242,6 +1338,8 @@ if (typeof window !== "undefined") {
   window.previewSnippet = previewSnippet;
   window.paletteFuzzyScore = paletteFuzzyScore;
   window.spaceAmbientTint = spaceAmbientTint;
+  window.SELECTION_ACTIONS = SELECTION_ACTIONS;
+  window.buildSelectionRequest = buildSelectionRequest;
   window.extractMathSegments = extractMathSegments;
   window.restoreMathSegments = restoreMathSegments;
 }
@@ -1458,6 +1556,8 @@ if (typeof module !== "undefined" && module.exports) {
     previewSnippet,
     paletteFuzzyScore,
     spaceAmbientTint,
+    SELECTION_ACTIONS,
+    buildSelectionRequest,
     extractMathSegments,
     restoreMathSegments,
   };
