@@ -36,6 +36,18 @@ use tauri::{Emitter, Manager};
 #[cfg(target_os = "macos")]
 const PBPASTE_BIN: &str = "/usr/bin/pbpaste";
 
+// A note on the `cfg_attr(not(target_os = "macos"), allow(dead_code))`
+// markers below: the only non-test caller of the clamp and its payload is the
+// macOS-gated `dispatch_selection`, so on Windows and Linux the plain lib
+// build sees all three as dead code — and CI builds every platform with
+// `-D warnings`. They are annotated rather than cfg-gated away so the unit
+// tests below stay platform-neutral and keep running on every CI leg; the
+// allow is scoped to non-macOS so the macOS build still catches REAL dead
+// code. Same arrangement, same reasoning, as the unix-only spawn helpers in
+// `engine/mod.rs`. A local macOS `cargo clippy` CANNOT see this class of
+// failure — anything reachable only from a `#[cfg(target_os = "macos")]` item
+// needs one of these markers.
+
 /// Upper bound on the characters handed to the overlay.
 ///
 /// The bundled engine pins its chat context to 8192 tokens (see
@@ -43,6 +55,7 @@ const PBPASTE_BIN: &str = "/usr/bin/pbpaste";
 /// is roughly 3k tokens — a large selection still leaves the model room to
 /// answer, and the request fails in the UI rather than being silently
 /// truncated by the server. Selections this long are rare in practice.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // read only via clamp_selection
 pub(crate) const MAX_SELECTION_CHARS: usize = 12_000;
 
 /// Payload for the `selection:captured` event.
@@ -52,6 +65,7 @@ pub(crate) const MAX_SELECTION_CHARS: usize = 12_000;
 /// therefore a different length. The overlay reports the original count so
 /// "8,000 of 41,312 characters" stays truthful.
 #[derive(Clone, serde::Serialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // built only by clamp_selection
 pub(crate) struct SelectionPayload {
     pub text: String,
     pub chars: usize,
@@ -70,6 +84,7 @@ pub(crate) struct SelectionPayload {
 /// Returns `None` for a clipboard holding nothing but whitespace (or no text
 /// at all), which the caller reports as an empty capture rather than sending
 /// a blank request to a model.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // called only by the macOS dispatch
 pub(crate) fn clamp_selection(raw: &str) -> Option<SelectionPayload> {
     let text = raw.trim();
     if text.is_empty() {
