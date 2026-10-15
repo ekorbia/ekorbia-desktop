@@ -33,12 +33,6 @@ test-results/
 playwright-report/
 playwright/.cache/
 
-# ── mdBook (user docs) ────────────────────────────────────────
-# Markdown sources in docs/src/ + theme overrides in docs/theme/ ARE
-# committed. The rendered HTML in docs/book/ is built fresh from
-# `./scripts/build-docs.sh` before manual upload to the website.
-docs/book/
-
 # ── macOS ─────────────────────────────────────────────────────
 .DS_Store
 .AppleDouble

@@ -38,7 +38,7 @@ red suite.
 | any file under `src-tauri/src/` | `cd src-tauri && cargo test --lib` |
 | any file under `ui/` (except prose/CSS-only) | `./scripts/run-ui-tests.sh` |
 | both, or unsure | `./scripts/run-all-tests.sh` |
-| only `*.md` / `docs/` / other prose | no test run required |
+| only `*.md` / other prose | no test run required |
 
 Additionally, every Rust PR must pass clippy with warnings as errors:
 

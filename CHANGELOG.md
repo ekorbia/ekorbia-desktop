@@ -40,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The message box grows as you type**, up to 40% of the window, then
   scrolls.
 
+### Removed
+
+- **The user guide** (`docs/`). The README and this changelog cover what's
+  new.
+
 ### Fixed
 
 - **Long replies no longer stop after two minutes** with "error decoding
