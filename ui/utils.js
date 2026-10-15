@@ -1283,6 +1283,120 @@ function buildSelectionRequest(selectionText, action, promptBody) {
   return { messages, question: `${heading}\n\n${text}`, title };
 }
 
+// ── Context-window fit ─────────────────────────────────────────────────────
+//
+// A model's context window holds the prompt AND the reply. Two consumers:
+//   - the send pre-flight in main.jsx (bundled engine only), which counts a
+//     request exactly before it enters the chat and refuses one that would
+//     leave no room for an answer;
+//   - the error paths (chat + overlay), which turn a server's
+//     "too many tokens" rejection into the same plain-language message
+//     instead of raw JSON.
+
+// Tokens the pre-flight keeps free for the model's reply. A request that
+// fits the window but leaves less than this would get a reply cut off
+// almost immediately, so it is refused up front.
+const CONTEXT_REPLY_RESERVE = 1024;
+
+// Characters of text a chat request carries: message contents (string or
+// OpenAI-style text parts), assistant tool calls, and tool schemas. Images
+// are deliberately not counted — their base64 says nothing about tokens.
+function requestTextChars(messages, tools) {
+  let n = 0;
+  for (const m of messages || []) {
+    if (!m) continue;
+    const c = m.content;
+    if (typeof c === "string") n += c.length;
+    else if (Array.isArray(c)) {
+      for (const part of c) if (part && typeof part.text === "string") n += part.text.length;
+    }
+    if (m.tool_calls) n += JSON.stringify(m.tool_calls).length;
+  }
+  if (Array.isArray(tools) && tools.length) n += JSON.stringify(tools).length;
+  return n;
+}
+
+// Does a request of `chars` characters need an exact count? Skipped only
+// when it provably fits: practically every tokenizer spends at least one
+// character per token, so fewer characters than the room left (window minus
+// the reply reserve) means fewer tokens too. Text that breaks that rule
+// (long runs of emoji) slips past and is caught by the server's own check.
+// An unknown window always counts.
+function needsContextCheck(chars, windowTokens, reserve = CONTEXT_REPLY_RESERVE) {
+  if (!(windowTokens > 0)) return true;
+  return chars >= windowTokens - reserve;
+}
+
+// The user-facing explanation, shared by the pre-flight and the error
+// paths. `hasHistory` switches the wording: with earlier turns in the
+// request, the conversation as a whole is what's too big, and a new chat
+// is the fix; a lone message can only be shortened or split.
+function contextOverflowText({ promptTokens, windowTokens, hasHistory = false }) {
+  const fix = hasHistory
+    ? "Start a new chat, or shorten your message."
+    : "Shorten it, or split it into smaller parts.";
+  const what = hasHistory ? "This conversation" : "This message";
+  if (!(promptTokens > 0) || !(windowTokens > 0)) {
+    return `${what} is too long for the model's context window. ${fix}`;
+  }
+  const fmt = (n) => Number(n).toLocaleString("en-US");
+  const lead = promptTokens >= windowTokens
+    ? `${what} is ${fmt(promptTokens)} tokens, and the model's context window holds ${fmt(windowTokens)}.`
+    : `${what} is ${fmt(promptTokens)} tokens, which leaves too little of the model's ${fmt(windowTokens)}-token context window for a reply.`;
+  return `${lead} ${fix}`;
+}
+
+// The send pre-flight's decision: resolves null to SEND, or the refusal
+// text to show instead. Bundled engine only — the one backend whose window
+// Ekorbia sets and whose tokenizer it can reach (Ollama silently truncates
+// to its own window; a BYO server's is unknowable). Best-effort by design:
+// requests too small to overflow skip the count, and a null count (model
+// not loaded yet — counting never triggers a load) or any failure means
+// send; the server's own check is the backstop, and describeContextOverflow
+// turns its rejection into this same message. `invoke` is injected so this
+// stays testable without Tauri.
+async function contextPreflight({ invoke, backendKind, windowTokens, body, hasHistory = false }) {
+  if (backendKind !== "engine" || !body || typeof invoke !== "function") return null;
+  if (!needsContextCheck(requestTextChars(body.messages, body.tools), windowTokens)) return null;
+  let fit = null;
+  try {
+    fit = await invoke("llm_count_prompt_tokens", { body });
+  } catch (_) {
+    return null;
+  }
+  if (!fit || !(fit.promptTokens > 0) || !(fit.window > 0)) return null;
+  if (fit.promptTokens + CONTEXT_REPLY_RESERVE <= fit.window) return null;
+  return contextOverflowText({ promptTokens: fit.promptTokens, windowTokens: fit.window, hasHistory });
+}
+
+// Recognize a server's "prompt too long" rejection in an error string and
+// explain it. Returns null for any other error, so callers keep showing
+// those verbatim. Known shapes:
+//   - llama-server (the bundled engine; LM Studio and other llama.cpp
+//     servers): {"type":"exceed_context_size_error","n_prompt_tokens":…,
+//     "n_ctx":…} with "request (N tokens) exceeds the available context
+//     size (M tokens)" as its message;
+//   - OpenAI / vLLM: "maximum context length is M tokens … requested N
+//     tokens" (or "resulted in N tokens"), code context_length_exceeded.
+function describeContextOverflow(errText, { hasHistory = false } = {}) {
+  const s = String(errText || "");
+  const num = (re) => {
+    const m = s.match(re);
+    return m ? Number(m[1]) : null;
+  };
+  if (/exceed_context_size_error|exceeds the available context size/i.test(s)) {
+    const promptTokens = num(/"n_prompt_tokens"\s*:\s*(\d+)/) ?? num(/request \((\d+) tokens\)/i);
+    const windowTokens = num(/"n_ctx"\s*:\s*(\d+)/) ?? num(/available context size \((\d+) tokens\)/i);
+    return contextOverflowText({ promptTokens, windowTokens, hasHistory });
+  }
+  if (/context_length_exceeded|maximum context length is/i.test(s)) {
+    const windowTokens = num(/maximum context length is (\d+) tokens/i);
+    const promptTokens = num(/(?:requested|resulted in) (\d+) tokens/i);
+    return contextOverflowText({ promptTokens, windowTokens, hasHistory });
+  }
+  return null;
+}
+
 // ── Publish on window (browser) and module.exports (Node) ──────────────────
 //
 // `typeof window` lets the same file work as both a global-scope script
@@ -1340,6 +1454,12 @@ if (typeof window !== "undefined") {
   window.spaceAmbientTint = spaceAmbientTint;
   window.SELECTION_ACTIONS = SELECTION_ACTIONS;
   window.buildSelectionRequest = buildSelectionRequest;
+  window.CONTEXT_REPLY_RESERVE = CONTEXT_REPLY_RESERVE;
+  window.requestTextChars = requestTextChars;
+  window.needsContextCheck = needsContextCheck;
+  window.contextOverflowText = contextOverflowText;
+  window.contextPreflight = contextPreflight;
+  window.describeContextOverflow = describeContextOverflow;
   window.extractMathSegments = extractMathSegments;
   window.restoreMathSegments = restoreMathSegments;
 }
@@ -1558,6 +1678,12 @@ if (typeof module !== "undefined" && module.exports) {
     spaceAmbientTint,
     SELECTION_ACTIONS,
     buildSelectionRequest,
+    CONTEXT_REPLY_RESERVE,
+    requestTextChars,
+    needsContextCheck,
+    contextOverflowText,
+    contextPreflight,
+    describeContextOverflow,
     extractMathSegments,
     restoreMathSegments,
   };

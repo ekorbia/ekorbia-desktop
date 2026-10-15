@@ -603,7 +603,12 @@ function QuickQuery() {
       // it as-is instead of blaming Ollama.
       if (!acc) {
         const msg = String(e || "");
-        if (backendKind !== 'ollama') {
+        // "Prompt too long" from any backend → the shared plain-language
+        // explanation (see describeContextOverflow in utils.js).
+        const overflow = describeContextOverflow(msg);
+        if (overflow) {
+          setResponse(`⚠️ ${overflow}`);
+        } else if (backendKind !== 'ollama') {
           setResponse(msg ? `⚠️ ${msg}` : '⚠️ The model backend reported an error. Check Settings → Backend in the main window.');
         } else if (/40\d|not found|no such model|try pulling|unknown model/i.test(msg)) {
           setResponse(

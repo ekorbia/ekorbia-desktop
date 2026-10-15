@@ -47,6 +47,34 @@ function ExportMenuItem({ label, onClick }) {
   );
 }
 
+// Keep a scroller pinned to its bottom when it gets SHORTER — e.g. the
+// composer below it grows as the user types. A shrinking scroller keeps its
+// scrollTop, so without this the newest lines slide out of view mid-typing.
+// Only when the user was already at the bottom: someone who scrolled up to
+// read keeps their place. Content growth (streaming) doesn't resize the
+// scroller, so this never fights the existing scroll-on-new-content effects.
+// A plain function so compare-chat.jsx (loaded after this file) can use it.
+function useStickToBottomOnResize(ref) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const atBottom = () => el.scrollHeight - el.scrollTop - el.clientHeight <= 8;
+    let pinned = atBottom();
+    const onScroll = () => {
+      pinned = atBottom();
+    };
+    const ro = new ResizeObserver(() => {
+      if (pinned) el.scrollTop = el.scrollHeight;
+    });
+    el.addEventListener("scroll", onScroll, { passive: true });
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
+  }, [ref]);
+}
+
 // ─── Chat Pane ──────────────────────────────────────────────
 function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, onContinue, space, showDetails = false, onStarter, engineCtx = null }) {
   const scrollerRef = useRef(null);
@@ -55,6 +83,7 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
     if (scrollerRef.current)
       scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
   }, [chat.messages.length, isStreaming, lastContent]);
+  useStickToBottomOnResize(scrollerRef);
 
   // ── Export menu state (Phase 1b) ──────────────────────────────────────────
   // Kebab button at the right of the chat title opens a small dropdown
@@ -466,6 +495,7 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
       {/* Messages */}
       <div
         ref={scrollerRef}
+        data-chat-scroller
         style={{
           flex: 1,
           overflowY: "auto",
@@ -2059,6 +2089,36 @@ function Composer({
   const [pickerOpen, setPickerOpen] = useState(false);
   const taRef = useRef(null);
 
+  // Auto-grow: the text box fits its content — soft-wrapped lines included,
+  // which a newline count would miss — up to its CSS max-height (40% of the
+  // window), then scrolls inside. Reset to `auto` first so the measurement
+  // can shrink as well as grow. A layout effect so the new height lands
+  // before paint (no one-frame jump). Every way text changes — typing,
+  // paste, dictation, seeding, the restore after a refused send — goes
+  // through `text`, so this one effect covers them all.
+  const fitComposerHeight = React.useCallback(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+  }, []);
+  React.useLayoutEffect(fitComposerHeight, [text, fitComposerHeight]);
+  // A width change re-wraps the same text (window resize, sidebar toggle),
+  // so measure again. Our own height writes also trigger the observer —
+  // the width guard keeps that from looping.
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta || typeof ResizeObserver === "undefined") return undefined;
+    let lastWidth = ta.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (ta.clientWidth === lastWidth) return;
+      lastWidth = ta.clientWidth;
+      fitComposerHeight();
+    });
+    ro.observe(ta);
+    return () => ro.disconnect();
+  }, [fitComposerHeight]);
+
   // ── Prompt slash-command picker state ───────────────────────────────────
   // `slashPos` is the index of the `/` that opened the picker. Used to
   //   (a) derive the live query as the text between the `/` and the next
@@ -2234,10 +2294,18 @@ function Composer({
     }
   }, [focusSignal]);
 
+  // onSend may resolve `false`, meaning "not sent": main.jsx's context
+  // pre-flight refused a message too long for the model's window (and
+  // toasted why). Put the text back so nothing typed is lost — unless the
+  // user has already started typing something new in the meantime.
+  const sendText = async (t) => {
+    setText("");
+    const result = await onSend(t);
+    if (result === false) setText((cur) => (cur ? cur : t));
+  };
   const handleSend = () => {
     if (!text.trim() || isStreaming) return;
-    onSend(text);
-    setText("");
+    sendText(text);
   };
   const onKey = (e) => {
     // ── Slash-picker navigation has priority over other key handling ──
@@ -2648,6 +2716,7 @@ function Composer({
             onKeyDown={onKey}
             placeholder={placeholder}
             rows={2}
+            data-composer-input
             style={{
               width: "100%",
               resize: "none",
@@ -2657,8 +2726,15 @@ function Composer({
               fontFamily: T.sans,
               fontSize: 14,
               lineHeight: 1.55,
+              // border-box so the height fitComposerHeight writes (the
+              // content's scrollHeight, padding included) is the whole box.
+              boxSizing: "border-box",
               minHeight: 44,
-              maxHeight: 200,
+              // Auto-grow cap: past 40% of the window the box scrolls inside,
+              // so the conversation stays in view. CSS clamps the measured
+              // height, so a window resize re-caps with no JS.
+              maxHeight: "40vh",
+              overflowY: "auto",
             }}
           />
           <div
@@ -2723,8 +2799,7 @@ function Composer({
                 // Auto-send after dictation (Settings → Voice). Falls back to a
                 // plain insert if there's nothing to send or a reply is streaming.
                 if (opts && opts.submit && next.trim() && !isStreaming) {
-                  onSend(next);
-                  setText("");
+                  sendText(next);
                   return;
                 }
                 setText(next);

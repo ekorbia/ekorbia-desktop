@@ -42,6 +42,12 @@ const {
   spaceAmbientTint,
   SELECTION_ACTIONS,
   buildSelectionRequest,
+  CONTEXT_REPLY_RESERVE,
+  requestTextChars,
+  needsContextCheck,
+  contextOverflowText,
+  contextPreflight,
+  describeContextOverflow,
   extractMathSegments,
   restoreMathSegments,
 } = require("../utils.js");
@@ -1449,4 +1455,151 @@ test("SELECTION_ACTIONS: every verb has a unique id, a label and an instruction"
     assert.ok(a.instruction && a.instruction.length > 20);
     assert.ok(a.hint, `no tooltip for ${a.id}`);
   }
+});
+
+// ── Context-window fit (send pre-flight + overflow errors) ──────────────────
+
+// The exact error body a user hit pasting the Tessera4X mod brief, as the
+// Rust adapter formats it.
+const LLAMA_OVERFLOW =
+  'Endpoint /v1/chat/completions returned 400 Bad Request: {"error":{"code":400,' +
+  '"message":"request (8209 tokens) exceeds the available context size (8192 tokens), ' +
+  'try increasing it","type":"exceed_context_size_error","n_prompt_tokens":8209,"n_ctx":8192}}';
+
+test("requestTextChars: counts string and text-part contents, tool calls, tool schemas", () => {
+  const msgs = [
+    { role: "system", content: "abcd" },
+    { role: "user", content: [{ type: "text", text: "xyz" }, { type: "image_url", image_url: { url: "data:…" } }] },
+    { role: "assistant", content: "", tool_calls: [{ function: { name: "w" } }] },
+    { role: "user", content: "hi", images: ["A".repeat(5000)] },
+  ];
+  const calls = JSON.stringify([{ function: { name: "w" } }]).length;
+  assert.strictEqual(requestTextChars(msgs), 4 + 3 + calls + 2, "images never count");
+  const tools = [{ type: "function", function: { name: "write_file" } }];
+  assert.strictEqual(requestTextChars(msgs, tools), 4 + 3 + calls + 2 + JSON.stringify(tools).length);
+  assert.strictEqual(requestTextChars(null), 0);
+  assert.strictEqual(requestTextChars([null, { role: "user" }]), 0);
+});
+
+test("needsContextCheck: skips only requests that provably fit", () => {
+  const room = 32768 - CONTEXT_REPLY_RESERVE;
+  assert.strictEqual(needsContextCheck(room - 1, 32768), false, "fewer chars than room left");
+  assert.strictEqual(needsContextCheck(room, 32768), true);
+  // The Tessera brief: ~33K characters must be counted against a 32K window.
+  assert.strictEqual(needsContextCheck(32889, 32768), true);
+  assert.strictEqual(needsContextCheck(10, null), true, "unknown window always counts");
+  assert.strictEqual(needsContextCheck(10, 0), true);
+  assert.strictEqual(needsContextCheck(500, 1000, 600), true, "custom reserve");
+});
+
+test("contextOverflowText: states both sizes, wording follows the history", () => {
+  const over = contextOverflowText({ promptTokens: 9842, windowTokens: 8192 });
+  assert.strictEqual(
+    over,
+    "This message is 9,842 tokens, and the model's context window holds 8,192. " +
+      "Shorten it, or split it into smaller parts.",
+  );
+  const tight = contextOverflowText({ promptTokens: 32000, windowTokens: 32768, hasHistory: true });
+  assert.match(tight, /^This conversation is 32,000 tokens, which leaves too little/);
+  assert.match(tight, /32,768-token context window for a reply\./);
+  assert.match(tight, /Start a new chat, or shorten your message\.$/);
+  // No numbers known → still a plain sentence, never "NaN".
+  const vague = contextOverflowText({ promptTokens: null, windowTokens: undefined });
+  assert.strictEqual(vague, "This message is too long for the model's context window. Shorten it, or split it into smaller parts.");
+});
+
+test("describeContextOverflow: llama-server's exceed_context_size_error", () => {
+  assert.strictEqual(
+    describeContextOverflow(LLAMA_OVERFLOW),
+    "This message is 8,209 tokens, and the model's context window holds 8,192. " +
+      "Shorten it, or split it into smaller parts.",
+  );
+  assert.match(describeContextOverflow(LLAMA_OVERFLOW, { hasHistory: true }), /^This conversation is 8,209/);
+  // Message text alone (JSON fields clipped away) still yields the numbers.
+  const bare = "request (40000 tokens) exceeds the available context size (32768 tokens), try increasing it";
+  assert.match(describeContextOverflow(bare), /40,000 tokens, and the model's context window holds 32,768/);
+});
+
+test("describeContextOverflow: OpenAI / vLLM wording", () => {
+  const vllm =
+    "Endpoint /v1/chat/completions returned 400 Bad Request: {\"object\":\"error\",\"message\":" +
+    "\"This model's maximum context length is 4096 tokens. However, you requested 5000 tokens " +
+    "(4500 in the messages, 500 in the completion).\"}";
+  assert.match(describeContextOverflow(vllm), /5,000 tokens, and the model's context window holds 4,096/);
+  const openai = '{"error":{"code":"context_length_exceeded","message":"too long"}}';
+  assert.match(describeContextOverflow(openai), /^This message is too long for the model's context window\./);
+});
+
+test("describeContextOverflow: everything else stays verbatim (null)", () => {
+  for (const e of [
+    "",
+    null,
+    "Endpoint /v1/chat/completions request failed: error sending request",
+    "model file not found: gemma.gguf",
+    'Endpoint /v1/chat/completions returned 500: {"error":{"message":"context shift is disabled"}}',
+  ]) {
+    assert.strictEqual(describeContextOverflow(e), null, String(e));
+  }
+});
+
+// contextPreflight: a fake `invoke` stands in for the engine's counter.
+function fakeInvoke(result) {
+  const calls = [];
+  const fn = async (cmd, args) => {
+    calls.push({ cmd, args });
+    if (result instanceof Error) throw result;
+    return typeof result === "function" ? result(args) : result;
+  };
+  fn.calls = calls;
+  return fn;
+}
+const BIG = { model: "gemma4-12b", messages: [{ role: "user", content: "x".repeat(40000) }] };
+const SMALL = { model: "gemma4-12b", messages: [{ role: "user", content: "hi" }] };
+
+test("contextPreflight: refuses a request that leaves no room for a reply", async () => {
+  const invoke = fakeInvoke({ promptTokens: 32000, window: 32768 });
+  const out = await contextPreflight({ invoke, backendKind: "engine", windowTokens: 32768, body: BIG });
+  assert.match(out, /^This message is 32,000 tokens, which leaves too little/);
+  assert.deepStrictEqual(invoke.calls.map((c) => c.cmd), ["llm_count_prompt_tokens"]);
+  assert.strictEqual(invoke.calls[0].args.body, BIG, "counts exactly what will be sent");
+  const over = await contextPreflight({
+    invoke: fakeInvoke({ promptTokens: 40000, window: 32768 }),
+    backendKind: "engine", windowTokens: 32768, body: BIG, hasHistory: true,
+  });
+  assert.match(over, /^This conversation is 40,000 tokens, and the model's context window holds 32,768\./);
+});
+
+test("contextPreflight: sends when the count leaves room for a reply", async () => {
+  const fits = 32768 - CONTEXT_REPLY_RESERVE;
+  const out = await contextPreflight({
+    invoke: fakeInvoke({ promptTokens: fits, window: 32768 }),
+    backendKind: "engine", windowTokens: 32768, body: BIG,
+  });
+  assert.strictEqual(out, null, "exactly the reserve left is enough");
+});
+
+test("contextPreflight: never counts off the engine or for small requests", async () => {
+  for (const backendKind of ["ollama", "openai"]) {
+    const invoke = fakeInvoke({ promptTokens: 99999, window: 1 });
+    assert.strictEqual(await contextPreflight({ invoke, backendKind, windowTokens: 32768, body: BIG }), null);
+    assert.strictEqual(invoke.calls.length, 0, backendKind);
+  }
+  const invoke = fakeInvoke({ promptTokens: 99999, window: 1 });
+  assert.strictEqual(await contextPreflight({ invoke, backendKind: "engine", windowTokens: 32768, body: SMALL }), null);
+  assert.strictEqual(invoke.calls.length, 0, "a short message costs no round trip");
+  // Unknown window (status call failed): count even small requests.
+  const unknown = fakeInvoke({ promptTokens: 5, window: 32768 });
+  await contextPreflight({ invoke: unknown, backendKind: "engine", windowTokens: null, body: SMALL });
+  assert.strictEqual(unknown.calls.length, 1);
+});
+
+test("contextPreflight: any miss or failure means send", async () => {
+  for (const result of [null, undefined, new Error("tokenize failed"), {}, { promptTokens: 0, window: 32768 }]) {
+    const out = await contextPreflight({
+      invoke: fakeInvoke(result), backendKind: "engine", windowTokens: 32768, body: BIG,
+    });
+    assert.strictEqual(out, null, String(result && (result.message || JSON.stringify(result))));
+  }
+  assert.strictEqual(await contextPreflight({ backendKind: "engine", windowTokens: 32768, body: BIG }), null, "no invoke");
+  assert.strictEqual(await contextPreflight({ invoke: fakeInvoke({}), backendKind: "engine", windowTokens: 32768 }), null, "no body");
 });

@@ -22,6 +22,16 @@ Click **Continue** and the model picks up where it left off, as a new reply in t
 
 The chip only appears on the newest reply — once you've continued (or sent anything else), it retires.
 
+## When a message is too long for the model
+
+A model's memory for one exchange — its **context window** — holds your message, the earlier conversation, and the reply, all at once. With the bundled engine that's about 32,000 tokens, roughly 100,000 characters of ordinary English.
+
+If a message won't fit with room left for a reply, Ekorbia doesn't send it. A note explains how big the message is next to what the model can hold, and your text stays in the composer so you can shorten it or split it up. If the conversation as a whole has grown too long, start a new chat.
+
+On other backends, Ekorbia can't check ahead of time, so the server refuses the message instead. The reply then shows the same plain-language explanation.
+
+> **Very long messages take a while to start.** The model reads the whole message before it writes anything. A paste of several thousand words can take most of a minute on many Macs. Follow-up messages are usually quick, because the model keeps what it has already read.
+
 ## What happens behind the scenes
 
 Ekorbia streams tokens from the model as they're produced. Each chunk is rendered into the UI as soon as it arrives, with Markdown re-parsed on every chunk so headings, lists, and code blocks render correctly while the reply is still being written.

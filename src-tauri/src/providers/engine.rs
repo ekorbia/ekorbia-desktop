@@ -24,7 +24,7 @@
 //! Model ids are GGUF file stems in `<app_data>/models` (hand-placed in
 //! Phase 2; the Phase 3 catalog downloads into the same directory).
 
-use crate::llm::StreamEvent;
+use crate::llm::{PromptFit, StreamEvent};
 use crate::providers::openai_compat::{self, EndpointCfg};
 use serde_json::{json, Value};
 
@@ -68,6 +68,25 @@ pub(crate) async fn chat_stream(
     // Lease held across the whole stream — the refcount is what makes
     // "never evict mid-stream" true.
     openai_compat::chat_stream(&cfg_for(&lease), request_id, body, on_chunk).await
+}
+
+/// Exact prompt-token count against the chat window, for the send
+/// pre-flight. `None` unless `model` is already resident: this must never
+/// spawn or swap (see `Supervisor::lease_if_resident`). The lease is held
+/// across both HTTP calls so the process can't be reaped mid-count.
+pub(crate) async fn count_prompt_tokens(body: Value) -> Result<Option<PromptFit>, String> {
+    let model = model_from_body(&body)?;
+    let Some(lease) = crate::engine::supervisor::global()
+        .lease_if_resident(crate::engine::SlotKind::Chat, &model)
+    else {
+        return Ok(None);
+    };
+    let prompt_tokens =
+        openai_compat::llama_server_count_prompt_tokens(&cfg_for(&lease), &body).await?;
+    Ok(Some(PromptFit {
+        prompt_tokens,
+        window: crate::engine::CHAT_CTX,
+    }))
 }
 
 /// Non-streaming chat (watch summaries). Cold-start latency (model

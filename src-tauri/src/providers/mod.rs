@@ -18,6 +18,11 @@
 //! `ollama_pull_cancel` flip it, and the running loop observes it at the
 //! next chunk boundary. Request-id namespaces keep the spaces from
 //! colliding (chat = assistant message id, pulls = `pull:<model>:<nonce>`).
+//!
+//! It also owns the **streaming HTTP client** (`stream_client`) every
+//! adapter's `chat_stream` sends through: no total timeout, a per-read
+//! stall timeout instead — see its docs for why the adapters' own clients
+//! must never carry a chat stream.
 
 pub(crate) mod engine;
 pub(crate) mod ollama;
@@ -62,6 +67,44 @@ pub(crate) fn register_cancel(id: &str) -> CancelToken {
     }
 }
 
+// ── Streaming HTTP client ──────────────────────────────────────────────────
+
+/// Longest a streaming server may go SILENT before the stream is abandoned.
+/// It bounds the wait for the first byte too, which includes the whole
+/// prompt read: a full 32K-token window on a slower Mac can take several
+/// minutes before the first token, so this is a stall detector, not a
+/// latency budget.
+const STREAM_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const STREAM_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+static STREAM_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// HTTP client for streaming chat — every adapter's `chat_stream` uses it.
+///
+/// Deliberately NO total timeout. reqwest's `timeout()` spans the whole
+/// exchange INCLUDING the response body, so the 120 s cap on the adapters'
+/// general-purpose clients cut off any reply that took longer to read and
+/// write — and reqwest reports a timeout that fires mid-body as the opaque
+/// "error decoding response body". The 32K engine window made that common:
+/// the ~9.8K-token Tessera4X mod brief takes ~40 s to read on an M1 Max
+/// before the first token, and a full themed mod reply ran past the cap.
+/// A per-read timeout instead resets on every chunk: a reply may stream for
+/// as long as it takes, while a server that stops sending is still caught.
+/// (Ollama pulls solved the same problem with a 24 h per-request override;
+/// chat wants stall detection, which a total timeout can't give.)
+pub(crate) fn stream_client() -> &'static reqwest::Client {
+    STREAM_CLIENT.get_or_init(|| build_stream_client(STREAM_READ_TIMEOUT))
+}
+
+fn build_stream_client(read_timeout: std::time::Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(STREAM_CONNECT_TIMEOUT)
+        .read_timeout(read_timeout)
+        .build()
+        // Builder errors only on TLS init; a bare client beats a panic.
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 /// Flip the cancel flag for `request_id`. The running stream picks it up
 /// at the next chunk boundary and exits cleanly. Safe for unknown ids —
 /// the lookup just no-ops.
@@ -104,6 +147,93 @@ mod tests {
     #[test]
     fn cancel_unknown_id_is_no_op() {
         cancel("never-registered");
+    }
+
+    // ── stream client timeouts ──────────────────────────────────────────
+
+    /// One-connection SSE server: sends `chunks` data lines `gap` apart,
+    /// then (optionally) goes silent for `stall` before closing.
+    fn slow_sse_server(
+        chunks: usize,
+        gap: std::time::Duration,
+        stall: Option<std::time::Duration>,
+    ) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/stream", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut r = BufReader::new(s.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let _ = s.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            );
+            for i in 0..chunks {
+                std::thread::sleep(gap);
+                if s.write_all(format!("data: {i}\n\n").as_bytes()).is_err() {
+                    return;
+                }
+                let _ = s.flush();
+            }
+            if let Some(d) = stall {
+                std::thread::sleep(d);
+            }
+        });
+        url
+    }
+
+    async fn drain(client: &reqwest::Client, url: &str) -> Result<usize, reqwest::Error> {
+        let mut resp = client.get(url).send().await?;
+        let mut n = 0;
+        while let Some(b) = resp.chunk().await? {
+            n += b.len();
+        }
+        Ok(n)
+    }
+
+    #[tokio::test]
+    async fn total_timeout_cuts_a_long_stream_with_the_opaque_decode_error() {
+        // The bug, reproduced in miniature: a TOTAL timeout shorter than the
+        // stream kills it mid-body, reported as "error decoding response
+        // body" — exactly what a user saw on a long engine reply.
+        let ms = std::time::Duration::from_millis;
+        let url = slow_sse_server(8, ms(100), None);
+        let total = reqwest::Client::builder().timeout(ms(400)).build().unwrap();
+        let err = drain(&total, &url).await.unwrap_err();
+        assert_eq!(err.to_string(), "error decoding response body");
+        assert!(err.is_timeout(), "the hidden cause is the timeout");
+    }
+
+    #[tokio::test]
+    async fn stream_client_lets_a_steady_stream_outlast_its_read_timeout() {
+        // 8 chunks 100 ms apart = ~800 ms of streaming, twice the 400 ms
+        // read timeout: completes, because the timer resets on every chunk.
+        let ms = std::time::Duration::from_millis;
+        let url = slow_sse_server(8, ms(100), None);
+        let n = drain(&build_stream_client(ms(400)), &url).await.unwrap();
+        assert_eq!(
+            n,
+            (0..8)
+                .map(|i| format!("data: {i}\n\n").len())
+                .sum::<usize>()
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_client_abandons_a_stalled_stream() {
+        let ms = std::time::Duration::from_millis;
+        let url = slow_sse_server(1, ms(10), Some(ms(1500)));
+        let started = std::time::Instant::now();
+        let err = drain(&build_stream_client(ms(300)), &url)
+            .await
+            .unwrap_err();
+        assert!(err.is_timeout(), "a silent server is caught: {err}");
+        assert!(started.elapsed() < ms(1200), "caught by the read timeout");
     }
 
     /// Pull ids share the registry but are namespaced

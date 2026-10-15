@@ -418,6 +418,25 @@ impl Supervisor {
         out
     }
 
+    /// Lease the process already serving `model` — WITHOUT spawning,
+    /// swapping or waiting. `None` when the slot is empty, holds another
+    /// model, holds a dead process, or is busy mid-spawn/swap (try_lock).
+    ///
+    /// For best-effort side requests that must never trigger a model load:
+    /// the send pre-flight's token count would otherwise sit silently for
+    /// the whole cold load before the user's message even appears. The
+    /// lease is minted under the slot guard like every other, so the
+    /// never-evict-mid-request invariant holds for these too.
+    pub(crate) fn lease_if_resident(&self, kind: SlotKind, model: &str) -> Option<Lease> {
+        let unit = self.unit(kind);
+        let mut inner = unit.guard.try_lock().ok()?;
+        let p = inner.proc.as_mut()?;
+        if p.model != model || !p.handle.is_alive() {
+            return None;
+        }
+        Some(unit.mint_lease(p.port, &p.api_key))
+    }
+
     /// Test hook: pretend the slot's last use was `d` ago.
     #[cfg(test)]
     fn rewind_last_used(&self, kind: SlotKind, d: Duration) {
@@ -569,6 +588,41 @@ mod tests {
         assert!(a.api_key.starts_with("fake-key-"));
         drop(a);
         drop(b);
+    }
+
+    #[tokio::test]
+    async fn lease_if_resident_never_spawns_or_swaps() {
+        let f = FakeSpawner::scripted(&[]);
+        let s = sup(&f);
+        // Empty slot: no lease, and crucially no spawn.
+        assert!(s.lease_if_resident(SlotKind::Chat, "gemma").is_none());
+        assert_eq!(f.spawn_count(), 0, "must never load a model");
+
+        drop(
+            s.ensure(SlotKind::Chat, "gemma", &no_status())
+                .await
+                .unwrap(),
+        );
+        // Resident model: leased against the SAME process, refcounted.
+        let lease = s
+            .lease_if_resident(SlotKind::Chat, "gemma")
+            .expect("gemma is resident");
+        assert_eq!(lease.base_url, "http://127.0.0.1:20000");
+        assert_eq!(s.chat.shared.refcount(), 1, "lease holds the process");
+        // A different model is not resident: no lease, no swap.
+        assert!(s.lease_if_resident(SlotKind::Chat, "llama").is_none());
+        assert!(s.lease_if_resident(SlotKind::Embed, "gemma").is_none());
+        assert_eq!(f.spawn_count(), 1);
+        assert!(!f.state(0).killed.load(std::sync::atomic::Ordering::SeqCst));
+        drop(lease);
+        assert_eq!(s.chat.shared.refcount(), 0);
+
+        // A process that died behind our back is not leased either.
+        f.state(0)
+            .alive
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(s.lease_if_resident(SlotKind::Chat, "gemma").is_none());
+        assert_eq!(f.spawn_count(), 1);
     }
 
     #[tokio::test]

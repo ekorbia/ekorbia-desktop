@@ -61,17 +61,30 @@ use std::time::Duration;
 // code to Windows' clippy, which CI runs with `-D warnings`. The allows
 // are scoped to non-unix so unix builds still catch REAL dead code.
 
-/// Context window for chat spawns. llama-server's `-c 0` ("use the
-/// model's native ctx") would allocate a 128K-token KV cache for models
-/// like Gemma — multiple GB of RAM for headroom chats never use. 8192
-/// matches the app's practical envelope (watch payloads are pre-trimmed;
-/// chats are short-context). Embed spawns pass no `-c` at all: embedding
-/// models declare small native contexts, and chunk sizes must fit the
-/// model's real window anyway.
+/// Context window for chat spawns, shared by the prompt AND the reply.
+/// llama-server's `-c 0` ("use the model's native ctx") would allocate a
+/// cache for Gemma 4's full 256K-token window — multiple GB of RAM for
+/// headroom chats never use.
+///
+/// 32768, raised from 8192 in Oct 2026: real pastes outgrew 8K (the
+/// Tessera4X mod brief alone is ~9.8K tokens, so it 400'd before the model
+/// could write a word). It is cheap on the catalog's Gemma 4 models, whose
+/// sliding-window layers keep a fixed-size cache — only the few global
+/// layers grow with `-c`. Measured on gemma4-12b (M1 Max, phys_footprint
+/// beyond the weights): 8K 1.2 GB, 32K 1.6 GB, 64K 2.1 GB. 64K was turned
+/// down because reading a full window at the measured ~240 tok/s would
+/// take minutes, and because this window applies to EVERY model,
+/// including link-added ones with full attention on every layer, where the
+/// cache costs far more per token. Per-model windows are the route if 32K
+/// ever gets tight.
+///
+/// Embed spawns pass no `-c` at all: embedding models declare small
+/// native contexts, and chunk sizes must fit the model's real window
+/// anyway.
 // Referenced by the unix spawn path (`build_args`) AND by the
 // cross-platform `engine_status` command (surfaces it to the UI's token
 // footer), so it's live on every platform — no `dead_code` allow needed.
-pub(crate) const CHAT_CTX: u32 = 8192;
+pub(crate) const CHAT_CTX: u32 = 32768;
 
 /// How long a spawn may take to reach `/health` = 200 before we give up.
 /// Dominated by weight loading — a 12B Q4 model takes ~10-30s from a
@@ -332,7 +345,7 @@ pub(crate) struct SpawnSpec {
 /// no thinking lever; OUR server does, so thinking models stop burning
 /// ~10x tokens on hidden reasoning. Revisit the hardcoded `off` if a
 /// user-facing thinking toggle ever ships (it would become a per-spawn
-/// flag). `-np 1` = one server slot: the full 8K ctx serves one stream;
+/// flag). `-np 1` = one server slot: the full chat ctx serves one stream;
 /// a second same-model stream queues server-side (same behavior users
 /// get from default Ollama).
 #[cfg_attr(not(unix), allow(dead_code))] // called only by the unix spawn path
@@ -695,7 +708,9 @@ mod tests {
         assert!(joined.contains("-ngl 99"));
         assert!(joined.contains("--jinja"));
         assert!(joined.contains("--reasoning off"), "thinking-tax fix");
-        assert!(joined.contains("-c 8192"));
+        // Pinned as a literal on purpose: the window is a measured RAM
+        // trade-off (see CHAT_CTX), so changing it should fail a test.
+        assert!(joined.contains("-c 32768"));
         assert!(joined.contains("--no-webui"));
         assert!(!joined.contains("--embedding"));
         assert!(!joined.contains("--mmproj"));
@@ -715,7 +730,10 @@ mod tests {
         assert!(joined.contains("--embedding"));
         assert!(!joined.contains("--jinja"));
         assert!(!joined.contains("--reasoning"));
-        assert!(!joined.contains("-c 8192"), "embed uses model-native ctx");
+        assert!(
+            !args.iter().any(|a| a == "-c"),
+            "embed uses model-native ctx"
+        );
     }
 
     #[test]

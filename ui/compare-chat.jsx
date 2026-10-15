@@ -469,6 +469,9 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null }) {
     if (scrollerRef.current)
       scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
   }, [message?.content, streaming]);
+  // The composer below grows as the user types; keep this column's tail in
+  // view while it does (hook lives in chat.jsx).
+  useStickToBottomOnResize(scrollerRef);
 
   return (
     <div

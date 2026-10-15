@@ -31,6 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   picks up right where the reply left off, even in a conversation that had
   filled the context window.
 
+### Changed
+
+- **Room for long messages.** The bundled engine's context window grows
+  from 8K to 32K tokens, so long pastes fit with room for a reply. A
+  message that still won't fit is held back with a plain explanation, and
+  your text stays in the composer.
+- **The message box grows as you type**, up to 40% of the window, then
+  scrolls.
+
+### Fixed
+
+- **Long replies no longer stop after two minutes** with "error decoding
+  response body".
+
 ## [0.7.1] - 2026-07-25
 
 ### Fixed

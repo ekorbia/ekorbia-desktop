@@ -34,7 +34,7 @@ If you've selected the **Ollama** backend (Settings → Backend) and Ekorbia can
 
 1. **The model is still warming up.** First-token latency on large models can be several seconds. The status bar shows `Warming…` during this phase.
 2. **Your machine is out of memory.** Big models can exceed available RAM and the engine will eventually error out. Check Activity Monitor; switch to a smaller model.
-3. **The context window is full.** Very long conversations with attachments can hit the model's context limit. Start a new chat or trim attachments.
+3. **The context window is full.** Very long conversations with attachments can hit the model's context limit. Start a new chat or trim attachments. When Ekorbia can tell ahead of time, it says so instead of sending — see [When a message is too long for the model](./chat/streaming-and-stop.md#when-a-message-is-too-long-for-the-model).
 
 ## An attachment is stuck on "Indexing"
 

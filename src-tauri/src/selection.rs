@@ -50,11 +50,11 @@ const PBPASTE_BIN: &str = "/usr/bin/pbpaste";
 
 /// Upper bound on the characters handed to the overlay.
 ///
-/// The bundled engine pins its chat context to 8192 tokens (see
-/// `engine::CHAT_CTX`); at the usual ~4 characters per token, 12k characters
-/// is roughly 3k tokens — a large selection still leaves the model room to
-/// answer, and the request fails in the UI rather than being silently
-/// truncated by the server. Selections this long are rare in practice.
+/// At the usual ~4 characters per token, 12k characters is roughly 3k
+/// tokens — a small slice of the bundled engine's chat window (see
+/// `engine::CHAT_CTX`), so a large selection still leaves the model plenty
+/// of room to answer, and it stays usable on BYO servers with small
+/// windows. Selections this long are rare in practice.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // read only via clamp_selection
 pub(crate) const MAX_SELECTION_CHARS: usize = 12_000;
 

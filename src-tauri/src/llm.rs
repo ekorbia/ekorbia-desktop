@@ -47,6 +47,17 @@ pub(crate) struct ModelCapabilities {
     pub(crate) thinking: bool,
 }
 
+/// Exact size of a chat request against the window it must fit in —
+/// the send pre-flight's input (see `llm_count_prompt_tokens`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PromptFit {
+    /// Prompt tokens as the server itself will count them.
+    pub(crate) prompt_tokens: u32,
+    /// Context window the prompt AND the reply share.
+    pub(crate) window: u32,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EmbeddingModelCheck {
@@ -397,6 +408,27 @@ pub(crate) async fn llm_chat_stream(
         BackendKind::Engine => {
             crate::providers::engine::chat_stream(request_id, body, on_chunk).await
         }
+    }
+}
+
+/// Count a chat body's prompt tokens exactly, for the send pre-flight.
+///
+/// Best-effort by contract: `Ok(None)` means "can't know cheaply — just
+/// send". Only the bundled engine answers, because it is the only backend
+/// whose window Ekorbia knows (it sets `-c` itself) and whose tokenizer it
+/// can reach; Ollama silently truncates to its own `num_ctx`, and a BYO
+/// server's window is unknowable. Even on the engine it answers only when
+/// the model is ALREADY loaded — counting must never trigger a cold load
+/// the user would sit through with no feedback. Every miss falls back to
+/// the server's own context check, which the UI translates into the same
+/// plain-language message.
+#[tauri::command]
+pub(crate) async fn llm_count_prompt_tokens(
+    body: serde_json::Value,
+) -> Result<Option<PromptFit>, String> {
+    match current_config().kind {
+        BackendKind::Engine => crate::providers::engine::count_prompt_tokens(body).await,
+        BackendKind::Ollama | BackendKind::OpenAiCompat => Ok(None),
     }
 }
 

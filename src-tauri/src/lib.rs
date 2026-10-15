@@ -154,6 +154,7 @@ pub fn run() {
             llm::llm_warmup,
             llm::llm_chat_stream,
             llm::llm_chat_stream_cancel,
+            llm::llm_count_prompt_tokens,
             llm::llm_backend_config_get,
             llm::llm_backend_config_set,
             llm::llm_backend_test,

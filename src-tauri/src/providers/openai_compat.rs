@@ -622,11 +622,16 @@ pub(crate) async fn chat_stream(
     let cancel = token.flag.clone();
 
     let translated = translate_chat_body(&body);
-    let resp = with_auth(client().post(url(cfg, "/v1/chat/completions")), cfg)
-        .json(&translated)
-        .send()
-        .await
-        .map_err(|e| format!("Endpoint /v1/chat/completions request failed: {e}"))?;
+    // stream_client, NOT client(): the latter's 120 s TOTAL timeout cut long
+    // replies off mid-stream (see crate::providers::stream_client).
+    let resp = with_auth(
+        crate::providers::stream_client().post(url(cfg, "/v1/chat/completions")),
+        cfg,
+    )
+    .json(&translated)
+    .send()
+    .await
+    .map_err(|e| format!("Endpoint /v1/chat/completions request failed: {e}"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         // Error bodies usually carry a useful message — surface it.
@@ -635,14 +640,7 @@ pub(crate) async fn chat_stream(
             .await
             .ok()
             .filter(|t| !t.trim().is_empty())
-            .map(|t| {
-                let t = t.trim().to_string();
-                if t.len() > 300 {
-                    format!("{}…", &t[..300])
-                } else {
-                    t
-                }
-            })
+            .map(|t| clip_error_detail(&t))
             .unwrap_or_default();
         return Err(format!(
             "Endpoint /v1/chat/completions returned {status}: {detail}"
@@ -708,12 +706,250 @@ pub(crate) async fn chat_stream(
     Ok(())
 }
 
+/// Cap on how much of an error body reaches the UI.
+const ERROR_DETAIL_MAX_BYTES: usize = 300;
+
+/// Trim an HTTP error body to `ERROR_DETAIL_MAX_BYTES`, cutting on a char
+/// boundary. The UI parses some of these bodies — llama-server's
+/// `exceed_context_size_error` JSON (~190 bytes) becomes a plain-language
+/// "too long for the model" message — so short bodies must pass through
+/// intact. The old `&t[..300]` byte slice panicked whenever byte 300 fell
+/// inside a multibyte character, which an error echoing user text can do.
+fn clip_error_detail(raw: &str) -> String {
+    let t = raw.trim();
+    if t.len() <= ERROR_DETAIL_MAX_BYTES {
+        return t.to_string();
+    }
+    let mut end = ERROR_DETAIL_MAX_BYTES;
+    while !t.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &t[..end])
+}
+
+// ── llama-server extensions (bundled engine only) ──────────────────────────
+
+/// Drop `images` from every message of an Ollama-shaped body.
+///
+/// The token count below is text-only: decoding megabytes of base64 just
+/// to count a handful of placeholder tokens would slow the pre-flight for
+/// nothing, and a model without a vision projector would reject the
+/// request outright. An image's real cost (its embedding tokens) is
+/// therefore NOT counted — the server's own context check stays the
+/// backstop for image-heavy sends.
+fn strip_images(body: &Value) -> Value {
+    let mut out = body.clone();
+    if let Some(msgs) = out.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        for m in msgs {
+            if let Some(obj) = m.as_object_mut() {
+                obj.remove("images");
+            }
+        }
+    }
+    out
+}
+
+/// Exact prompt-token count for an Ollama-shaped chat body, via
+/// llama-server's own `/apply-template` (renders the chat template, tool
+/// schemas included) and `/tokenize`. Not part of the OpenAI dialect —
+/// only the bundled-engine adapter calls this, against its own process.
+///
+/// `add_special: true` was verified against a live gemma4-12b spawn: the
+/// count matched the server's `usage.prompt_tokens` for the same request
+/// exactly (9,842 for the Tessera4X mod brief).
+pub(crate) async fn llama_server_count_prompt_tokens(
+    cfg: &EndpointCfg,
+    body: &Value,
+) -> Result<u32, String> {
+    let translated = translate_chat_body(&strip_images(body));
+    let mut tpl_req = json!({ "messages": translated["messages"] });
+    if let Some(tools) = translated.get("tools") {
+        tpl_req["tools"] = tools.clone();
+    }
+    // Short timeout: this runs while the user waits on Enter, and failure
+    // is harmless (the UI just sends without the check).
+    let timeout = Duration::from_secs(10);
+    let tpl: Value = with_auth(client().post(url(cfg, "/apply-template")), cfg)
+        .timeout(timeout)
+        .json(&tpl_req)
+        .send()
+        .await
+        .map_err(|e| format!("apply-template request failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("apply-template failed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("apply-template: bad JSON: {e}"))?;
+    let prompt = tpl
+        .get("prompt")
+        .and_then(|p| p.as_str())
+        .ok_or("apply-template: no prompt in response")?;
+    let tok: Value = with_auth(client().post(url(cfg, "/tokenize")), cfg)
+        .timeout(timeout)
+        .json(&json!({ "content": prompt, "add_special": true }))
+        .send()
+        .await
+        .map_err(|e| format!("tokenize request failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("tokenize failed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("tokenize: bad JSON: {e}"))?;
+    let n = tok
+        .get("tokens")
+        .and_then(|t| t.as_array())
+        .map(|t| t.len())
+        .ok_or("tokenize: no tokens in response")?;
+    Ok(u32::try_from(n).unwrap_or(u32::MAX))
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::llm::StreamEvent as E;
+
+    // ── error detail clipping ──────────────────────────────────────────
+
+    #[test]
+    fn clip_error_detail_passes_short_bodies_through_intact() {
+        // The exact body that reached a user — the UI parses it, so it
+        // must not be clipped.
+        let body = r#"  {"error":{"code":400,"message":"request (8209 tokens) exceeds the available context size (8192 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":8209,"n_ctx":8192}}  "#;
+        assert_eq!(clip_error_detail(body), body.trim());
+    }
+
+    #[test]
+    fn clip_error_detail_cuts_long_bodies_on_char_boundaries() {
+        let ascii = "x".repeat(500);
+        let out = clip_error_detail(&ascii);
+        assert_eq!(out, format!("{}…", "x".repeat(ERROR_DETAIL_MAX_BYTES)));
+        // 299 ASCII bytes then 4-byte emoji: byte 300 lands mid-char. The
+        // old `&t[..300]` panicked here.
+        let tricky = format!("{}{}", "a".repeat(299), "🙂".repeat(10));
+        let out = clip_error_detail(&tricky);
+        assert_eq!(out, format!("{}…", "a".repeat(299)));
+    }
+
+    // ── llama-server prompt-token count ────────────────────────────────
+
+    #[test]
+    fn strip_images_removes_images_from_every_message() {
+        let body = serde_json::json!({
+            "model": "m",
+            "messages": [
+                { "role": "system", "content": "s" },
+                { "role": "user", "content": "look", "images": ["iVBORw0KGgo="] },
+            ],
+        });
+        let out = strip_images(&body);
+        for m in out["messages"].as_array().unwrap() {
+            assert!(m.get("images").is_none());
+        }
+        assert_eq!(out["messages"][1]["content"], "look");
+        assert!(
+            body["messages"][1].get("images").is_some(),
+            "input untouched"
+        );
+    }
+
+    /// One request the fake server saw: (path, Authorization, JSON body).
+    type SeenRequest = (String, String, serde_json::Value);
+
+    /// Minimal one-request-per-connection HTTP server standing in for
+    /// llama-server: `/apply-template` returns a rendered prompt,
+    /// `/tokenize` returns `n_tokens` tokens. Records every request.
+    fn fake_llama_server(n_tokens: usize) -> (String, std::thread::JoinHandle<Vec<SeenRequest>>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+                let (mut len, mut auth) = (0usize, String::new());
+                loop {
+                    let mut h = String::new();
+                    reader.read_line(&mut h).unwrap();
+                    let h = h.trim_end();
+                    if h.is_empty() {
+                        break;
+                    }
+                    let lower = h.to_ascii_lowercase();
+                    if let Some(v) = lower.strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap();
+                    }
+                    if lower.starts_with("authorization:") {
+                        auth = h["authorization:".len()..].trim().to_string();
+                    }
+                }
+                let mut buf = vec![0u8; len];
+                reader.read_exact(&mut buf).unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+                let reply = if path == "/apply-template" {
+                    serde_json::json!({ "prompt": "<rendered prompt>" })
+                } else {
+                    serde_json::json!({ "tokens": vec![7; n_tokens] })
+                }
+                .to_string();
+                let mut out = stream;
+                write!(
+                    out,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                )
+                .unwrap();
+                seen.push((path, auth, body));
+            }
+            seen
+        });
+        (base, handle)
+    }
+
+    #[tokio::test]
+    async fn count_prompt_tokens_renders_template_then_tokenizes() {
+        let (base, server) = fake_llama_server(9842);
+        let cfg = EndpointCfg {
+            base_url: base,
+            api_key: Some("k123".into()),
+        };
+        let body = serde_json::json!({
+            "model": "gemma4-12b", "stream": true, "think": false,
+            "messages": [
+                { "role": "system", "content": "memory" },
+                { "role": "user", "content": "brief", "images": ["iVBORw0KGgo="] },
+            ],
+            "tools": [{ "type": "function", "function": { "name": "write_file" } }],
+        });
+        let n = llama_server_count_prompt_tokens(&cfg, &body).await.unwrap();
+        assert_eq!(n, 9842);
+
+        let seen = server.join().unwrap();
+        let (path, auth, tpl) = &seen[0];
+        assert_eq!(path, "/apply-template");
+        assert_eq!(auth, "Bearer k123", "engine endpoints need the key");
+        assert_eq!(tpl["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(tpl["messages"][1]["content"], "brief");
+        assert_eq!(
+            tpl["tools"][0]["function"]["name"], "write_file",
+            "tool schemas are part of the real prompt — count them"
+        );
+        assert!(tpl.get("think").is_none());
+        let rendered = serde_json::to_string(tpl).unwrap();
+        assert!(!rendered.contains("iVBORw0KGgo"), "images are not sent");
+
+        let (path, _, tok) = &seen[1];
+        assert_eq!(path, "/tokenize");
+        assert_eq!(tok["content"], "<rendered prompt>");
+        assert_eq!(tok["add_special"], true);
+    }
 
     // ── translate_chat_body ────────────────────────────────────────────
 

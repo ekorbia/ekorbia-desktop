@@ -1100,8 +1100,12 @@ function App() {
   const [backendKind, setBackendKind] = useS('ollama');
   // Bundled engine's chat context window (tokens). Threaded to the chat
   // panes so a message's Details footer can show its input against this
-  // ceiling ("1,731 / 8,192 ctx"). Null on Ollama/BYO backends, whose
-  // window we don't control or know — those footers just show "in".
+  // ceiling ("1,731 / 32,768 ctx"), and so the send pre-flight can skip
+  // counting requests too small to overflow it. Null on Ollama/BYO
+  // backends, whose window we don't control or know — those footers just
+  // show "in". Rust's CHAT_CTX is the single source of truth: if the status
+  // call fails we stay null (footer shows "in", pre-flight just counts
+  // every send) rather than guess a number that can go stale.
   const [engineCtx, setEngineCtx] = useS(null);
   useE(() => {
     let alive = true;
@@ -1109,10 +1113,8 @@ function App() {
     (async () => {
       try {
         const st = await getInvoke()('engine_status');
-        // Fall back to the known pinned window if an older Rust build
-        // doesn't report chatCtx yet — better a value than a blank.
-        if (alive) setEngineCtx((st && st.chatCtx) || 8192);
-      } catch { if (alive) setEngineCtx(8192); }
+        if (alive) setEngineCtx((st && st.chatCtx) || null);
+      } catch { if (alive) setEngineCtx(null); }
     })();
     return () => { alive = false; };
   }, [backendKind]);
@@ -1751,6 +1753,107 @@ function App() {
     const userContent = (promptSystem && !isNewChat) ? `${promptSystem}\n\n${text}` : text;
     const nowTs = Math.floor(Date.now() / 1000);
 
+    // The request is assembled in full BEFORE anything is committed to the
+    // chat (state, sidebar, DB) so the context pre-flight below can count
+    // exactly what will be sent — and refuse it cleanly, with nothing to
+    // undo. Everything from here to the pre-flight is pure assembly plus
+    // read-only lookups.
+
+    // Build the user-role message. Vision-capable + image-attached → set
+    // images: [base64,...]. The Rust side already filtered out images
+    // for non-vision models, so this is safe.
+    const userMessage = { role: 'user', content: userContent };
+    if (attachPayload.images?.length) {
+      userMessage.images = attachPayload.images;
+    }
+
+    // JIT capability resolve — the mount-time probe can lose the race
+    // against Ollama's own startup (see probeModelCapabilities), which
+    // would silently disable tool injection AND think:false gating for
+    // this send even though the model supports both. Mirrors the
+    // screenshot path's vision JIT probe. Cheap in steady state: the
+    // maps are populated, so this is a lookup; the extra /api/show on
+    // the unknown path is cached per model on the Rust side.
+    let modelHasToolsNow = modelToolsMap[modelId];
+    let modelThinkingNow = modelThinkingMap[modelId];
+    if (modelHasToolsNow === undefined || modelThinkingNow === undefined) {
+      try {
+        const caps = await invoke('llm_capabilities', { model: modelId });
+        modelHasToolsNow = !!caps?.tools;
+        modelThinkingNow = !!caps?.thinking;
+        setModelVisionMap((m) => ({ ...m, [modelId]: !!caps?.vision }));
+        setModelToolsMap((m) => ({ ...m, [modelId]: modelHasToolsNow }));
+        setModelThinkingMap((m) => ({ ...m, [modelId]: modelThinkingNow }));
+      } catch (_) {
+        // Probe failed (Ollama down?) — proceed without tools/thinking;
+        // the stream call below surfaces the real connectivity error.
+        modelHasToolsNow = false;
+        modelThinkingNow = false;
+      }
+    }
+
+    // Resolve current output_dir up front: lets us skip including tools at
+    // all when the user has explicitly blocked saves (output_dir === '').
+    // NULL/undefined means "never asked" — we still pass tools through and
+    // the modal fires on the first tool_call.
+    let currentOutputDir = null;
+    if (modelHasToolsNow) {
+      try { currentOutputDir = await invoke('chat_output_dir', { chatId: activeTab }); }
+      catch (_) { currentOutputDir = null; }
+    }
+    const includeTools = modelHasToolsNow && currentOutputDir !== '';
+    if (includeTools && !toolSchemasRef.current) {
+      try { toolSchemasRef.current = (await invoke('chat_tool_schemas')) || []; }
+      catch (_) { toolSchemasRef.current = []; }
+    }
+
+    // Mutable conversation array — extended each tool iteration with the
+    // assistant's tool_calls turn + the tool-result responses, then re-sent.
+    // System message ordering:
+    //   memory   — durable facts about the user (every send)
+    //   prompts  — first-send-only system prompt(s) the user attached.
+    //              This includes the Space's "locked" pinned prompts
+    //              (auto-attached at chat creation, can't be detached
+    //              per-chat in the composer — replaces the earlier
+    //              standalone Space "system_prompt" field).
+    //   attach   — attachment context for this send (top-k chunks etc.)
+    //   prior    — the rolling conversation history
+    //   user     — this turn's user message
+    // Memory goes first because it's the most stable / general context;
+    // attachments + prompts ride at the end. Ordering matters because
+    // many models weight earlier system messages more heavily.
+    const convoMessages = [
+      ...memorySystemMessages,
+      ...attachmentSystemMessages,
+      ...promptSystemMessages,
+      ...priorMessages,
+      userMessage,
+    ];
+
+    // Context pre-flight (decision logic + its best-effort rules live in
+    // contextPreflight, utils.js). A request that can't fit the bundled
+    // engine's window with room for a reply is refused HERE, before it
+    // enters the chat: nothing is persisted, and resolving `false` tells the
+    // composer to put the text back. Edit and retry are excluded: they
+    // truncate the chat BEFORE calling handleSend, so refusing here would
+    // drop messages with nowhere to put the text back — they rely on the
+    // server-side message (describeContextOverflow, below) instead.
+    if (!options.baseMessages) {
+      const pfBody = { model: modelId, messages: convoMessages };
+      if (includeTools && toolSchemasRef.current?.length) pfBody.tools = toolSchemasRef.current;
+      const refusal = await contextPreflight({
+        invoke,
+        backendKind,
+        windowTokens: engineCtx,
+        body: pfBody,
+        hasHistory: priorMessages.length > 0,
+      });
+      if (refusal) {
+        window.ekToast?.({ kind: 'warn', title: 'Too long for this model', body: refusal });
+        return false;
+      }
+    }
+
     const userId = genId();
     const asstId = genId();
     streamMsgIdRef.current = asstId;
@@ -1904,77 +2007,6 @@ function App() {
     // loop runs exactly once and behaves exactly like the pre-tool-use
     // streaming path — no tools field in the body, no tool_calls in the
     // response, no permission modal.
-
-    // Build the user-role message. Vision-capable + image-attached → set
-    // images: [base64,...]. The Rust side already filtered out images
-    // for non-vision models, so this is safe.
-    const userMessage = { role: 'user', content: userContent };
-    if (attachPayload.images?.length) {
-      userMessage.images = attachPayload.images;
-    }
-
-    // JIT capability resolve — the mount-time probe can lose the race
-    // against Ollama's own startup (see probeModelCapabilities), which
-    // would silently disable tool injection AND think:false gating for
-    // this send even though the model supports both. Mirrors the
-    // screenshot path's vision JIT probe. Cheap in steady state: the
-    // maps are populated, so this is a lookup; the extra /api/show on
-    // the unknown path is cached per model on the Rust side.
-    let modelHasToolsNow = modelToolsMap[modelId];
-    let modelThinkingNow = modelThinkingMap[modelId];
-    if (modelHasToolsNow === undefined || modelThinkingNow === undefined) {
-      try {
-        const caps = await invoke('llm_capabilities', { model: modelId });
-        modelHasToolsNow = !!caps?.tools;
-        modelThinkingNow = !!caps?.thinking;
-        setModelVisionMap((m) => ({ ...m, [modelId]: !!caps?.vision }));
-        setModelToolsMap((m) => ({ ...m, [modelId]: modelHasToolsNow }));
-        setModelThinkingMap((m) => ({ ...m, [modelId]: modelThinkingNow }));
-      } catch (_) {
-        // Probe failed (Ollama down?) — proceed without tools/thinking;
-        // the stream call below surfaces the real connectivity error.
-        modelHasToolsNow = false;
-        modelThinkingNow = false;
-      }
-    }
-
-    // Resolve current output_dir up front: lets us skip including tools at
-    // all when the user has explicitly blocked saves (output_dir === '').
-    // NULL/undefined means "never asked" — we still pass tools through and
-    // the modal fires on the first tool_call.
-    let currentOutputDir = null;
-    if (modelHasToolsNow) {
-      try { currentOutputDir = await invoke('chat_output_dir', { chatId: activeTab }); }
-      catch (_) { currentOutputDir = null; }
-    }
-    const includeTools = modelHasToolsNow && currentOutputDir !== '';
-    if (includeTools && !toolSchemasRef.current) {
-      try { toolSchemasRef.current = (await invoke('chat_tool_schemas')) || []; }
-      catch (_) { toolSchemasRef.current = []; }
-    }
-
-    // Mutable conversation array — extended each tool iteration with the
-    // assistant's tool_calls turn + the tool-result responses, then re-sent.
-    // System message ordering:
-    //   memory   — durable facts about the user (every send)
-    //   prompts  — first-send-only system prompt(s) the user attached.
-    //              This includes the Space's "locked" pinned prompts
-    //              (auto-attached at chat creation, can't be detached
-    //              per-chat in the composer — replaces the earlier
-    //              standalone Space "system_prompt" field).
-    //   attach   — attachment context for this send (top-k chunks etc.)
-    //   prior    — the rolling conversation history
-    //   user     — this turn's user message
-    // Memory goes first because it's the most stable / general context;
-    // attachments + prompts ride at the end. Ordering matters because
-    // many models weight earlier system messages more heavily.
-    const convoMessages = [
-      ...memorySystemMessages,
-      ...attachmentSystemMessages,
-      ...promptSystemMessages,
-      ...priorMessages,
-      userMessage,
-    ];
 
     // Accumulate across iterations for final persistence.
     // - allToolCalls: every tool_call this send produced, stored as
@@ -2171,7 +2203,14 @@ function App() {
       const err = streamTransportError || '';
       const looksLikeConnRefused =
         /request failed|error sending request|connection refused|tcp connect|11434/i.test(err);
-      if (backendKind === 'engine') {
+      // A "prompt too long" rejection on ANY backend reads as plain
+      // language instead of raw server JSON — the same message the engine
+      // pre-flight shows. Reached when the pre-flight was skipped (model
+      // not loaded yet, edit/retry, other backends) or undercounted.
+      const overflow = describeContextOverflow(err, { hasHistory: priorMessages.length > 0 });
+      if (overflow) {
+        accumulated = `⚠️ ${overflow}`;
+      } else if (backendKind === 'engine') {
         // The engine's errors are already user-directed ("model file not
         // found: x.gguf (looked in …)", "failed to start 3 times…") —
         // show them as-is with a pointer at the models folder.

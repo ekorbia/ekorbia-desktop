@@ -565,7 +565,10 @@ pub(crate) async fn chat_stream(
     let token = crate::providers::register_cancel(&request_id);
     let cancel = token.flag.clone();
 
-    let mut resp = ollama_client()
+    // stream_client, NOT ollama_client(): the latter's 120 s TOTAL timeout
+    // spans the response body and cut long replies off mid-stream (see
+    // crate::providers::stream_client).
+    let mut resp = crate::providers::stream_client()
         .post(ollama_url("/api/chat"))
         .json(&body)
         .send()
