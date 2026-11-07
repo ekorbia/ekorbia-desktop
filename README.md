@@ -1,7 +1,7 @@
 # Ekorbia — Local AI Chat and Productivity Environment
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Platform: macOS · Linux · Windows](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey)
+![Platform: macOS](https://img.shields.io/badge/platform-macOS%20%28Apple%20Silicon%29-lightgrey)
 ![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db)
 ![Runs models locally](https://img.shields.io/badge/models-100%25%20local-24c8db)
 [![Launch Certified by FuzzPage](https://fuzzpage.com/badge/ekorbia-ekorbia-desktop.svg)](https://fuzzpage.com/p/ekorbia-ekorbia-desktop)
@@ -14,14 +14,13 @@ A native desktop chat and productivity environment for local AI models. Ekorbia 
 
 ## Install
 
-Download the bundle for your OS from the
-[Releases page](https://github.com/ekorbia/ekorbia-desktop/releases). All
-builds are unsigned, so each platform has a one-time bypass dance
-documented below.
+Download the `.dmg` from the
+[Releases page](https://github.com/ekorbia/ekorbia-desktop/releases) and
+drag **Ekorbia.app** into your Applications folder. The build is unsigned,
+so there is a one-time bypass documented below.
 
-### macOS
-
-Open the `.dmg` and drag **Ekorbia.app** into your Applications folder.
+Windows and Linux builds ended with 0.7.1; those installers remain on the
+Releases page.
 
 Ekorbia is **not** signed with an Apple Developer ID certificate (the
 project doesn't carry a paid Apple Developer membership). macOS
@@ -66,144 +65,36 @@ If you'd rather not run unsigned binaries, you can [build from source](#build-fr
 instead — the source build produces a locally-signed binary that
 Gatekeeper trusts.
 
-### Linux
-
-Three bundle formats are published per release:
-
-- **AppImage** — works on any modern x86_64 distro, no install needed.
-- **`.deb`** — Debian, Ubuntu, Mint, Pop!_OS, and other apt-based
-  distros.
-- **`.rpm`** — Fedora (Workstation, KDE, Silverblue), RHEL 9+, Rocky,
-  Alma, and other dnf/rpm-based distros.
-
-**AppImage** (simplest, distro-agnostic):
-
-```bash
-chmod +x Ekorbia_*_amd64.AppImage
-./Ekorbia_*_amd64.AppImage
-```
-
-The first run may take a couple of seconds while the bundle extracts
-itself into `~/.cache/`. Put the file anywhere in `$PATH` if you want a
-shell-callable name.
-
-**`.deb` (apt-based distros):**
-
-```bash
-sudo apt install ./ekorbia_*_amd64.deb
-ekorbia
-```
-
-The package's runtime dependencies (`libwebkit2gtk-4.1-0`, `libgtk-3-0`)
-are pulled in automatically. After install, you'll find Ekorbia under
-your application launcher's "Utility" or "Development" category.
-
-**`.rpm` (Fedora / RHEL / openSUSE):**
-
-```bash
-sudo dnf install ./Ekorbia-*.x86_64.rpm
-ekorbia
-```
-
-The package depends on `webkit2gtk4.1` and `gtk3`, which Fedora 39+ and
-RHEL 9+ have in their default repos. On older Fedora releases the
-package name was `webkit2gtk3` — install it first
-(`sudo dnf install webkit2gtk3`) and then `dnf install --force` the
-Ekorbia rpm if the dependency check fails. Once installed, the app
-shows up in KDE's launcher (Plasma searches by name) or under the
-GNOME Activities overview.
-
-**Notes:**
-
-- Linux builds are produced on Ubuntu 22.04, which pins glibc 2.35 — so
-  the bundles also run on older distros (Debian 12, RHEL 9, etc.) with
-  WebKitGTK 4.1 available.
-- The quick-query overlay and screenshot-capture hotkeys are **not**
-  wired up on Linux in this release. See the [feature
-  matrix](#platform-feature-matrix). Everything else — chat,
-  attachments, watches, notifications, file saves — works the same as
-  on macOS.
-- OS notifications use libnotify (D-Bus). GNOME and KDE handle these
-  natively; tiling window managers may need a notification daemon
-  (`dunst`, `mako`, etc.) running.
-
-### Windows
-
-Two installers are published per release:
-
-- **`.msi`** — the standard Windows installer. Right-click → Install.
-- **`.exe` (NSIS)** — alternative installer with a slightly smaller
-  download. Same end result.
-
-Ekorbia is **not** code-signed (no EV certificate), so Windows
-SmartScreen will warn on first launch:
-
-> **Windows protected your PC** — Microsoft Defender SmartScreen
-> prevented an unrecognized app from starting.
-
-Click **More info**, then **Run anyway**. Windows remembers your choice
-for that binary — future launches go through silently.
-
-If you'd rather avoid the warning entirely, [build from source](#build-from-source)
-(the local toolchain produces a binary SmartScreen ignores).
-
-**WebView2 runtime:** The installer embeds the WebView2 bootstrapper, so
-on Windows 10 systems that don't already have WebView2 (it's preinstalled
-on Win11), the installer will silently download and install the runtime
-during setup. No manual step required.
-
 ## Build from source
 
-Prerequisites are platform-specific. Pick your row:
-
-| OS | Toolchain | System libraries |
-|---|---|---|
-| macOS | [Rust stable](https://rustup.rs) | Xcode Command Line Tools (`xcode-select --install`) |
-| Linux | Rust stable | See "Linux build deps" below |
-| Windows | Rust stable + MSVC build tools | WebView2 runtime (preinstalled on Win11) |
+Prerequisites: [Rust stable](https://rustup.rs), the Xcode Command Line
+Tools (`xcode-select --install`), and `cmake` (`brew install cmake`) for
+the engine build.
 
 You'll also want [`tauri-cli`](https://tauri.app/start/prerequisites/)
 for the `cargo tauri` command — `cargo install tauri-cli --version '^2'`.
 Node 20+ is optional and only needed if you plan to run the Playwright
 test suite.
 
-**Linux build deps** (Ubuntu / Debian — translate package names for your
-distro):
-
-```bash
-sudo apt install libwebkit2gtk-4.1-dev \
-  build-essential curl wget file libxdo-dev libssl-dev \
-  libayatana-appindicator3-dev librsvg2-dev patchelf
-```
-
 **Build:**
 
 ```bash
 git clone https://github.com/ekorbia/ekorbia-desktop.git
-cd ekorbia-desktop/src-tauri
+cd ekorbia-desktop
+./scripts/fetch-llama-server.sh   # builds the bundled engine (one-time)
+cd src-tauri
 cargo tauri build
 ```
 
-The bundles land under `src-tauri/target/release/bundle/<format>/`:
-
-- macOS:   `bundle/macos/Ekorbia.app` and `bundle/dmg/Ekorbia_*.dmg`
-- Linux:   `bundle/deb/ekorbia_*.deb` and `bundle/appimage/Ekorbia_*.AppImage`
-- Windows: `bundle/msi/Ekorbia_*.msi` and `bundle/nsis/Ekorbia_*-setup.exe`
+The bundles land under `src-tauri/target/release/bundle/`:
+`macos/Ekorbia.app` and `dmg/Ekorbia_*.dmg`.
 
 For development with hot-reload, use `cargo tauri dev` from the
 `src-tauri/` directory.
 
 ## Requirements
 
-- **A supported desktop OS:**
-  - **macOS 12 (Monterey) or newer** — full feature set, primary
-    platform.
-  - **Linux** — Ubuntu 22.04+, Fedora 39+, or any distro with a recent
-    WebKitGTK 4.1. The quick-query overlay and one-keystroke screenshot
-    capture are not yet wired up on Linux (see [Platform feature
-    matrix](#platform-feature-matrix) below); everything else works.
-  - **Windows 10 1809+ or Windows 11** — full feature set except the
-    one-keystroke screenshot capture (planned).
+- **A Mac with Apple Silicon** running macOS 12 (Monterey) or newer.
 - **No separate runtime to install.** Ekorbia ships with a **bundled
   engine** and runs models itself. On first launch it detects your RAM,
   recommends a right-sized Gemma 4 from the built-in catalog, and
@@ -214,23 +105,6 @@ For development with hot-reload, use `cargo tauri dev` from the
 - **~8 GB free RAM** for the recommended models. Smaller models will
   run on less; larger ones need more.
 - **Disk space for models** — a few GB per model, in the app data folder.
-
-## Platform feature matrix
-
-| Feature | macOS | Linux | Windows |
-|---|:---:|:---:|:---:|
-| Chat (single + compare modes) | ✅ | ✅ | ✅ |
-| Attachments + folder RAG | ✅ | ✅ | ✅ |
-| Watches (folder / RSS / URL) | ✅ | ✅ | ✅ |
-| OS-native notifications | ✅ | ✅ (libnotify) | ✅ (WinToast) |
-| Prompt library | ✅ | ✅ | ✅ |
-| Memory file | ✅ | ✅ | ✅ |
-| Chat-tool file saves | ✅ | ✅ | ✅ |
-| Full-text history search | ✅ | ✅ | ✅ |
-| Quick-query overlay (Spotlight-style) | ✅ | — | ✅ |
-| Screenshot capture (one keystroke) | ✅ | — | — |
-
-A "—" means the feature isn't shipped on that platform yet. Linux overlay support and Linux/Windows screenshot capture are on the roadmap.
 
 ## Features
 
@@ -256,13 +130,13 @@ A "—" means the feature isn't shipped on that platform yet. Linux overlay supp
   - Import prompts from `.md` / `.txt` files
   - 31 built-in prompts ship with the app: Album Deep Dive, Brainstorm, Cliff Notes, Cloudflare Uptime Watcher, Cover Letter Writer, Devil's Advocate, Email Draft, Explain Simply, Google Cloud Uptime Watcher, How Does It End, Job Posting Watcher, Lateral Thinking Puzzles, Log Triage, Murder Mystery Interrogation, New Listing Watcher, Notes Synthesizer, Personal Website Builder, Price / Availability Watcher, Professional Website Builder, Rental Watcher, Research Paper Tracker, Resume Coach, Sensitive Doc Q&A, Should I Watch This, Summarize, Text Adventure, Tone Reframer, Translate → French, Translate → German, Translate → Spanish, Wikipedia Edit Watcher
   - "Restore built-in prompts" button in Settings re-copies them if you've deleted any
-- **Quick-query overlay** (⌘⇧Space on macOS, Alt+Space on Windows; customisable in Settings — *not available on Linux yet*)
+- **Quick-query overlay** (⌘⇧Space, customisable in Settings)
   - Spotlight-style panel that pops up over any app — never steals focus from your work
   - Inline model and single-prompt pickers, with searchable prompt list
   - Streaming responses just like the main composer
   - **Send to main** → continue any overlay session as a full multi-turn chat in the main window
   - Auto-hides on blur (clicking elsewhere) or ⎋
-- **Screenshot capture** (⌘⇧1 by default, customisable in Settings — *macOS only*)
+- **Screenshot capture** (⌘⇧1 by default, customisable in Settings)
   - Invokes macOS's native region selector (drag for a region, Space for a window, Esc to cancel) — the same UI you already know from `Cmd+Shift+4`
   - The captured PNG opens in a fresh chat tab with the image attached as a vision attachment
   - Auto-switches to a vision-capable model if your current model can't see images (and tells you via toast); warns if no vision model is available
@@ -275,7 +149,7 @@ A "—" means the feature isn't shipped on that platform yet. Linux overlay supp
   - **Optional CSS selector** on URL watches lets you narrow extraction past nav / footer noise (`article`, `main`, `.post-content`)
   - **Test button** in the watch form probes the feed/URL once and reports entry count or extracted character count — catches typos before saving
   - **Edit watches** — pencil icon on each watch row reopens the form pre-filled so you can change the name, prompt, model, cadence, or any other field without deleting and re-creating
-  - **OS notifications** — per-watch opt-in toggle in the form sends a native OS notification (macOS Notification Center, Linux libnotify, Windows toast) when new events arrive. Multiple events from one poll cycle are coalesced into a single banner ("8 new items from My Folder"). Watches with notifications enabled show a 🔔 glyph in the list. On macOS the form explains the permission request before the OS dialog fires.
+  - **OS notifications** — per-watch opt-in toggle in the form sends a native macOS notification when new events arrive. Multiple events from one poll cycle are coalesced into a single banner ("8 new items from My Folder"). Watches with notifications enabled show a 🔔 glyph in the list. On macOS the form explains the permission request before the OS dialog fires.
   - Right-panel "Watches" tab shows the activity feed with live processing indicators and a kind glyph (📁 / 📡 / 🌐) per row
   - **Today view**: an **All / Today** toggle on the feed; *Today* bounds it to the last 24 hours and unlocks **Chat about today**, which opens a chat seeded with a digest of everything your watches surfaced today
   - **Folder watches skip pre-existing files** — a new folder watch (e.g. the Downloads recipe) only summarises files added *after* you create it, so it won't dump a backlog of everything already in the folder; a "skip files already in folder" checkbox in the form controls this
@@ -309,10 +183,8 @@ A "—" means the feature isn't shipped on that platform yet. Linux overlay supp
 - **Five themes** — One Dark, One Light, Ayu Dark, Ayu Mirage, Ayu Light
 - **Persisted UI state** — sidebar width, right-panel width, prompt-list width, panel open/closed state, right-panel tab, selected model, hotkey, prompts folder, embedding model, top-k, folder filters, and theme all survive across launches
 - **Local storage**
-  - **Chats and messages**: SQLite database in the app's data directory. Path depends on OS:
-    - macOS: `~/Library/Application Support/com.ekorbia.desktop/ekorbia.db`
-    - Linux: `~/.local/share/com.ekorbia.desktop/ekorbia.db`
-    - Windows: `%APPDATA%\com.ekorbia.desktop\ekorbia.db`
+  - **Chats and messages**: SQLite database at
+    `~/Library/Application Support/com.ekorbia.desktop/ekorbia.db`
   - **Prompts**: Markdown files in your configured prompts folder
   - **Search index**: SQLite FTS5 virtual table, kept in sync with messages automatically via triggers
   - **Attachments**: file paths + metadata in SQLite; chunk embeddings stored as packed `f32` BLOBs (brute-force cosine retrieval — no extension required)
@@ -326,15 +198,8 @@ A "—" means the feature isn't shipped on that platform yet. Linux overlay supp
 | The bundled engine sidecar | `./scripts/fetch-llama-server.sh` (one-time; builds `llama-server` into `src-tauri/binaries/`) |
 | A model | Download one from the in-app catalog on first run (no terminal). Or, to develop against Ollama, install it and `ollama pull <model>` and select it under Settings → Backend |
 
-Per-OS extras:
-
-- **macOS**: Xcode Command Line Tools — `xcode-select --install`
-- **Linux**: WebKitGTK 4.1 + a handful of supporting libs (see [Build
-  from source → Linux build deps](#build-from-source))
-- **Windows**: MSVC build tools (the [Visual Studio "Build Tools for
-  C++" installer](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-  covers it) and the WebView2 runtime (preinstalled on Win11; auto-
-  installs on Win10 via the bootstrapper)
+Plus the Xcode Command Line Tools (`xcode-select --install`) and `cmake`
+(`brew install cmake`) for the engine build.
 
 ## Running in dev mode
 
@@ -355,25 +220,13 @@ cargo tauri build
 Bundle outputs land under `src-tauri/target/release/bundle/`:
 
 ```
-# macOS
 bundle/macos/Ekorbia.app
 bundle/dmg/Ekorbia_*.dmg
-
-# Linux
-bundle/deb/ekorbia_*_amd64.deb
-bundle/rpm/Ekorbia-*.x86_64.rpm
-bundle/appimage/Ekorbia_*_amd64.AppImage
-
-# Windows
-bundle/msi/Ekorbia_*_x64_en-US.msi
-bundle/nsis/Ekorbia_*_x64-setup.exe
 ```
 
-`cargo tauri build` produces only the bundle formats supported by the
-host OS — you can't cross-compile a `.dmg` from Linux. To produce all
-three OS bundles for a release, push a `v*` tag and let the
-[release workflow](.github/workflows/release.yml) fan out to the three
-matrix runners.
+For a release, push a `v*` tag and the
+[release workflow](.github/workflows/release.yml) builds the DMG and
+publishes it with a `SHA256SUMS.txt`.
 
 ## Switching models
 
@@ -451,7 +304,7 @@ All three kinds share the same notes file, model, and (optional) summarisation p
 When you use a tool-capable model (look for the **TOOL** badge), the model can call `write_file` during the conversation to save any generated file to disk — HTML pages, Python scripts, config files, anything.
 
 **First save**: the first time a model tries to save in a chat, a permission modal appears. You can:
-- **Allow** — pick an output folder (pre-filled to the app's data directory's `Outputs/<chat-slug>/`: `~/Library/Application Support/com.ekorbia.desktop/Outputs/...` on macOS, `~/.local/share/com.ekorbia.desktop/Outputs/...` on Linux, `%APPDATA%\com.ekorbia.desktop\Outputs\...` on Windows)
+- **Allow** — pick an output folder (pre-filled to `~/Library/Application Support/com.ekorbia.desktop/Outputs/<chat-slug>/`)
 - **Block** — prevents any saves for this chat (the model is told it can't save)
 - **Not now** — skips this write only; the modal reappears on the next attempt
 
@@ -497,13 +350,7 @@ Click the **lock icon** beside "New chat" in the sidebar to open an ephemeral se
 
 Switching the active tab away from a private chat doesn't destroy it — the conversation stays in memory until the tab itself closes.
 
-## Capturing screenshots (macOS only)
-
-> Screenshot capture is currently macOS-only. On Linux and Windows the
-> Settings panel hides this row, and the hotkey isn't registered.
-> Capture-on-keystroke for Linux and Windows is on the roadmap; until
-> then, use your OS's native screenshot tool and drop the resulting
-> file into Ekorbia via the paperclip attach button.
+## Capturing screenshots
 
 Press **⌘⇧1** (default; rebindable in Settings → General → Screenshot) anywhere to invoke macOS's native region selector — the same crosshair UI you already know from `Cmd+Shift+4`. Drag for a region, press **Space** to switch to window mode, or **Esc** to cancel.
 

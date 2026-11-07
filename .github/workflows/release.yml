@@ -1,22 +1,21 @@
 # Release pipeline for Ekorbia.
 #
-# Fires when a tag matching `v*` is pushed (e.g. `v0.1.0`, `v0.1.1`).
-# Builds three OS bundles in parallel and publishes one GitHub Release
-# with all assets attached:
+# Fires when a tag matching `v*` is pushed (e.g. `v0.8.0`, `v0.8.1`).
+# Builds the macOS bundle and publishes one GitHub Release with the
+# assets attached:
 #
-#   • macOS   — .dmg (aarch64-apple-darwin, unsigned)
-#   • Linux   — .deb + .AppImage (x86_64-unknown-linux-gnu)
-#   • Windows — .msi + .exe (NSIS, x86_64-pc-windows-msvc, unsigned)
+#   • macOS — .dmg (aarch64-apple-darwin, unsigned) + SHA256SUMS.txt
+#
+# Windows and Linux installers ended with 0.7.1 (the owner only tests and
+# runs on a Mac); the old assets stay on their release pages.
 #
 # Pipeline shape:
 #
 #   1. create-release  — extracts CHANGELOG notes, creates a DRAFT
 #                        GitHub Release for the tag, outputs its id.
-#   2. build (matrix)  — three parallel jobs, one per OS. Each runs
-#                        `cargo tauri build` via tauri-action and
-#                        uploads its bundles to the draft release.
-#   3. publish-release — once all three builds succeed, downloads
-#                        every uploaded asset, generates a unified
+#   2. build           — `cargo tauri build` via tauri-action on a macOS
+#                        runner, uploads the bundle to the draft release.
+#   3. publish-release — downloads the uploaded assets, generates
 #                        SHA256SUMS.txt, uploads the sums file, then
 #                        flips the draft to published.
 #
@@ -30,16 +29,11 @@
 #   5. git push origin main && git push origin v0.x.y
 #
 # About 20 minutes later, github.com/ekorbia/ekorbia-desktop/releases
-# gets a new published entry with all bundles + SHA256SUMS.txt attached.
+# gets a new published entry with the DMG + SHA256SUMS.txt attached.
 #
 # Notes:
-# - All builds are UNSIGNED. macOS users hit Gatekeeper, Windows users
-#   hit SmartScreen, Linux users may need to chmod +x the AppImage.
-#   Each is documented in README.md.
-# - Linux builds run on ubuntu-22.04 (not -latest) to pin glibc — an
-#   AppImage built on a newer glibc fails to launch on older user
-#   systems. 22.04 is the oldest LTS still in support, so binaries
-#   built here run on essentially every modern distro.
+# - The build is UNSIGNED. macOS users hit Gatekeeper on first launch;
+#   the bypass is documented in README.md.
 
 name: Release
 
@@ -114,28 +108,14 @@ jobs:
             return data.id;
           result-encoding: string
 
-  # ── Stage 2: build on each OS, upload assets to the draft ──────────────
+  # ── Stage 2: build on macOS, upload the bundle to the draft ────────────
   build:
-    name: Build (${{ matrix.label }})
+    name: Build (macOS)
     needs: create-release
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            label: macOS
-            # aarch64-apple-darwin native. Intel Mac users run under
-            # Rosetta 2; documented in README.
-            args: ''
-          - platform: ubuntu-22.04
-            label: Linux
-            args: ''
-          - platform: windows-latest
-            label: Windows
-            args: ''
-    runs-on: ${{ matrix.platform }}
+    # aarch64-apple-darwin native — the release targets Apple-Silicon Macs.
+    runs-on: macos-latest
     timeout-minutes: 60
 
     steps:
@@ -150,58 +130,20 @@ jobs:
         with:
           node-version: '20'
 
-      # Linux-only system deps. Mirrors ci.yml's test-linux job — keep
-      # these in sync when bumping Tauri or its WebKitGTK dependency.
-      #
-      # `rpm` provides rpmbuild, which Tauri's RPM bundler shells out to.
-      # Without it, the rpm target silently no-ops (or the bundler errors,
-      # depending on the Tauri patch version). Listed only in the release
-      # workflow because ci.yml's Linux job doesn't produce bundles —
-      # adding rpm there would just slow down `cargo test --lib`.
-      - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          # See ci.yml for why: the hosted ubuntu-22.04 image preconfigures
-          # Microsoft's APT repos, which intermittently 403 and break the whole
-          # `apt-get update`. We need nothing from them — drop any source file
-          # referencing that host before updating.
-          sudo find /etc/apt/sources.list.d -type f \
-            -exec grep -q 'packages\.microsoft\.com' {} \; -print -delete
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            rpm
-
       - name: Cache Cargo build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          # Add the runner OS to the cache key so the three platforms
-          # don't fight over a single shared cache.
-          key: ${{ matrix.platform }}
 
-      # macOS only: build the bundled engine sidecar (static llama-server
-      # from a PINNED llama.cpp source release) BEFORE `cargo tauri build`
-      # — tauri.macos.conf.json's externalBin requires the file and the
+      # Build the bundled engine sidecar (static llama-server from a
+      # PINNED llama.cpp source release) BEFORE `cargo tauri build` —
+      # tauri.macos.conf.json's externalBin requires the file and the
       # bundler copies it into Ekorbia.app/Contents/MacOS/. End users get
-      # it inside the DMG; nobody builds anything client-side. The Linux
-      # and Windows bundles deliberately ship WITHOUT a sidecar (engine
-      # backend is macOS-first — plan Phase 6 adds their builds), which
-      # is why externalBin lives in the macOS config overlay, not the
-      # base tauri.conf.json. Adds ~10 min to this leg (cmake is
-      # preinstalled on the hosted macOS runners; the script sha256-pins
-      # its source and refuses binaries linking non-system libraries).
+      # it inside the DMG; nobody builds anything client-side. Adds ~10
+      # min (cmake is preinstalled on the hosted macOS runners; the script
+      # sha256-pins its source and refuses binaries linking non-system
+      # libraries).
       - name: Build engine sidecar (llama-server)
-        if: matrix.platform == 'macos-latest'
         run: ./scripts/fetch-llama-server.sh
 
       # tauri-action runs `cargo tauri build`, finds the bundle outputs,
@@ -212,7 +154,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: ${{ matrix.args }}
 
   # ── Stage 3: SHA256SUMS + flip draft to published ──────────────────────
   publish-release:

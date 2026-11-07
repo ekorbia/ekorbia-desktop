@@ -1,25 +1,14 @@
 # Continuous Integration for Ekorbia.
 #
-# Three job tracks:
-#   • macOS  (test-macos)   — the primary platform: cargo fmt --check,
-#                              clippy, cargo test --lib, license drift,
-#                              Node helper tests, Playwright WebKit smokes.
-#   • Linux  (test-linux)   — cross-platform port (Phase L0): cargo fmt
-#                              --check, clippy, cargo test --lib. No UI
-#                              tests on Linux — Playwright's WebKit
-#                              targets WebKit upstream (same as macOS)
-#                              so duplicating that suite on a Linux
-#                              runner is pure spend with no extra
-#                              signal. The system-level WebKitGTK that
-#                              actually drives the Tauri webview on
-#                              Linux only matters at runtime.
-#   • Windows (test-windows) — cross-platform port (Phase W0): cargo
-#                              fmt --check, clippy, cargo test --lib.
-#                              Same rationale as Linux for skipping the
-#                              UI suite.
+# One job, on macOS — the only platform Ekorbia ships on since 0.8.0:
+# cargo fmt --check, clippy, cargo test --lib, license drift, Node helper
+# tests, Playwright WebKit smokes.
 #
-# Plus a license-attribution drift check via cargo-about (macOS job
-# only — license output is platform-independent so once is enough).
+# History: 0.3.0 – 0.7.1 also ran fmt/clippy/test on Ubuntu and Windows
+# runners for the best-effort Linux and Windows builds. Those builds ended
+# with 0.7.1 (the owner only tests and runs on a Mac), and the CI legs went
+# with them. The Rust `cfg` gates and `allow(dead_code)` markers stay so
+# the crate still compiles elsewhere for anyone building from source.
 
 name: CI
 
@@ -51,13 +40,13 @@ jobs:
       # tauri-build's build script validates that every externalBin file
       # exists — at COMPILE time, for every cargo invocation, including
       # clippy and `cargo test --lib`. tauri.macos.conf.json declares the
-      # engine sidecar (macOS only), so this job needs the file present
-      # even though it never bundles anything. A zero-byte stub satisfies
-      # the existence check; the REAL binary is built where it matters —
-      # by scripts/fetch-llama-server.sh in release.yml's macOS job (and
-      # once per dev machine). If tauri-build ever validates more than
-      # existence, this fails loudly and the fix is to swap the stub for
-      # a cached fetch-llama-server.sh run.
+      # engine sidecar, so this job needs the file present even though it
+      # never bundles anything. A zero-byte stub satisfies the existence
+      # check; the REAL binary is built where it matters — by
+      # scripts/fetch-llama-server.sh in release.yml (and once per dev
+      # machine). If tauri-build ever validates more than existence, this
+      # fails loudly and the fix is to swap the stub for a cached
+      # fetch-llama-server.sh run.
       - name: Stub engine sidecar (satisfies tauri-build's externalBin check)
         run: |
           mkdir -p src-tauri/binaries
@@ -123,117 +112,9 @@ jobs:
         run: npm ci
 
       # The UI test script uses Playwright with the WebKit browser (mirrors
-      # macOS Safari). `--with-deps` is a no-op on macOS but harmless;
-      # included for symmetry with the Linux convention.
+      # macOS Safari). `--with-deps` is a no-op on macOS but harmless.
       - name: Install Playwright WebKit
         run: npx playwright install --with-deps webkit
 
       - name: UI test suite (Node + Playwright)
         run: ./scripts/run-ui-tests.sh
-
-  # ── Linux: prove the codebase compiles + tests pass on Ubuntu ─────────
-  #
-  # Ubuntu 22.04 (not -latest) to pin glibc — AppImages built on a newer
-  # glibc fail to launch on older user systems. 22.04 is the oldest LTS
-  # still in standard support during 2026, so binaries built here run
-  # essentially everywhere modern.
-  test-linux:
-    name: Build + test (Linux)
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      # Tauri v2 prerequisites for Linux. WebKitGTK 4.1 is the webview
-      # backend the Tauri runtime links against; without it the `tauri`
-      # crate's build script aborts the build. The rest are runtime/icon
-      # dependencies the bundler step needs, included here so cargo
-      # check/test don't surface a "missing libfoo" surprise later when
-      # the release workflow runs against the same toolchain.
-      #
-      # Versions match https://v2.tauri.app/start/prerequisites/#linux
-      # for the 2.x line. If Tauri bumps to 5.x WebKitGTK in a future
-      # major, update here and in release.yml together.
-      - name: Install Linux system dependencies
-        run: |
-          # The hosted ubuntu-22.04 image preconfigures Microsoft's APT repos
-          # (azure-cli + packages.microsoft.com prod). They intermittently
-          # return "403 Forbidden / no longer signed", which makes the whole
-          # `apt-get update` exit non-zero and fails the job — even though our
-          # build needs nothing from them. Drop any source file referencing
-          # that host so we only depend on the Ubuntu mirrors.
-          sudo find /etc/apt/sources.list.d -type f \
-            -exec grep -q 'packages\.microsoft\.com' {} \; -print -delete
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Cache Cargo build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Cargo fmt (style gate)
-        working-directory: src-tauri
-        run: cargo fmt --check
-
-      - name: Clippy (lint gate)
-        working-directory: src-tauri
-        run: cargo clippy --lib --all-targets -- -D warnings
-
-      - name: Cargo unit tests
-        working-directory: src-tauri
-        run: cargo test --lib
-
-  # ── Windows: prove the codebase compiles + tests pass on Win MSVC ─────
-  #
-  # The Tauri runtime on Windows uses WebView2, which is preinstalled on
-  # GitHub's windows-latest runners (and on Windows 11 by default for end
-  # users; Win10 may need the bootstrapper — handled in release.yml).
-  # No special system packages are needed for the Rust-side build.
-  test-windows:
-    name: Build + test (Windows)
-    runs-on: windows-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Cache Cargo build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Cargo fmt (style gate)
-        working-directory: src-tauri
-        run: cargo fmt --check
-
-      - name: Clippy (lint gate)
-        working-directory: src-tauri
-        run: cargo clippy --lib --all-targets -- -D warnings
-
-      - name: Cargo unit tests
-        working-directory: src-tauri
-        run: cargo test --lib

@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The user guide** (`docs/`). The README and this changelog cover what's
   new.
+- **Windows and Linux builds.** Ekorbia is a Mac app now; 0.7.1 was the last
+  release with Windows and Linux installers, and those stay on the Releases
+  page.
 
 ### Fixed
 
