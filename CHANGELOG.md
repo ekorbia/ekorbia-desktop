@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your text stays in the composer.
 - **The message box grows as you type**, up to 40% of the window, then
   scrolls.
+- **Engine updated** to llama.cpp 0.9.0, from the July build.
 
 ### Removed
 

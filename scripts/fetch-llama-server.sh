@@ -22,8 +22,6 @@
 # Flags worth knowing (see the cmake invocation):
 #   GGML_NATIVE=OFF   — no -march=native; binary runs on any Apple-
 #                       Silicon Mac, not just the build machine.
-#   LLAMA_CURL=OFF    — no libcurl model-downloader; Ekorbia owns
-#                       downloads (Phase 3 catalog) and fewer deps win.
 #   LLAMA_OPENSSL=OFF — CRITICAL. With OpenSSL auto-detected the binary
 #                       links /opt/homebrew/opt/openssl@3/… — a
 #                       machine-local path that fails to load on Macs
@@ -41,12 +39,20 @@
 #
 # Bumping the pin: update LLAMA_TAG + SRC_SHA256 (shasum -a 256 of the
 # new source tarball), run with --force, run the app's engine smoke
-# (chat + tools + embed), and note the bump in CHANGELOG.md.
+# (chat + tools + embed), and note the bump in CHANGELOG.md. Two tag
+# shapes exist upstream: versioned releases (`v0.9.0` — the stable ones,
+# since autumn 2026) and per-merge build tags (`b10067`, flagged
+# pre-release). Pin ONLY versioned releases — pre-release builds are not
+# shipped, even to chase a performance delta. GitHub's tarball strips the
+# leading `v` from the extracted folder name; the SRC path below allows
+# for that (the `b` branch of VERSION_FLAG is kept for local experiments).
+#
+# Pin history: b10067 (Jul 2026, 0.6.0–0.7.1) → v0.9.0 (Nov 2026, 0.8.0).
 
 set -euo pipefail
 
-LLAMA_TAG="b10067"
-SRC_SHA256="4fba62c6e7474bdf0ffd459e2e3b3544cf3d9789f6f618637882146e35b704ba"
+LLAMA_TAG="v0.9.0"
+SRC_SHA256="5d0f1aaf55fd8629c29a55e81b7cb63b80239f83c33a580963071204896836a8"
 SRC_URL="https://github.com/ggml-org/llama.cpp/archive/refs/tags/${LLAMA_TAG}.tar.gz"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -93,20 +99,31 @@ echo "${SRC_SHA256}  ${TARBALL}" | shasum -a 256 -c - >/dev/null || {
   exit 1
 }
 
-SRC="${WORK_DIR}/llama.cpp-${LLAMA_TAG}"
+# `v0.9.0` extracts to `llama.cpp-0.9.0`; `b10067` to `llama.cpp-b10067`.
+SRC="${WORK_DIR}/llama.cpp-${LLAMA_TAG#v}"
 if [[ ! -d "$SRC" ]]; then
   echo "▸ extracting…"
   tar xzf "$TARBALL" -C "$WORK_DIR"
 fi
 
-echo "▸ configuring (static, Metal, no curl / no openssl)…"
+# A source tarball has no git history, so llama.cpp can't derive its build
+# number. For a build tag the number IS the tag. A versioned release
+# reports its version string instead (from CMakeLists.txt); upstream
+# defaults to a "-dev" suffix unless told it's a release build.
+VERSION_FLAG=""
+if [[ "$LLAMA_TAG" == b[0-9]* ]]; then
+  VERSION_FLAG="-DLLAMA_BUILD_NUMBER=${LLAMA_TAG#b}"
+elif [[ "$LLAMA_TAG" == v[0-9]* ]]; then
+  VERSION_FLAG="-DLLAMA_BUILD_IS_DEV=OFF"
+fi
+
+echo "▸ configuring (static, Metal, no openssl)…"
 cmake -S "$SRC" -B "${SRC}/build" \
   -DBUILD_SHARED_LIBS=OFF \
   -DCMAKE_BUILD_TYPE=Release \
   -DGGML_NATIVE=OFF \
-  -DLLAMA_CURL=OFF \
   -DLLAMA_OPENSSL=OFF \
-  -DLLAMA_BUILD_NUMBER="${LLAMA_TAG#b}" \
+  $VERSION_FLAG \
   -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=OFF \
   -DLLAMA_BUILD_TOOLS=ON \

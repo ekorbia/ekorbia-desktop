@@ -71,12 +71,19 @@ use std::time::Duration;
 /// could write a word). It is cheap on the catalog's Gemma 4 models, whose
 /// sliding-window layers keep a fixed-size cache — only the few global
 /// layers grow with `-c`. Measured on gemma4-12b (M1 Max, phys_footprint
-/// beyond the weights): 8K 1.2 GB, 32K 1.6 GB, 64K 2.1 GB. 64K was turned
-/// down because reading a full window at the measured ~240 tok/s would
-/// take minutes, and because this window applies to EVERY model,
+/// beyond the weights, engine b10067): 8K 1.2 GB, 32K 1.6 GB, 64K 2.1 GB.
+/// 64K was turned down because reading a full window at the measured
+/// ~240 tok/s would take minutes, and because this window applies to EVERY model,
 /// including link-added ones with full attention on every layer, where the
 /// cache costs far more per token. Per-model windows are the route if 32K
 /// ever gets tight.
+///
+/// Engine bump to llama.cpp v0.9.0 (Nov 2026), same model and args,
+/// two uncached 8.8K-token prompts per build: prompt read 231–240 tok/s
+/// on b10067 vs 207–210 on v0.9.0 (its Metal flash-attention path);
+/// decode ~35 tok/s and the 3.2 GB post-prompt footprint unchanged.
+/// `-fa off` recovered prompt speed but cost decode speed and +0.9 GB,
+/// so the defaults stay.
 ///
 /// Embed spawns pass no `-c` at all: embedding models declare small
 /// native contexts, and chunk sizes must fit the model's real window
@@ -339,8 +346,8 @@ pub(crate) struct SpawnSpec {
 }
 
 /// llama-server argv for a spec. Chat spawns get `--jinja` (GGUF chat
-/// template incl. tool-call grammar — explicit even though b10067
-/// defaults it on) and `--reasoning off`: the server-side fix for the
+/// template incl. tool-call grammar — explicit even though current
+/// builds default it on) and `--reasoning off`: the server-side fix for the
 /// "/v1 thinking tax" documented in the plan notes. Ollama's /v1 honors
 /// no thinking lever; OUR server does, so thinking models stop burning
 /// ~10x tokens on hidden reasoning. Revisit the hardcoded `off` if a
