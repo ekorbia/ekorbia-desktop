@@ -1585,6 +1585,151 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
   );
 }
 
+// ── Engine settings (0.8.0) ─────────────────────────────────────────────────
+// The bundled engine's two user settings, inside Settings → Backend's
+// engine card: the context window and Thinking. Each control saves the
+// moment it changes (`engine_tuning_set` persists + applies in Rust) —
+// independent of the Backend tab's own Save button, which only picks the
+// backend. Rust answers with the status it applied; that goes back to the
+// card (`onChanged`) and out on `ekorbia:engine-tuning`, which App listens
+// for so the token footer's budget and the send pre-flight follow at once.
+//
+// What "applies" means, so the hints stay honest: a new window takes a
+// model reload, which the engine does by itself on the next message (never
+// under a reply in flight); Thinking is a per-request opt-in, so it takes
+// effect on the next message with no reload. The window list and its
+// default come from Rust (`chatCtxChoices` / `chatCtxDefault`) — never
+// hardcode sizes here.
+function EngineTuning({ info, onChanged }) {
+  const invoke = getInvoke();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const choices = Array.isArray(info?.chatCtxChoices) ? info.chatCtxChoices : null;
+  if (!choices || !choices.length) return null;
+
+  const apply = async (patch) => {
+    setBusy(true);
+    setError(null);
+    try {
+      // Explicit nulls: "leave that setting alone".
+      const st = await invoke("engine_tuning_set", { chatCtx: null, thinking: null, ...patch });
+      if (st) {
+        onChanged?.(st);
+        window.dispatchEvent(new CustomEvent("ekorbia:engine-tuning", { detail: st }));
+      }
+    } catch (e) {
+      setError(String(e?.message || e || "Couldn't save the setting."));
+    }
+    setBusy(false);
+  };
+
+  const rowStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 };
+  const labelStyle = { fontFamily: T.sans, fontSize: 12.5, color: T.fg };
+  const hintStyle = { fontFamily: T.sans, fontSize: 10.5, color: T.fg3, lineHeight: 1.5, marginTop: 3 };
+  const thinking = !!info.thinking;
+
+  return (
+    <div
+      data-engine-tuning
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        padding: "10px 12px",
+        border: `1px solid ${T.border}`,
+        borderRadius: 8,
+        opacity: busy ? 0.7 : 1,
+      }}
+    >
+      <div>
+        <div style={rowStyle}>
+          <label htmlFor="ek-engine-ctx" style={labelStyle}>Context window</label>
+          <select
+            id="ek-engine-ctx"
+            data-engine-ctx
+            value={String(info.chatCtx)}
+            disabled={busy}
+            onChange={(e) => apply({ chatCtx: Number(e.target.value) })}
+            style={{
+              background: T.bg2,
+              border: `1px solid ${T.border}`,
+              borderRadius: 6,
+              color: T.fg,
+              fontFamily: T.mono,
+              fontSize: 12,
+              padding: "4px 8px",
+              cursor: "pointer",
+            }}
+          >
+            {choices.map((n) => (
+              <option key={n} value={String(n)}>
+                {ctxSizeLabel(n)}{n === info.chatCtxDefault ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div style={hintStyle}>
+          How much the model keeps in view at once: the chat so far, your
+          message and its reply. Bigger windows use more memory, and a
+          paste that fills one takes minutes to read. Takes effect on your
+          next message; the model reloads once.
+        </div>
+      </div>
+
+      <div>
+        <div style={rowStyle}>
+          <span id="ek-engine-thinking-label" style={labelStyle}>Thinking</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={thinking}
+            aria-labelledby="ek-engine-thinking-label"
+            data-engine-thinking
+            disabled={busy}
+            onClick={() => apply({ thinking: !thinking })}
+            style={{
+              position: "relative",
+              width: 36,
+              height: 20,
+              borderRadius: 999,
+              background: thinking ? T.amber : T.bg4,
+              border: "none",
+              cursor: "pointer",
+              flexShrink: 0,
+              transition: "background 0.15s",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 3,
+                left: thinking ? 19 : 3,
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                background: thinking ? T.bg0 : T.fg3,
+                transition: "left 0.15s",
+              }}
+            />
+          </button>
+        </div>
+        <div style={hintStyle}>
+          Lets models that can reason think before they answer in chat —
+          slower, often better on hard questions. You can open what they
+          thought above each reply. The quick-query overlay and Watches
+          always answer directly.
+        </div>
+      </div>
+
+      {error && (
+        <div data-engine-tuning-error style={{ fontFamily: T.mono, fontSize: 11, color: T.red }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Backend settings (no-Ollama plan, Phases 1-2) ───────────────────────────
 // Chooses which engine serves LLM traffic: Ollama (default), any
 // OpenAI-compatible server (LM Studio, llama-server, vLLM, …), or the
@@ -1779,6 +1924,7 @@ function BackendSettings() {
               </button>
             </div>
           )}
+          <EngineTuning info={engineInfo} onChanged={setEngineInfo} />
           <div style={{ fontFamily: T.sans, fontSize: 10.5, color: T.fg3, lineHeight: 1.5 }}>
             One chat model and one embedding model stay loaded at a time;
             switching models swaps automatically and idle models unload

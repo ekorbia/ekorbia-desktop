@@ -159,6 +159,7 @@ pub fn run() {
             llm::llm_backend_config_set,
             llm::llm_backend_test,
             providers::engine::engine_status,
+            providers::engine::engine_tuning_set,
             providers::engine::engine_models_dir_reveal,
             engine::downloads::engine_catalog,
             engine::downloads::engine_download,

@@ -5,7 +5,9 @@
 //!
 //! Policy: at most **one chat process + one embed process** resident.
 //! Each slot runs exactly one model at a time; asking for a different
-//! model triggers a swap, gated by three invariants:
+//! model — or, in the chat slot, the same model at a different context
+//! window (`-c` is fixed at spawn) — triggers a swap, gated by three
+//! invariants:
 //!
 //!   1. **Never evict mid-stream.** A slot with active leases
 //!      (refcount > 0) is never torn down. Requests for another model
@@ -86,7 +88,7 @@ enum SpawnerImpl {
 }
 
 impl SpawnerImpl {
-    fn spawn(&self, kind: SlotKind, model: &str) -> Result<Proc, String> {
+    fn spawn(&self, kind: SlotKind, model: &str, chat_ctx: u32) -> Result<Proc, String> {
         match self {
             SpawnerImpl::Real => {
                 let gguf = crate::engine::model_path(model)?;
@@ -106,17 +108,19 @@ impl SpawnerImpl {
                     mmproj,
                     port,
                     api_key: api_key.clone(),
+                    chat_ctx,
                 };
                 let handle = crate::engine::spawn_real(&spec)?;
                 Ok(Proc {
                     model: model.to_string(),
+                    chat_ctx,
                     port,
                     api_key,
                     handle: Handle::Real(Box::new(handle)),
                 })
             }
             #[cfg(test)]
-            SpawnerImpl::Fake(f) => f.spawn(kind, model),
+            SpawnerImpl::Fake(f) => f.spawn(kind, model, chat_ctx),
         }
     }
 }
@@ -125,6 +129,9 @@ impl SpawnerImpl {
 
 pub(crate) struct Proc {
     pub(crate) model: String,
+    /// The `-c` this process was spawned with. Compared in the chat slot
+    /// only — embed spawns pass no `-c`, so the field is inert there.
+    pub(crate) chat_ctx: u32,
     pub(crate) port: u16,
     pub(crate) api_key: String,
     handle: Handle,
@@ -260,13 +267,24 @@ impl Supervisor {
     /// model streaming). `on_status` receives human-readable progress
     /// ("loading …", "waiting for … to finish…") that adapters forward
     /// to the UI as `status` stream events.
+    ///
+    /// `chat_ctx` is the context window the caller wants (the user's
+    /// setting, `engine::chat_ctx()`); it only matters in the chat slot.
+    /// A resident process spawned at another window is NOT a match: it is
+    /// swapped under exactly the rules a different model is, so a changed
+    /// setting takes effect on the next request and never cuts a reply.
+    /// Passed in rather than read from the global so the scheduler tests
+    /// stay hermetic.
     pub(crate) async fn ensure(
         &self,
         kind: SlotKind,
         model: &str,
+        chat_ctx: u32,
         on_status: &(dyn Fn(&str) + Send + Sync),
     ) -> Result<Lease, String> {
         let unit = self.unit(kind);
+        let wanted =
+            |p: &Proc| p.model == model && (kind == SlotKind::Embed || p.chat_ctx == chat_ctx);
         // A contended guard = another request is mid-spawn or mid-swap.
         // Say so instead of streaming nothing.
         let mut inner = match unit.guard.try_lock() {
@@ -292,14 +310,18 @@ impl Supervisor {
             }
 
             match inner.proc.as_ref() {
-                Some(p) if p.model == model => {
+                Some(p) if wanted(p) => {
                     return Ok(unit.mint_lease(p.port, &p.api_key));
                 }
                 Some(p) => {
                     if unit.shared.refcount() == 0 {
                         // Idle → swap now. Guard held: no new lease can
                         // appear between the check and the teardown.
-                        on_status(&format!("switching to {model}…"));
+                        if p.model == model {
+                            on_status("applying the new context window…");
+                        } else {
+                            on_status(&format!("switching to {model}…"));
+                        }
                         let mut old = inner.proc.take().expect("checked Some");
                         old.handle.shutdown().await;
                         // fall through to the spawn path below
@@ -333,7 +355,7 @@ impl Supervisor {
                 }
             }
             on_status(&format!("loading {model}…"));
-            let mut proc = match self.spawner.spawn(kind, model) {
+            let mut proc = match self.spawner.spawn(kind, model, chat_ctx) {
                 Ok(p) => p,
                 Err(e) => {
                     record_fail(&mut inner.fails, model);
@@ -427,6 +449,11 @@ impl Supervisor {
     /// the whole cold load before the user's message even appears. The
     /// lease is minted under the slot guard like every other, so the
     /// never-evict-mid-request invariant holds for these too.
+    ///
+    /// Matches on the model ALONE, not the context window: a token count
+    /// doesn't depend on `-c`, so a process spawned at the old window still
+    /// counts correctly right after the user changes the setting (the
+    /// caller compares against the NEW window).
     pub(crate) fn lease_if_resident(&self, kind: SlotKind, model: &str) -> Option<Lease> {
         let unit = self.unit(kind);
         let mut inner = unit.guard.try_lock().ok()?;
@@ -504,7 +531,7 @@ pub(crate) mod fake {
     #[derive(Default)]
     pub(crate) struct FakeSpawner {
         pub(crate) script: Mutex<VecDeque<Outcome>>,
-        pub(crate) spawned: Mutex<Vec<(SlotKind, String)>>,
+        pub(crate) spawned: Mutex<Vec<(SlotKind, String, u32)>>,
         pub(crate) live: Mutex<Vec<Arc<FakeState>>>,
         next_port: AtomicU16,
     }
@@ -517,8 +544,16 @@ pub(crate) mod fake {
             Arc::new(s)
         }
 
-        pub(crate) fn spawn(&self, kind: SlotKind, model: &str) -> Result<Proc, String> {
-            self.spawned.lock().unwrap().push((kind, model.to_string()));
+        pub(crate) fn spawn(
+            &self,
+            kind: SlotKind,
+            model: &str,
+            chat_ctx: u32,
+        ) -> Result<Proc, String> {
+            self.spawned
+                .lock()
+                .unwrap()
+                .push((kind, model.to_string(), chat_ctx));
             let outcome = self
                 .script
                 .lock()
@@ -540,6 +575,7 @@ pub(crate) mod fake {
             let port = self.next_port.fetch_add(1, Ordering::SeqCst);
             Ok(Proc {
                 model: model.to_string(),
+                chat_ctx,
                 port,
                 api_key: format!("fake-key-{port}"),
                 handle: Handle::Fake(FakeHandle { state, ready }),
@@ -548,6 +584,11 @@ pub(crate) mod fake {
 
         pub(crate) fn spawn_count(&self) -> usize {
             self.spawned.lock().unwrap().len()
+        }
+
+        /// The context window the `idx`-th spawn was asked for.
+        pub(crate) fn spawned_ctx(&self, idx: usize) -> u32 {
+            self.spawned.lock().unwrap()[idx].2
         }
 
         pub(crate) fn state(&self, idx: usize) -> Arc<FakeState> {
@@ -571,16 +612,19 @@ mod tests {
         |_: &str| {}
     }
 
+    /// The window every pre-existing test asks for.
+    const CTX: u32 = 32768;
+
     #[tokio::test]
     async fn same_model_shares_one_process() {
         let f = FakeSpawner::scripted(&[]);
         let s = sup(&f);
         let a = s
-            .ensure(SlotKind::Chat, "gemma", &no_status())
+            .ensure(SlotKind::Chat, "gemma", CTX, &no_status())
             .await
             .unwrap();
         let b = s
-            .ensure(SlotKind::Chat, "gemma", &no_status())
+            .ensure(SlotKind::Chat, "gemma", CTX, &no_status())
             .await
             .unwrap();
         assert_eq!(f.spawn_count(), 1, "second request reuses the process");
@@ -599,7 +643,7 @@ mod tests {
         assert_eq!(f.spawn_count(), 0, "must never load a model");
 
         drop(
-            s.ensure(SlotKind::Chat, "gemma", &no_status())
+            s.ensure(SlotKind::Chat, "gemma", CTX, &no_status())
                 .await
                 .unwrap(),
         );
@@ -630,12 +674,12 @@ mod tests {
         let f = FakeSpawner::scripted(&[]);
         let s = sup(&f);
         let a = s
-            .ensure(SlotKind::Chat, "gemma", &no_status())
+            .ensure(SlotKind::Chat, "gemma", CTX, &no_status())
             .await
             .unwrap();
         drop(a); // refcount back to 0 — swap allowed
         let _b = s
-            .ensure(SlotKind::Chat, "llama", &no_status())
+            .ensure(SlotKind::Chat, "llama", CTX, &no_status())
             .await
             .unwrap();
         assert_eq!(f.spawn_count(), 2);
@@ -651,7 +695,7 @@ mod tests {
         let f = FakeSpawner::scripted(&[]);
         let s = Arc::new(sup(&f));
         let lease_a = s
-            .ensure(SlotKind::Chat, "gemma", &no_status())
+            .ensure(SlotKind::Chat, "gemma", CTX, &no_status())
             .await
             .unwrap();
 
@@ -661,7 +705,7 @@ mod tests {
         let st2 = statuses.clone();
         let waiter = tokio::spawn(async move {
             let cb = move |m: &str| st2.lock().unwrap().push(m.to_string());
-            s2.ensure(SlotKind::Chat, "llama", &cb).await
+            s2.ensure(SlotKind::Chat, "llama", CTX, &cb).await
         });
 
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -687,6 +731,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_new_context_window_swaps_an_idle_chat_slot() {
+        let f = FakeSpawner::scripted(&[]);
+        let s = sup(&f);
+        drop(
+            s.ensure(SlotKind::Chat, "gemma", 32768, &no_status())
+                .await
+                .unwrap(),
+        );
+        // Same model, same window: reused.
+        drop(
+            s.ensure(SlotKind::Chat, "gemma", 32768, &no_status())
+                .await
+                .unwrap(),
+        );
+        assert_eq!(f.spawn_count(), 1);
+
+        // Same model, NEW window: `-c` is fixed at spawn, so the idle
+        // process is torn down and respawned at the new size.
+        let statuses: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let st = statuses.clone();
+        let cb = move |m: &str| st.lock().unwrap().push(m.to_string());
+        let lease = s
+            .ensure(SlotKind::Chat, "gemma", 131072, &cb)
+            .await
+            .unwrap();
+        assert_eq!(f.spawn_count(), 2);
+        assert_eq!(f.spawned_ctx(0), 32768);
+        assert_eq!(f.spawned_ctx(1), 131072);
+        assert!(f.state(0).killed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(f.state(1).alive.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            statuses
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|s| s.contains("context window")),
+            "the reload must be explained, not read as a stall"
+        );
+        assert!(
+            !statuses
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|s| s.contains("switching to")),
+            "it is the same model — don't call it a switch"
+        );
+        drop(lease);
+    }
+
+    #[tokio::test]
+    async fn a_new_context_window_never_cuts_a_stream() {
+        let f = FakeSpawner::scripted(&[]);
+        let s = Arc::new(sup(&f));
+        let streaming = s
+            .ensure(SlotKind::Chat, "gemma", 32768, &no_status())
+            .await
+            .unwrap();
+
+        // The setting changed mid-reply; the next request wants 64K.
+        let s2 = s.clone();
+        let waiter = tokio::spawn(async move {
+            s2.ensure(SlotKind::Chat, "gemma", 65536, &no_status())
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!waiter.is_finished(), "must wait for the reply to finish");
+        assert!(
+            !f.state(0).killed.load(std::sync::atomic::Ordering::SeqCst),
+            "the streaming process must NOT be restarted under the reply"
+        );
+        assert_eq!(f.spawn_count(), 1);
+
+        drop(streaming); // reply ends → respawn at the new window
+        let lease = waiter.await.unwrap().unwrap();
+        assert_eq!(f.spawn_count(), 2);
+        assert_eq!(f.spawned_ctx(1), 65536);
+        assert!(f.state(0).killed.load(std::sync::atomic::Ordering::SeqCst));
+        drop(lease);
+    }
+
+    #[tokio::test]
+    async fn the_embed_slot_ignores_the_context_window() {
+        let f = FakeSpawner::scripted(&[]);
+        let s = sup(&f);
+        drop(
+            s.ensure(SlotKind::Embed, "nomic", 32768, &no_status())
+                .await
+                .unwrap(),
+        );
+        // Embed spawns pass no `-c`; a changed chat window must not make
+        // every folder index reload the embedding model.
+        drop(
+            s.ensure(SlotKind::Embed, "nomic", 131072, &no_status())
+                .await
+                .unwrap(),
+        );
+        assert_eq!(f.spawn_count(), 1);
+        assert!(!f.state(0).killed.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn lease_if_resident_ignores_the_context_window() {
+        let f = FakeSpawner::scripted(&[]);
+        let s = sup(&f);
+        drop(
+            s.ensure(SlotKind::Chat, "gemma", 8192, &no_status())
+                .await
+                .unwrap(),
+        );
+        // The pre-flight count runs against whatever is resident, at any
+        // window: counting tokens doesn't depend on `-c`.
+        assert!(s.lease_if_resident(SlotKind::Chat, "gemma").is_some());
+        assert_eq!(f.spawn_count(), 1);
+    }
+
+    #[tokio::test]
     async fn crash_loop_backs_off_after_three_failures() {
         let f = FakeSpawner::scripted(&[
             Outcome::ReadyErr("boom"),
@@ -695,18 +855,21 @@ mod tests {
         ]);
         let s = sup(&f);
         for _ in 0..3 {
-            assert!(s.ensure(SlotKind::Chat, "bad", &no_status()).await.is_err());
+            assert!(s
+                .ensure(SlotKind::Chat, "bad", CTX, &no_status())
+                .await
+                .is_err());
         }
         assert_eq!(f.spawn_count(), 3);
         // Fourth attempt: rejected WITHOUT spawning.
         let err = s
-            .ensure(SlotKind::Chat, "bad", &no_status())
+            .ensure(SlotKind::Chat, "bad", CTX, &no_status())
             .await
             .unwrap_err();
         assert!(err.contains("failed to start"), "got: {err}");
         assert_eq!(f.spawn_count(), 3, "backoff must not spawn again");
         // A different model is unaffected by `bad`'s backoff.
-        let ok = s.ensure(SlotKind::Chat, "good", &no_status()).await;
+        let ok = s.ensure(SlotKind::Chat, "good", CTX, &no_status()).await;
         assert!(ok.is_ok());
     }
 
@@ -719,10 +882,13 @@ mod tests {
         ]);
         let s = sup(&f);
         for _ in 0..3 {
-            assert!(s.ensure(SlotKind::Embed, "m", &no_status()).await.is_err());
+            assert!(s
+                .ensure(SlotKind::Embed, "m", CTX, &no_status())
+                .await
+                .is_err());
         }
         let err = s
-            .ensure(SlotKind::Embed, "m", &no_status())
+            .ensure(SlotKind::Embed, "m", CTX, &no_status())
             .await
             .unwrap_err();
         assert!(err.contains("failed to start"));
@@ -734,11 +900,11 @@ mod tests {
         let f = FakeSpawner::scripted(&[]);
         let s = sup(&f);
         let a = s
-            .ensure(SlotKind::Chat, "gemma", &no_status())
+            .ensure(SlotKind::Chat, "gemma", CTX, &no_status())
             .await
             .unwrap();
         let b = s
-            .ensure(SlotKind::Embed, "nomic", &no_status())
+            .ensure(SlotKind::Embed, "nomic", CTX, &no_status())
             .await
             .unwrap();
         assert_eq!(f.spawn_count(), 2);
@@ -756,7 +922,7 @@ mod tests {
         let f = FakeSpawner::scripted(&[]);
         let s = sup(&f);
         let a = s
-            .ensure(SlotKind::Chat, "gemma", &no_status())
+            .ensure(SlotKind::Chat, "gemma", CTX, &no_status())
             .await
             .unwrap();
         drop(a);
@@ -765,7 +931,7 @@ mod tests {
             .alive
             .store(false, std::sync::atomic::Ordering::SeqCst);
         let b = s
-            .ensure(SlotKind::Chat, "gemma", &no_status())
+            .ensure(SlotKind::Chat, "gemma", CTX, &no_status())
             .await
             .unwrap();
         assert_eq!(f.spawn_count(), 2, "dead process must be replaced");
@@ -777,7 +943,7 @@ mod tests {
         let f = FakeSpawner::scripted(&[]);
         let s = sup(&f);
         let a = s
-            .ensure(SlotKind::Chat, "gemma", &no_status())
+            .ensure(SlotKind::Chat, "gemma", CTX, &no_status())
             .await
             .unwrap();
         drop(a);
@@ -801,7 +967,7 @@ mod tests {
         let f = FakeSpawner::scripted(&[]);
         let s = sup(&f);
         let lease = s
-            .ensure(SlotKind::Chat, "gemma", &no_status())
+            .ensure(SlotKind::Chat, "gemma", CTX, &no_status())
             .await
             .unwrap();
         s.rewind_last_used(SlotKind::Chat, Duration::from_secs(9999));

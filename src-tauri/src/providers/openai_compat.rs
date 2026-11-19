@@ -193,6 +193,13 @@ pub(crate) fn translate_chat_body(body: &Value) -> Value {
     if let Some(tools) = body.get("tools") {
         out["tools"] = tools.clone();
     }
+    // `chat_template_kwargs` is a llama-server request field. The UI never
+    // sends it; the bundled-engine adapter adds it to opt a request in to
+    // thinking (`providers::engine::apply_thinking`), so on a custom
+    // endpoint it is simply never present.
+    if let Some(kwargs) = body.get("chat_template_kwargs") {
+        out["chat_template_kwargs"] = kwargs.clone();
+    }
     if stream {
         // Ask for token counts on the final chunk. Servers that don't
         // know the field ignore it; llama-server also reports `timings`,
@@ -287,6 +294,19 @@ impl SseNorm {
             return out;
         }
         if let Some(delta) = v.pointer("/choices/0/delta") {
+            // Reasoning text rides in its own field, ahead of the answer:
+            // llama-server's default `--reasoning-format` puts it in
+            // `delta.reasoning_content` (verified on v0.9.0), as do other
+            // servers that speak the DeepSeek convention. Forwarded as its
+            // own event and BEFORE any content in the same chunk, so the
+            // UI never has to un-mix thought from reply.
+            if let Some(text) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
+                if !text.is_empty() {
+                    out.push(StreamEvent::Thinking {
+                        text: text.to_string(),
+                    });
+                }
+            }
             if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
                 if !text.is_empty() {
                     out.push(StreamEvent::Delta {
@@ -1076,6 +1096,136 @@ mod tests {
             }]
         );
         assert!(n.finalize().is_empty(), "finalize must be idempotent");
+    }
+
+    #[test]
+    fn norm_reasoning_content_becomes_thinking_events() {
+        // The shape llama-server v0.9.0 streams with thinking on (captured
+        // from gemma4-12b): reasoning chunks first, then content, with the
+        // usual finish + usage tail.
+        let mut n = SseNorm::new();
+        let evs = ingest_all(
+            &mut n,
+            &[
+                r#"{"choices":[{"delta":{"role":"assistant","content":null}}]}"#,
+                r#"{"choices":[{"delta":{"reasoning_content":"Bat = ball"}}]}"#,
+                r#"{"choices":[{"delta":{"reasoning_content":" + $1."}}]}"#,
+                r#"{"choices":[{"delta":{"reasoning_content":""}}]}"#,
+                r#"{"choices":[{"delta":{"content":"The ball"}}]}"#,
+                r#"{"choices":[{"delta":{"content":" costs $0.05."}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+                r#"{"choices":[],"usage":{"prompt_tokens":40,"completion_tokens":376}}"#,
+            ],
+        );
+        assert_eq!(
+            evs,
+            vec![
+                E::Thinking {
+                    text: "Bat = ball".into()
+                },
+                E::Thinking {
+                    text: " + $1.".into()
+                },
+                E::Delta {
+                    text: "The ball".into()
+                },
+                E::Delta {
+                    text: " costs $0.05.".into()
+                },
+            ],
+            "reasoning is its own event; empty pieces are dropped; never mixed into the reply"
+        );
+        // Reasoning tokens are part of the completion count the server
+        // reports — the footer's "out" honestly includes the thinking.
+        assert_eq!(
+            n.finalize(),
+            vec![E::Done {
+                prompt_tokens: 40,
+                output_tokens: 376,
+                gen_ms: 0,
+                done_reason: "stop".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn norm_thinking_precedes_content_within_one_chunk_and_tool_calls_follow() {
+        let mut n = SseNorm::new();
+        // A server that packs both fields into one chunk: thought first.
+        let evs = n.ingest(
+            &serde_json::from_str(
+                r#"{"choices":[{"delta":{"content":"Answer.","reasoning_content":"Hmm."}}]}"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            evs,
+            vec![
+                E::Thinking {
+                    text: "Hmm.".into()
+                },
+                E::Delta {
+                    text: "Answer.".into()
+                },
+            ]
+        );
+
+        // Thinking, then a tool call (no content): the call still arrives
+        // exactly once, in finalize, before done.
+        let mut n = SseNorm::new();
+        let evs = ingest_all(
+            &mut n,
+            &[
+                r#"{"choices":[{"delta":{"reasoning_content":"I should save the file."}}]}"#,
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write_file","arguments":"{\"path\":\"a.txt\","}}]}}]}"#,
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"contents\":\"hi\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ],
+        );
+        assert_eq!(
+            evs,
+            vec![E::Thinking {
+                text: "I should save the file.".into()
+            }]
+        );
+        let tail = n.finalize();
+        assert_eq!(tail.len(), 2);
+        match &tail[0] {
+            E::ToolCalls { calls } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0]["function"]["name"], "write_file");
+                assert_eq!(calls[0]["function"]["arguments"]["path"], "a.txt");
+            }
+            other => panic!("expected toolCalls first, got {other:?}"),
+        }
+        assert!(matches!(&tail[1], E::Done { done_reason, .. } if done_reason == "tool_calls"));
+    }
+
+    #[test]
+    fn thinking_event_serializes_to_the_ui_contract() {
+        let v = serde_json::to_value(E::Thinking { text: "hm".into() }).unwrap();
+        assert_eq!(v, json!({ "type": "thinking", "text": "hm" }));
+    }
+
+    #[test]
+    fn translate_passes_template_kwargs_through_only_when_given() {
+        let with = translate_chat_body(&json!({
+            "model": "m", "stream": true,
+            "messages": [{ "role": "user", "content": "hi" }],
+            "chat_template_kwargs": { "enable_thinking": true },
+        }));
+        assert_eq!(
+            with["chat_template_kwargs"],
+            json!({ "enable_thinking": true })
+        );
+        let without = translate_chat_body(&json!({
+            "model": "m", "stream": true, "think": true,
+            "messages": [{ "role": "user", "content": "hi" }],
+        }));
+        assert!(
+            without.get("chat_template_kwargs").is_none(),
+            "a custom endpoint must never receive llama-server-only fields"
+        );
     }
 
     #[test]

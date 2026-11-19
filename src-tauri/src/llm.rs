@@ -184,6 +184,7 @@ fn endpoint_cfg(cfg: &BackendConfig) -> Result<EndpointCfg, String> {
 ///
 /// Serialized shape (what `consumeChunk` in main.jsx / overlay.jsx sees):
 ///   {"type":"delta","text":"…"}
+///   {"type":"thinking","text":"…"}
 ///   {"type":"toolCalls","calls":[{…, function:{name, arguments:{OBJECT}}}]}
 ///   {"type":"done","promptTokens":N,"outputTokens":N,"genMs":N}
 ///   {"type":"error","message":"…"}
@@ -209,11 +210,23 @@ fn endpoint_cfg(cfg: &BackendConfig) -> Result<EndpointCfg, String> {
 ///     it today. Zero or more may arrive, always BEFORE the first
 ///     `delta`; consumers render it as ephemeral placeholder text and
 ///     must never treat it as content.
+///   - `thinking` (0.8.0) is OPTIONAL reasoning text — the model's
+///     chain of thought, streamed in pieces like `delta` and normally
+///     ahead of it (a tool-loop turn may think again after earlier
+///     content). It is NEVER part of the reply: consumers that render it
+///     show it apart from the answer and don't persist it or send it
+///     back as history; consumers that don't (the overlay) ignore it.
+///     Emitted by `openai_compat` from `delta.reasoning_content`, so the
+///     engine (when Thinking is on) and any custom endpoint that streams
+///     that field produce it; the Ollama adapter never does (the UI
+///     sends `think: false` there).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type")]
 pub(crate) enum StreamEvent {
     #[serde(rename = "delta")]
     Delta { text: String },
+    #[serde(rename = "thinking")]
+    Thinking { text: String },
     #[serde(rename = "toolCalls")]
     ToolCalls { calls: Vec<serde_json::Value> },
     #[serde(rename = "done", rename_all = "camelCase")]

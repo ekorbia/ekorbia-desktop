@@ -22,6 +22,12 @@ const {
   voiceModelProgress,
   formatClock,
   applyThinkPref,
+  reasoningInit,
+  reasoningAdd,
+  reasoningClose,
+  reasoningFields,
+  thoughtLabel,
+  ctxSizeLabel,
   recommendGemmaModel,
   recommendEngineModel,
   ggufNameFromFile,
@@ -1602,4 +1608,114 @@ test("contextPreflight: any miss or failure means send", async () => {
   }
   assert.strictEqual(await contextPreflight({ backendKind: "engine", windowTokens: 32768, body: BIG }), null, "no invoke");
   assert.strictEqual(await contextPreflight({ invoke: fakeInvoke({}), backendKind: "engine", windowTokens: 32768 }), null, "no body");
+});
+
+// ── Thinking on the bundled engine (0.8.0) ───────────────────────────────
+
+test("applyThinkPref: on the engine, a surface that renders reasoning asks for it", () => {
+  const body = applyThinkPref({ model: "gemma4-12b", stream: true }, false, {
+    backendKind: "engine",
+    rendersReasoning: true,
+  });
+  // Rust turns this into real thinking only while the setting is on.
+  assert.equal(body.think, true);
+});
+
+test("applyThinkPref: on the engine, a surface that doesn't render reasoning never asks", () => {
+  // Capability true must not leak Ollama's `think: false` either — the
+  // engine never thinks unless asked, so the body stays clean.
+  const quiet = applyThinkPref({ model: "m" }, true, { backendKind: "engine" });
+  assert.equal("think" in quiet, false);
+  const quiet2 = applyThinkPref({ model: "m" }, false, {
+    backendKind: "engine",
+    rendersReasoning: false,
+  });
+  assert.equal("think" in quiet2, false);
+});
+
+test("applyThinkPref: other backends keep the Ollama rule even when rendering reasoning", () => {
+  for (const backendKind of ["ollama", "openai", undefined]) {
+    const capable = applyThinkPref({ model: "qwen3.5:9b" }, true, {
+      backendKind,
+      rendersReasoning: true,
+    });
+    assert.equal(capable.think, false, String(backendKind));
+    const plain = applyThinkPref({ model: "gemma4:e4b" }, false, {
+      backendKind,
+      rendersReasoning: true,
+    });
+    // `think` on a non-thinking Ollama model is a 400.
+    assert.equal("think" in plain, false, String(backendKind));
+  }
+});
+
+test("reasoning: a thinking phase accumulates text and is timed from its first piece", () => {
+  let r = reasoningInit();
+  assert.deepEqual(reasoningFields(r), {}, "no reasoning → no message fields");
+  r = reasoningAdd(r, "Bat = ball", 1000);
+  r = reasoningAdd(r, " + $1.", 1400);
+  assert.deepEqual(reasoningFields(r), {
+    reasoning: "Bat = ball + $1.",
+    reasoningLive: true,
+    thoughtMs: 0,
+  });
+  r = reasoningClose(r, 13000);
+  assert.deepEqual(reasoningFields(r), {
+    reasoning: "Bat = ball + $1.",
+    reasoningLive: false,
+    thoughtMs: 12000,
+  });
+});
+
+test("reasoning: closing is idempotent and empty pieces change nothing", () => {
+  let r = reasoningAdd(reasoningInit(), "hm", 0);
+  r = reasoningClose(r, 500);
+  const again = reasoningClose(r, 99999);
+  assert.deepEqual(again, r, "a second close must not add time");
+  assert.equal(reasoningAdd(r, "", 700), r);
+  assert.equal(reasoningAdd(r, undefined, 700), r);
+  // Closing something never opened is a no-op too.
+  assert.deepEqual(reasoningClose(reasoningInit(), 5), reasoningInit());
+});
+
+test("reasoning: a second phase (tool loop) starts a new paragraph and adds its time", () => {
+  let r = reasoningAdd(reasoningInit(), "I should save the file.", 0);
+  r = reasoningClose(r, 2000); // tool call
+  r = reasoningAdd(r, "Saved.", 5000);
+  r = reasoningAdd(r, " Now answer.", 5200);
+  assert.equal(reasoningFields(r).reasoningLive, true);
+  r = reasoningClose(r, 6000);
+  assert.deepEqual(reasoningFields(r), {
+    reasoning: "I should save the file.\n\nSaved. Now answer.",
+    reasoningLive: false,
+    thoughtMs: 3000, // 2 s + 1 s — the tool's own time is not thinking
+  });
+});
+
+test("reasoning: a clock that runs backwards never subtracts time", () => {
+  let r = reasoningAdd(reasoningInit(), "x", 5000);
+  r = reasoningClose(r, 4000);
+  assert.equal(r.ms, 0);
+});
+
+test("thoughtLabel: seconds, minutes, and the sub-second case", () => {
+  assert.equal(thoughtLabel(0), "Thought for a moment");
+  assert.equal(thoughtLabel(400), "Thought for a moment");
+  assert.equal(thoughtLabel(undefined), "Thought for a moment");
+  assert.equal(thoughtLabel(600), "Thought for 1 s");
+  assert.equal(thoughtLabel(12300), "Thought for 12 s");
+  assert.equal(thoughtLabel(59400), "Thought for 59 s");
+  assert.equal(thoughtLabel(60000), "Thought for 1 min");
+  assert.equal(thoughtLabel(65000), "Thought for 1 min 5 s");
+  assert.equal(thoughtLabel(600000), "Thought for 10 min");
+});
+
+test("ctxSizeLabel: engine windows read in K, odd sizes as plain numbers", () => {
+  assert.equal(ctxSizeLabel(8192), "8K");
+  assert.equal(ctxSizeLabel(32768), "32K");
+  assert.equal(ctxSizeLabel(131072), "128K");
+  assert.equal(ctxSizeLabel(4000), "4,000");
+  assert.equal(ctxSizeLabel(0), "");
+  assert.equal(ctxSizeLabel(null), "");
+  assert.equal(ctxSizeLabel("nope"), "");
 });

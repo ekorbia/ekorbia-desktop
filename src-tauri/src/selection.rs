@@ -52,7 +52,7 @@ const PBPASTE_BIN: &str = "/usr/bin/pbpaste";
 ///
 /// At the usual ~4 characters per token, 12k characters is roughly 3k
 /// tokens — a small slice of the bundled engine's chat window (see
-/// `engine::CHAT_CTX`), so a large selection still leaves the model plenty
+/// `engine::DEFAULT_CHAT_CTX`), so a large selection still leaves the model plenty
 /// of room to answer, and it stays usable on BYO servers with small
 /// windows. Selections this long are rare in practice.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // read only via clamp_selection

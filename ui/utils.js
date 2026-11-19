@@ -484,9 +484,81 @@ function formatClock(secs) {
 // "does not support thinking" error in Ollama — so a non-capable model
 // must leave the body untouched, NOT get `think: false`. Mutates and
 // returns `body` for call-site convenience.
-function applyThinkPref(body, thinkingCapable) {
+//
+// The bundled engine works the other way round (0.8.0): its models never
+// think unless a request opts in. `opts.rendersReasoning` marks a surface
+// that shows reasoning (the main chat, compare columns); on
+// `opts.backendKind === "engine"` such a request carries `think: true`,
+// and the engine turns that into real thinking ONLY while Settings →
+// Backend → Thinking is on (Rust owns that decision, so there is no stale
+// copy of the setting here). Surfaces that pass no opts — the overlay —
+// never ask, so quick lookups stay quick whatever the setting says.
+function applyThinkPref(body, thinkingCapable, opts) {
+  if (opts && opts.backendKind === "engine") {
+    if (opts.rendersReasoning) body.think = true;
+    return body;
+  }
   if (thinkingCapable) body.think = false;
   return body;
+}
+
+// ── Reasoning ("thinking") bookkeeping for ONE assistant reply ────────────
+//
+// The stream delivers reasoning as `thinking` events, normally before the
+// answer; in a tool loop a model may think again after earlier text. This
+// tiny state machine accumulates the text and times each thinking phase so
+// the chat can show a live block, then "Thought for 12 s". Pure — the
+// caller passes the clock — and shared by the single-chat and compare
+// stream consumers. State: { text, ms, openAt } (openAt = when the current
+// phase started, null between phases).
+function reasoningInit() {
+  return { text: "", ms: 0, openAt: null };
+}
+
+// A piece of reasoning arrived. Opens a phase if none is open; a later
+// phase starts on a fresh paragraph.
+function reasoningAdd(r, piece, nowMs) {
+  if (!piece) return r;
+  const opening = r.openAt === null;
+  return {
+    text: r.text + (opening && r.text ? "\n\n" : "") + piece,
+    ms: r.ms,
+    openAt: opening ? nowMs : r.openAt,
+  };
+}
+
+// The thinking phase ended — the first answer text, a tool call, or the
+// end of the stream. Idempotent.
+function reasoningClose(r, nowMs) {
+  if (r.openAt === null) return r;
+  return { text: r.text, ms: r.ms + Math.max(0, nowMs - r.openAt), openAt: null };
+}
+
+// The message fields the chat renders from. Empty when the model never
+// thought, so replies without reasoning carry nothing extra. These live in
+// memory only — reasoning is never persisted or sent back as history.
+function reasoningFields(r) {
+  if (!r || !r.text) return {};
+  return { reasoning: r.text, reasoningLive: r.openAt !== null, thoughtMs: r.ms };
+}
+
+// "Thought for 12 s" — the collapsed line a finished thinking phase leaves.
+function thoughtLabel(ms) {
+  const s = Math.round((Number(ms) || 0) / 1000);
+  if (s < 1) return "Thought for a moment";
+  if (s < 60) return `Thought for ${s} s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `Thought for ${m} min ${r} s` : `Thought for ${m} min`;
+}
+
+// 32768 → "32K". The engine's context windows are multiples of 1,024
+// tokens; anything else (a custom server's odd size) reads as a plain
+// grouped number.
+function ctxSizeLabel(tokens) {
+  const n = Number(tokens);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  return n % 1024 === 0 ? `${n / 1024}K` : n.toLocaleString("en-US");
 }
 
 // Recommend a right-sized Gemma 4 model for the machine's RAM. Used by the
@@ -1430,6 +1502,12 @@ if (typeof window !== "undefined") {
   window.voiceModelProgress = voiceModelProgress;
   window.formatClock = formatClock;
   window.applyThinkPref = applyThinkPref;
+  window.reasoningInit = reasoningInit;
+  window.reasoningAdd = reasoningAdd;
+  window.reasoningClose = reasoningClose;
+  window.reasoningFields = reasoningFields;
+  window.thoughtLabel = thoughtLabel;
+  window.ctxSizeLabel = ctxSizeLabel;
   window.recommendGemmaModel = recommendGemmaModel;
   window.recommendEngineModel = recommendEngineModel;
   window.recipeToFormDefaults = recipeToFormDefaults;
@@ -1650,6 +1728,12 @@ if (typeof module !== "undefined" && module.exports) {
     voiceModelProgress,
     formatClock,
     applyThinkPref,
+    reasoningInit,
+    reasoningAdd,
+    reasoningClose,
+    reasoningFields,
+    thoughtLabel,
+    ctxSizeLabel,
     recommendGemmaModel,
     recommendEngineModel,
     ggufNameFromFile,

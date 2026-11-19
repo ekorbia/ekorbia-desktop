@@ -1116,7 +1116,18 @@ function App() {
         if (alive) setEngineCtx((st && st.chatCtx) || null);
       } catch { if (alive) setEngineCtx(null); }
     })();
-    return () => { alive = false; };
+    // The window is a user setting since 0.8.0 (Settings → Backend).
+    // BackendSettings announces every change with the status Rust applied,
+    // so the footer's budget and the send pre-flight follow at once.
+    const onTuning = (e) => {
+      const next = e && e.detail && e.detail.chatCtx;
+      if (alive && next) setEngineCtx(next);
+    };
+    window.addEventListener('ekorbia:engine-tuning', onTuning);
+    return () => {
+      alive = false;
+      window.removeEventListener('ekorbia:engine-tuning', onTuning);
+    };
   }, [backendKind]);
   // Derived capability bits + the mount probe. These MUST sit below the
   // `modelId` declaration: Babel-standalone downlevels `const` to `var`,
@@ -1983,6 +1994,9 @@ function App() {
 
     let accumulated = '';
     let tokensIn = 0, tokensOut = 0, genMs = 0, startMs = Date.now();
+    // Reasoning ("thinking") shown above the reply — see reasoningInit in
+    // utils.js. Spans the whole tool loop; in memory only, never persisted.
+    let reasoning = reasoningInit();
     // Why the last turn ended ('stop' | 'length' | 'tool_calls' | '').
     // Overwritten per iteration so the FINAL turn's reason wins —
     // intermediate tool_calls turns are not what the chip cares about.
@@ -2038,7 +2052,11 @@ function App() {
         // Uses the JIT-resolved value, not the render-scope map — a state
         // update from the probe above wouldn't be visible to this closure
         // until the next render, i.e. AFTER this send.
-        applyThinkPref(body, modelThinkingNow);
+        //
+        // On the bundled engine it's the reverse: this surface RENDERS
+        // reasoning, so the request says so, and the engine thinks only
+        // while Settings → Backend → Thinking is on.
+        applyThinkPref(body, modelThinkingNow, { backendKind, rendersReasoning: true });
 
         let turnContent = '';
         let turnToolCalls = [];
@@ -2070,19 +2088,45 @@ function App() {
               msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], statusText: note };
               return { ...c, messages: msgs };
             });
+          } else if (ev.type === 'thinking') {
+            // Reasoning text — shown live above the reply, then folded to
+            // "Thought for N s". Never content: `accumulated` (what gets
+            // persisted and sent back as history) is untouched.
+            reasoning = reasoningAdd(reasoning, ev.text, Date.now());
+            const fields = reasoningFields(reasoning);
+            setChat(c => {
+              const msgs = [...c.messages];
+              msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], ...fields, statusText: undefined };
+              return { ...c, messages: msgs };
+            });
           } else if (ev.type === 'delta') {
             turnContent += ev.text;
             accumulated += ev.text;
             streamAccumulatedRef.current = accumulated;
             const snap = accumulated;
+            // The first answer text ends the thinking phase.
+            reasoning = reasoningClose(reasoning, Date.now());
+            const fields = reasoningFields(reasoning);
             setChat(c => {
               const msgs = [...c.messages];
-              msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: snap, statusText: undefined };
+              msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], ...fields, content: snap, statusText: undefined };
               return { ...c, messages: msgs };
             });
           } else if (ev.type === 'toolCalls') {
             turnToolCalls = turnToolCalls.concat(ev.calls);
           } else if (ev.type === 'done') {
+            // A turn that thought and then only called a tool (or ran out
+            // of room) never sent a delta — close the phase here so its
+            // time stops and the block folds while the tool runs.
+            if (reasoning.openAt !== null) {
+              reasoning = reasoningClose(reasoning, Date.now());
+              const fields = reasoningFields(reasoning);
+              setChat(c => {
+                const msgs = [...c.messages];
+                msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], ...fields };
+                return { ...c, messages: msgs };
+              });
+            }
             // tokensIn is the prompt-eval count of the LATEST request —
             // it grows each iteration as we append tool responses, so
             // overwriting (not summing) gives a meaningful total.
@@ -2252,6 +2296,8 @@ function App() {
         content: finalContent || msgs[msgs.length - 1].content,
         streaming: false,
         statusText: undefined, // transient engine progress — never persists
+        // Closes a phase a Stop or a failure left open. In memory only.
+        ...reasoningFields(reasoningClose(reasoning, Date.now())),
         tokens: finalTokens,
         // 'length' drives the "reply hit the length limit — Continue"
         // chip on the last assistant message. undefined keeps the
@@ -2466,6 +2512,9 @@ function App() {
     let tokensOut = 0;
     let genMs = 0;
     let ok = false;
+    // Reasoning for this column (see reasoningInit in utils.js). Rides to
+    // the message through onChunk's third argument; never persisted.
+    let reasoning = reasoningInit();
 
     try {
       const Channel = getChannel();
@@ -2484,12 +2533,22 @@ function App() {
           // italic placeholder text in the live column. Render-only:
           // multiStreamAccumRef (what finalize persists) is untouched,
           // and the first real delta overwrites the placeholder.
-          if (!accumulated) onChunk?.(asstId, `*${ev.message}*`);
+          if (!accumulated && !reasoning.text) onChunk?.(asstId, `*${ev.message}*`);
+        } else if (ev.type === 'thinking') {
+          // Clears any status placeholder: the column shows the live
+          // reasoning block instead (render-only, like the placeholder).
+          reasoning = reasoningAdd(reasoning, ev.text, Date.now());
+          onChunk?.(asstId, accumulated, reasoningFields(reasoning));
         } else if (ev.type === 'delta') {
           accumulated += ev.text;
           multiStreamAccumRef.current.set(asstId, accumulated);
-          onChunk?.(asstId, accumulated);
+          reasoning = reasoningClose(reasoning, Date.now());
+          onChunk?.(asstId, accumulated, reasoningFields(reasoning));
         } else if (ev.type === 'done') {
+          if (reasoning.openAt !== null) {
+            reasoning = reasoningClose(reasoning, Date.now());
+            onChunk?.(asstId, accumulated, reasoningFields(reasoning));
+          }
           // promptTokens is the prompt-eval count of the latest request.
           // Compare-mode currently issues one fetch per column (no tool
           // loop), so this is final by definition.
@@ -2501,7 +2560,13 @@ function App() {
 
       // Snappy compare columns too — force thinking off for reasoning
       // models (helper gates it; `think` on a non-thinking model is a 400).
-      const body = applyThinkPref({ model, messages, stream: true }, modelThinkingMap[model]);
+      // On the bundled engine the columns render reasoning, so they ask
+      // for it; the engine honors that only while its Thinking setting is on.
+      const body = applyThinkPref(
+        { model, messages, stream: true },
+        modelThinkingMap[model],
+        { backendKind, rendersReasoning: true },
+      );
       await invoke('llm_chat_stream', {
         requestId: asstId,
         body,
@@ -2521,6 +2586,12 @@ function App() {
       // step reads it as the last-known content for the persist step
       // (matters when a mid-stream cancel truncated content).
       multiStreamControllersRef.current.delete(asstId);
+      // A Stop or a failure mid-thought never sent the delta/done that
+      // closes the phase — close it so the column's "Thought for…" is true.
+      if (reasoning.openAt !== null) {
+        reasoning = reasoningClose(reasoning, Date.now());
+        onChunk?.(asstId, accumulated, reasoningFields(reasoning));
+      }
     }
 
     return {
@@ -2692,10 +2763,10 @@ function App() {
     // Per-chunk UI update. Looks up the message by id (not last-index)
     // because in compare mode the "last" message changes per-column —
     // we want each chunk to land in its own row regardless of order.
-    const onChunk = (id, accumulated) => {
+    const onChunk = (id, accumulated, reasoningPatch) => {
       setChat(c => {
         const msgs = c.messages.map(m =>
-          m.id === id ? { ...m, content: accumulated } : m,
+          m.id === id ? { ...m, ...(reasoningPatch || null), content: accumulated } : m,
         );
         return { ...c, messages: msgs };
       });

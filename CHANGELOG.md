@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model's length limit, a **Continue →** chip appears under it — one click
   picks up right where the reply left off, even in a conversation that had
   filled the context window.
+- **Thinking.** Turn on **Settings → Backend → Thinking** and models that
+  can reason think before they answer in chat. The thought streams above
+  the reply, then folds to "Thought for 12 s". The overlay and Watches
+  still answer directly.
+- **Choose the context window.** **Settings → Backend** offers 8K to 128K
+  tokens; 32K stays the default. Bigger windows fit longer pastes and use
+  more memory.
 
 ### Changed
 

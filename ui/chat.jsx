@@ -1501,6 +1501,15 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
             textWrap: "pretty",
           }}
         >
+          {!isUser && m.reasoning && (
+            // The model's reasoning: live while it thinks, then folded to
+            // "Thought for N s" above the answer. In-memory only.
+            <ReasoningBlock
+              text={m.reasoning}
+              ms={m.thoughtMs}
+              live={!!m.streaming && !!m.reasoningLive}
+            />
+          )}
           {isUser ? (
             renderMessageContent(m.content, highlightRegex, null)
           ) : (
@@ -1515,9 +1524,12 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
             // Trailing "typing" cursor once tokens are flowing.
             <span className="stream-cursor" style={{ color: T.amber }} />
           )}
-          {!isUser && m.streaming && !m.content && (
+          {!isUser && m.streaming && !m.content && !m.reasoningLive && (
             // Pre-first-token: animated dots + a rotating "Thinking…" label,
             // or the engine's real status ("loading model…") when present.
+            // Yields to the live reasoning block, which is its own sign of
+            // life; comes back if a thought ends before any answer text
+            // (a tool call in flight).
             <ThinkingIndicator statusText={m.statusText} />
           )}
           {!isUser && m.doneReason === "length" && !m.streaming &&
@@ -1872,6 +1884,136 @@ function ThinkingIndicator({ statusText }) {
       >
         {label}
       </span>
+    </div>
+  );
+}
+
+// ─── Reasoning block ────────────────────────────────────────
+//
+// What a model thought before it answered (stream `thinking` events — the
+// bundled engine with Settings → Backend → Thinking on, or a custom
+// endpoint that streams reasoning). Two states:
+//
+//   live   — while the thought streams: a dim box clipped to a few lines
+//            and pinned to its newest text, so it reads as progress without
+//            taking the chat over.
+//   folded — once the answer starts: one line, "Thought for 12 s", that
+//            opens the full text on click.
+//
+// The text is the model's raw working — rendered as plain pre-wrapped text
+// (never through the markdown/HTML path) and deliberately quieter than the
+// reply. It lives on the in-memory message only: not persisted, not
+// exported, not sent back as history. Shared with compare columns.
+function ReasoningBlock({ text, ms, live }) {
+  const [open, setOpen] = useState(false);
+  const [clipped, setClipped] = useState(false);
+  const boxRef = useRef(null);
+  // Live: keep the newest lines in view. The box is overflow:hidden (no
+  // scrollbar flicker); scrollTop still works on it.
+  React.useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!live || !el) return;
+    el.scrollTop = el.scrollHeight;
+    setClipped(el.scrollHeight > el.clientHeight + 1);
+  }, [text, live]);
+  if (!text) return null;
+
+  // fg2, not fg3: quieter than the reply, but this is text people open in
+  // order to read (fg3 on the chat background is under 3:1).
+  const textStyle = {
+    fontFamily: T.sans,
+    fontSize: 12.5,
+    lineHeight: 1.55,
+    color: T.fg2,
+    whiteSpace: "pre-wrap",
+    overflowWrap: "anywhere",
+  };
+  const railStyle = {
+    borderLeft: `2px solid ${T.border}`,
+    paddingLeft: 10,
+    marginBottom: 10,
+  };
+  // One step brighter than the thought itself: the folded line is a
+  // control, and has to be findable.
+  const labelStyle = {
+    fontFamily: T.mono,
+    fontSize: 10.5,
+    letterSpacing: 0.4,
+    color: T.fg2,
+  };
+
+  if (live) {
+    // Fade the top edge only once there is something above to hide.
+    const fade = clipped
+      ? "linear-gradient(to bottom, transparent 0, #000 22px)"
+      : undefined;
+    return (
+      <div data-reasoning="live" style={railStyle}>
+        <div style={{ ...labelStyle, display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
+          <span aria-hidden="true" style={{ color: T.amber, letterSpacing: 2 }}>
+            <span className="typing-dot">●</span>
+            <span className="typing-dot">●</span>
+            <span className="typing-dot">●</span>
+          </span>
+          <span style={{ fontStyle: "italic" }}>Thinking…</span>
+        </div>
+        <div
+          ref={boxRef}
+          data-reasoning-text
+          style={{
+            ...textStyle,
+            // ~4 lines of 12.5px × 1.55.
+            maxHeight: 78,
+            overflow: "hidden",
+            WebkitMaskImage: fade,
+            maskImage: fade,
+          }}
+        >
+          {text}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div data-reasoning={open ? "open" : "folded"} style={railStyle}>
+      <button
+        type="button"
+        data-reasoning-toggle
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        title={open ? "Hide the reasoning" : "Show the reasoning"}
+        style={{
+          ...labelStyle,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: 0,
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+        }}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            display: "inline-block",
+            transform: open ? "rotate(90deg)" : "none",
+            transition: "transform 0.12s",
+          }}
+        >
+          ▸
+        </span>
+        <span>{thoughtLabel(ms)}</span>
+      </button>
+      {open && (
+        <div
+          data-reasoning-text
+          style={{ ...textStyle, marginTop: 6, maxHeight: 320, overflowY: "auto" }}
+        >
+          {text}
+        </div>
+      )}
     </div>
   );
 }

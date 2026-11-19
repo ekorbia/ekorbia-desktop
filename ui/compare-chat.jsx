@@ -564,14 +564,33 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null }) {
         ) : streaming && !message.content ? (
           // Pre-first-token: TTFT can be several seconds with the bigger
           // models per the Phase 0 spike. Show a typing indicator rather
-          // than an empty card so the user knows the column is alive.
-          <div
-            style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}
-          >
-            <span className="typing-dot">●</span>{" "}
-            <span className="typing-dot">●</span>{" "}
-            <span className="typing-dot">●</span>
-          </div>
+          // than an empty card so the user knows the column is alive —
+          // or, when the model is reasoning first, its live thoughts
+          // (ReasoningBlock lives in chat.jsx).
+          message.reasoning ? (
+            <>
+              <ReasoningBlock
+                text={message.reasoning}
+                ms={message.thoughtMs}
+                live={!!message.reasoningLive}
+              />
+              {!message.reasoningLive && (
+                <div style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}>
+                  <span className="typing-dot">●</span>{" "}
+                  <span className="typing-dot">●</span>{" "}
+                  <span className="typing-dot">●</span>
+                </div>
+              )}
+            </>
+          ) : (
+            <div
+              style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}
+            >
+              <span className="typing-dot">●</span>{" "}
+              <span className="typing-dot">●</span>{" "}
+              <span className="typing-dot">●</span>
+            </div>
+          )
         ) : (
           // MarkdownMessage handles streaming vs. finalized internally
           // (plaintext branch while streaming, parsed markdown when done)
@@ -586,6 +605,18 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null }) {
               whiteSpace: streaming ? "pre-wrap" : undefined,
             }}
           >
+            {message.reasoning && (
+              // Folded to "Thought for N s" by now — the answer has begun.
+              // whiteSpace reset: the block sets its own, and must not
+              // inherit the streaming pre-wrap around its button.
+              <div style={{ whiteSpace: "normal" }}>
+                <ReasoningBlock
+                  text={message.reasoning}
+                  ms={message.thoughtMs}
+                  live={streaming && !!message.reasoningLive}
+                />
+              </div>
+            )}
             <MarkdownMessage
               content={message.content || ""}
               streaming={streaming}

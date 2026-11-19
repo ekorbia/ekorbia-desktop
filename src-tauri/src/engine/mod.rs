@@ -61,10 +61,11 @@ use std::time::Duration;
 // code to Windows' clippy, which CI runs with `-D warnings`. The allows
 // are scoped to non-unix so unix builds still catch REAL dead code.
 
-/// Context window for chat spawns, shared by the prompt AND the reply.
-/// llama-server's `-c 0` ("use the model's native ctx") would allocate a
-/// cache for Gemma 4's full 256K-token window — multiple GB of RAM for
-/// headroom chats never use.
+/// DEFAULT context window for chat spawns, shared by the prompt AND the
+/// reply. The user can pick another from [`CHAT_CTX_CHOICES`] in Settings →
+/// Backend; [`chat_ctx`] is the value in force. llama-server's `-c 0` ("use
+/// the model's native ctx") would allocate a cache for Gemma 4's full
+/// 256K-token window — multiple GB of RAM for headroom chats never use.
 ///
 /// 32768, raised from 8192 in Oct 2026: real pastes outgrew 8K (the
 /// Tessera4X mod brief alone is ~9.8K tokens, so it 400'd before the model
@@ -72,11 +73,11 @@ use std::time::Duration;
 /// sliding-window layers keep a fixed-size cache — only the few global
 /// layers grow with `-c`. Measured on gemma4-12b (M1 Max, phys_footprint
 /// beyond the weights, engine b10067): 8K 1.2 GB, 32K 1.6 GB, 64K 2.1 GB.
-/// 64K was turned down because reading a full window at the measured
-/// ~240 tok/s would take minutes, and because this window applies to EVERY model,
-/// including link-added ones with full attention on every layer, where the
-/// cache costs far more per token. Per-model windows are the route if 32K
-/// ever gets tight.
+/// 64K was turned down AS THE DEFAULT because reading a full window at the
+/// measured ~240 tok/s would take minutes, and because this window applies
+/// to EVERY model, including link-added ones with full attention on every
+/// layer, where the cache costs far more per token. Since 0.8.0 the bigger
+/// windows are a user choice instead (see [`CHAT_CTX_CHOICES`]).
 ///
 /// Engine bump to llama.cpp v0.9.0 (Nov 2026), same model and args,
 /// two uncached 8.8K-token prompts per build: prompt read 231–240 tok/s
@@ -88,10 +89,88 @@ use std::time::Duration;
 /// Embed spawns pass no `-c` at all: embedding models declare small
 /// native contexts, and chunk sizes must fit the model's real window
 /// anyway.
-// Referenced by the unix spawn path (`build_args`) AND by the
-// cross-platform `engine_status` command (surfaces it to the UI's token
-// footer), so it's live on every platform — no `dead_code` allow needed.
-pub(crate) const CHAT_CTX: u32 = 32768;
+pub(crate) const DEFAULT_CHAT_CTX: u32 = 32768;
+
+/// The windows Settings → Backend offers (tokens). A closed list on
+/// purpose: `-c` is a RAM commitment made at spawn, so the UI shows five
+/// honest steps rather than a free-form number, and the setter rejects
+/// anything else. Changing the window takes a respawn — the supervisor
+/// treats "same model, different window" like a model swap (idle slot
+/// swaps on the next request, a streaming slot is waited out).
+///
+/// What the steps cost, measured on gemma4-12b (llama.cpp v0.9.0, M1 Max),
+/// one uncached prompt filling ~85% of the window:
+///
+/// | `-c` | idle footprint | prompt read            | footprint after |
+/// |------|----------------|------------------------|-----------------|
+/// | 8K   | 1.10 GB        | 7.0K tok in 30 s       | 1.80 GB         |
+/// | 16K  | 1.20 GB        | 13.9K tok in 77 s      | 1.80 GB         |
+/// | 32K  | 1.50 GB        | 27.9K tok in 227 s     | 2.20 GB         |
+/// | 64K  | 2.00 GB        | 55.7K tok in 751 s     | 2.80 GB         |
+/// | 128K | 3.00 GB        | (not run: 30+ min)     | —               |
+///
+/// Memory is the small part: idle grows ~15 KB per token of window on
+/// this model (only its global layers grow). A model with full attention
+/// on every layer pays about double — qwen3.5-9b idles at 0.41 GB (8K),
+/// 1.20 GB (32K) and 4.20 GB (128K), ~30 KB per token.
+///
+/// TIME is the real cost: read speed FALLS as the prompt grows (232 →
+/// 181 → 123 → 74 tok/s above), so one paste that fills 64K takes twelve
+/// minutes and 128K far longer. The big windows earn their place in long
+/// CHATS, which fill a turn at a time while the prompt cache carries the
+/// earlier turns — which is why they are a choice and 32K stays the
+/// default.
+pub(crate) const CHAT_CTX_CHOICES: [u32; 5] = [8192, 16384, 32768, 65536, 131072];
+
+// The two user-facing engine settings, loaded from `app_settings` in
+// `init` and updated live by `providers::engine::engine_tuning_set`.
+// Plain atomics: each is one word, read on every request.
+static CHAT_CTX_NOW: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(DEFAULT_CHAT_CTX);
+static THINKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Settings keys behind the two atomics above.
+pub(crate) const SETTING_CHAT_CTX: &str = "engine_chat_ctx";
+pub(crate) const SETTING_THINKING: &str = "engine_thinking";
+
+/// The chat context window in force (tokens). New spawns use it, the
+/// pre-flight compares against it, and `engine_status` reports it.
+pub(crate) fn chat_ctx() -> u32 {
+    CHAT_CTX_NOW.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Is "Thinking" on in Settings → Backend? It never reaches the spawn
+/// arguments — see `build_args` and `providers::engine::apply_thinking`.
+pub(crate) fn thinking() -> bool {
+    THINKING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn valid_chat_ctx(n: u32) -> bool {
+    CHAT_CTX_CHOICES.contains(&n)
+}
+
+/// Caller validates with [`valid_chat_ctx`] first.
+pub(crate) fn set_chat_ctx(n: u32) {
+    CHAT_CTX_NOW.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn set_thinking(on: bool) {
+    THINKING.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Stored setting → window. Missing, unparseable, or no longer on the
+/// list (a hand-edited DB, a choice a later version dropped) all fall back
+/// to the default instead of spawning with a number nobody vetted.
+pub(crate) fn parse_chat_ctx(raw: Option<&str>) -> u32 {
+    raw.and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|n| valid_chat_ctx(*n))
+        .unwrap_or(DEFAULT_CHAT_CTX)
+}
+
+/// Stored boolean setting: `"1"` / `"true"` are on, everything else off.
+pub(crate) fn parse_flag(raw: Option<&str>) -> bool {
+    matches!(raw.map(str::trim), Some("1") | Some("true"))
+}
 
 /// How long a spawn may take to reach `/health` = 200 before we give up.
 /// Dominated by weight loading — a 12B Q4 model takes ~10-30s from a
@@ -125,6 +204,13 @@ static CTX: OnceLock<EngineCtx> = OnceLock::new();
 /// managed (reads settings) — also starts the idle-unload reaper task.
 pub(crate) fn init(app: &tauri::AppHandle, conn: &rusqlite::Connection) {
     use tauri::Manager;
+    // The two user settings first — they don't depend on anything below.
+    set_chat_ctx(parse_chat_ctx(
+        crate::db::get_setting(conn, SETTING_CHAT_CTX).as_deref(),
+    ));
+    set_thinking(parse_flag(
+        crate::db::get_setting(conn, SETTING_THINKING).as_deref(),
+    ));
     let data_dir = match app.path().app_data_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -343,6 +429,9 @@ pub(crate) struct SpawnSpec {
     pub(crate) mmproj: Option<PathBuf>,
     pub(crate) port: u16,
     pub(crate) api_key: String,
+    /// Chat context window (`-c`). Ignored for embed spawns, which use
+    /// the model's native context.
+    pub(crate) chat_ctx: u32,
 }
 
 /// llama-server argv for a spec. Chat spawns get `--jinja` (GGUF chat
@@ -350,11 +439,24 @@ pub(crate) struct SpawnSpec {
 /// builds default it on) and `--reasoning off`: the server-side fix for the
 /// "/v1 thinking tax" documented in the plan notes. Ollama's /v1 honors
 /// no thinking lever; OUR server does, so thinking models stop burning
-/// ~10x tokens on hidden reasoning. Revisit the hardcoded `off` if a
-/// user-facing thinking toggle ever ships (it would become a per-spawn
-/// flag). `-np 1` = one server slot: the full chat ctx serves one stream;
-/// a second same-model stream queues server-side (same behavior users
-/// get from default Ollama).
+/// ~10x tokens on hidden reasoning.
+///
+/// `--reasoning off` stays HARDCODED even though a Thinking toggle
+/// shipped in 0.8.0: the toggle is opt-IN PER REQUEST
+/// (`chat_template_kwargs.enable_thinking`, which llama-server lets a
+/// request override — see `providers::engine::apply_thinking`), not a
+/// spawn flag. That keeps the default path — the overlay, Watches, the
+/// pre-flight count — exactly as fast as before, and flipping the toggle
+/// costs no model reload. Verified on llama.cpp v0.9.0 with gemma4-12b,
+/// gemma4-e2b and qwen3.5-9b: spawned `off`, a request with the kwarg
+/// streams `delta.reasoning_content` ahead of the answer (one 10-token
+/// answer became ~500 tokens — the tax is real), and tool calls still
+/// arrive after the reasoning.
+///
+/// `-c` is the one argument the user controls (`SpawnSpec::chat_ctx`).
+/// `-np 1` = one server slot: the full chat ctx serves one stream; a
+/// second same-model stream queues server-side (same behavior users get
+/// from default Ollama).
 #[cfg_attr(not(unix), allow(dead_code))] // called only by the unix spawn path
 pub(crate) fn build_args(spec: &SpawnSpec) -> Vec<String> {
     let mut args = vec![
@@ -377,7 +479,7 @@ pub(crate) fn build_args(spec: &SpawnSpec) -> Vec<String> {
                 "--reasoning".into(),
                 "off".into(),
                 "-c".into(),
-                CHAT_CTX.to_string(),
+                spec.chat_ctx.to_string(),
                 "-np".into(),
                 "1".into(),
             ]);
@@ -702,6 +804,7 @@ mod tests {
             mmproj: mmproj.map(PathBuf::from),
             port: 12345,
             api_key: "k".into(),
+            chat_ctx: DEFAULT_CHAT_CTX,
         }
     }
 
@@ -715,12 +818,54 @@ mod tests {
         assert!(joined.contains("-ngl 99"));
         assert!(joined.contains("--jinja"));
         assert!(joined.contains("--reasoning off"), "thinking-tax fix");
-        // Pinned as a literal on purpose: the window is a measured RAM
-        // trade-off (see CHAT_CTX), so changing it should fail a test.
+        // Pinned as a literal on purpose: the DEFAULT window is a measured
+        // RAM trade-off (see DEFAULT_CHAT_CTX), so changing it should fail
+        // a test.
         assert!(joined.contains("-c 32768"));
         assert!(joined.contains("--no-webui"));
         assert!(!joined.contains("--embedding"));
         assert!(!joined.contains("--mmproj"));
+    }
+
+    #[test]
+    fn chat_args_follow_the_chosen_window_and_never_spawn_thinking() {
+        for ctx in CHAT_CTX_CHOICES {
+            let mut s = spec(SlotKind::Chat, None);
+            s.chat_ctx = ctx;
+            let joined = build_args(&s).join(" ");
+            assert!(joined.contains(&format!("-c {ctx} ")), "{joined}");
+            // Thinking is opt-in per request, never a spawn flag — the
+            // overlay, Watches and the pre-flight rely on this default.
+            assert!(joined.contains("--reasoning off"), "{joined}");
+        }
+    }
+
+    #[test]
+    fn stored_window_falls_back_to_the_default_unless_it_is_on_the_list() {
+        assert_eq!(parse_chat_ctx(None), DEFAULT_CHAT_CTX);
+        assert_eq!(parse_chat_ctx(Some("")), DEFAULT_CHAT_CTX);
+        assert_eq!(parse_chat_ctx(Some("lots")), DEFAULT_CHAT_CTX);
+        // Parses, but nobody vetted it: 0 is llama-server's "native ctx".
+        assert_eq!(parse_chat_ctx(Some("0")), DEFAULT_CHAT_CTX);
+        assert_eq!(parse_chat_ctx(Some("40000")), DEFAULT_CHAT_CTX);
+        assert_eq!(parse_chat_ctx(Some("8192")), 8192);
+        assert_eq!(parse_chat_ctx(Some(" 131072 ")), 131072);
+        assert!(valid_chat_ctx(DEFAULT_CHAT_CTX), "default must be offered");
+        assert!(!valid_chat_ctx(4096));
+        let mut sorted = CHAT_CTX_CHOICES;
+        sorted.sort_unstable();
+        assert_eq!(sorted, CHAT_CTX_CHOICES, "the UI lists them in order");
+    }
+
+    #[test]
+    fn stored_flag_is_on_only_for_one_or_true() {
+        assert!(parse_flag(Some("1")));
+        assert!(parse_flag(Some("true")));
+        assert!(parse_flag(Some(" 1 ")));
+        assert!(!parse_flag(Some("0")));
+        assert!(!parse_flag(Some("")));
+        assert!(!parse_flag(Some("yes")));
+        assert!(!parse_flag(None));
     }
 
     #[test]
@@ -821,6 +966,7 @@ mod tests {
             mmproj: None,
             port: alloc_port().unwrap(),
             api_key: gen_api_key(),
+            chat_ctx: DEFAULT_CHAT_CTX,
         };
         let mut h = spawn_real(&spec).expect("spawn");
         h.wait_ready().await.expect("healthy");
