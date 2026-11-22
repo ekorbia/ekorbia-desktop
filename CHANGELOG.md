@@ -7,38 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-22
+
 ### Added
 
-- **Selection actions.** Copy text in any app, press **⌘⇧E**, and act on it
-  with the local model — summarize, rewrite, fix grammar, explain, type your
-  own instruction, or press Enter to run an attached library prompt. One
-  click copies the result back. macOS; no permissions needed.
-- **Space ambient tinting.** Colored Spaces now color the room: the chat
-  pane's ambient glow takes the Space's hue, and the sidebar wears a soft
-  wash of the active Space's color. Dark themes only, whisper-level by
-  design.
-- **Math and diagrams in replies.** `$…$` / `$$…$$` TeX renders as real
-  typeset math (KaTeX), and ` ```mermaid ` code blocks render as diagrams —
-  flowcharts, sequence diagrams, and friends — themed to the app. Both are
-  fully offline; a diagram that doesn't parse stays a readable code block,
-  and dollar amounts stay dollar amounts.
-- **Command palette.** Press **⌘K** to search and run everything from the
-  keyboard — new chat, private chat, model comparison, Settings, your
-  Spaces, themes, and recent chats. Fuzzy matching included ("npc" finds
-  *New private chat*).
-- **Continue cut-off replies.** When a reply stops because it hit the
-  model's length limit, a **Continue →** chip appears under it — one click
-  picks up right where the reply left off, even in a conversation that had
-  filled the context window.
 - **Thinking.** Turn on **Settings → Backend → Thinking** and models that
   can reason think before they answer in chat. The thought streams above
   the reply, then folds to "Thought for 12 s". The overlay and Watches
   still answer directly.
 - **Choose the context window.** **Settings → Backend** offers 8K to 128K
-  tokens; 32K stays the default. Bigger windows fit longer pastes and use
+  tokens, with 32K as the default. Bigger windows fit longer pastes and use
   more memory.
 - **Two bigger models in the catalog**, both with vision: **Qwen3.8 27B**
   (17.5 GB, for 32 GB Macs) and **Gemma 4 31B** (18.9 GB, for 36 GB and up).
+- **Selection actions.** Copy text in any app, press **⌘⇧E**, and act on it
+  with the local model — summarize, rewrite, fix grammar, explain, type your
+  own instruction, or press Enter to run an attached library prompt. One
+  click copies the result back. macOS; no permissions needed.
+- **Command palette.** Press **⌘K** to search and run everything from the
+  keyboard — new chat, private chat, model comparison, Settings, your
+  Spaces, themes, and recent chats. Fuzzy matching included ("npc" finds
+  *New private chat*).
+- **Math and diagrams in replies.** `$…$` / `$$…$$` TeX renders as real
+  typeset math (KaTeX), and ` ```mermaid ` code blocks render as diagrams —
+  flowcharts, sequence diagrams, and friends — themed to the app. Both are
+  fully offline; a diagram that doesn't parse stays a readable code block,
+  and dollar amounts stay dollar amounts.
+- **Continue cut-off replies.** When a reply stops because it hit the
+  model's length limit, a **Continue →** chip appears under it — one click
+  picks up right where the reply left off, even in a conversation that had
+  filled the context window.
+- **Space ambient tinting.** Colored Spaces now color the room: the chat
+  pane's ambient glow takes the Space's hue, and the sidebar wears a soft
+  wash of the active Space's color. Dark themes only, whisper-level by
+  design.
 
 ### Changed
 
@@ -558,6 +560,7 @@ First public release. Local-first AI desktop built on Tauri 2 + Ollama.
   Ekorbia-tinted), built via `./scripts/build-docs.sh` and uploaded
   manually to ekorbia.com.
 
+[0.8.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ekorbia/ekorbia-desktop/compare/v0.5.0...v0.6.0
