@@ -30,6 +30,8 @@ const {
   ctxSizeLabel,
   recommendGemmaModel,
   recommendEngineModel,
+  planClosePrivateTabs,
+  chatIdOfMessage,
   ggufNameFromFile,
   parseHfGgufLink,
   parseHfRepo,
@@ -1718,4 +1720,122 @@ test("ctxSizeLabel: engine windows read in K, odd sizes as plain numbers", () =>
   assert.equal(ctxSizeLabel(0), "");
   assert.equal(ctxSizeLabel(null), "");
   assert.equal(ctxSizeLabel("nope"), "");
+});
+
+// ── recommendEngineModel against the REAL catalog (0.8.0) ────────────────
+//
+// The fixture above is a hand copy; this reads the catalog Rust bakes in, so
+// adding a model can't silently change what first-run offers.
+
+const REAL_CATALOG = require("../../src-tauri/src/engine/catalog.json").models.map((m) => ({
+  ...m,
+  // engine_catalog adds totalBytes; mirror it.
+  totalBytes: m.files.reduce((n, f) => n + f.bytes, 0),
+}));
+
+test("recommendEngineModel: the real catalog's automatic pick stays on the Gemma ladder", () => {
+  const pick = (gib) => recommendEngineModel(REAL_CATALOG, gib * GiB).id;
+  assert.equal(pick(8), "gemma4-e4b");
+  assert.equal(pick(16), "gemma4-12b");
+  assert.equal(pick(24), "gemma4-12b");
+  // 32 GB and up: the fast 26B, not the larger opt-in 31B or Qwen3.8 27B.
+  assert.equal(pick(32), "gemma4-26b-a4b");
+  assert.equal(pick(64), "gemma4-26b-a4b");
+  assert.equal(pick(128), "gemma4-26b-a4b");
+  // Unknown RAM → the flagged recommendation.
+  assert.equal(recommendEngineModel(REAL_CATALOG, 0).id, "gemma4-12b");
+  // Below every floor → the smallest SUGGESTED model, not the smallest file.
+  assert.equal(recommendEngineModel(REAL_CATALOG, 4 * GiB).id, "gemma4-e2b");
+});
+
+test("recommendEngineModel: opt-in models never win, however large or roomy", () => {
+  const cat = [
+    { id: "ladder", purpose: "chat", minRamGb: 16, totalBytes: 7e9 },
+    { id: "huge-opt-in", purpose: "chat", minRamGb: 16, totalBytes: 40e9, suggest: false },
+    { id: "tiny-opt-in", purpose: "chat", minRamGb: 4, totalBytes: 1e9, suggest: false },
+  ];
+  assert.equal(recommendEngineModel(cat, 64 * GiB).id, "ladder");
+  // Below the ladder's floor: still the ladder (with the warning), never the opt-in.
+  const low = recommendEngineModel(cat, 8 * GiB);
+  assert.equal(low.id, "ladder");
+  assert.equal(low.lowRam, true);
+  // suggest: true and a missing field both count as suggestable.
+  assert.equal(
+    recommendEngineModel([{ id: "a", purpose: "chat", minRamGb: 8, totalBytes: 1, suggest: true }], 8 * GiB).id,
+    "a",
+  );
+});
+
+test("recommendEngineModel: a catalog that is ALL opt-in still recommends something", () => {
+  const cat = [
+    { id: "small", purpose: "chat", minRamGb: 8, totalBytes: 3e9, suggest: false },
+    { id: "big", purpose: "chat", minRamGb: 32, totalBytes: 17e9, suggest: false },
+  ];
+  assert.equal(recommendEngineModel(cat, 32 * GiB).id, "big");
+  assert.equal(recommendEngineModel(cat, 16 * GiB).id, "small");
+});
+
+// ── Private chats end with the window (0.8.0) ────────────────────────────
+
+const TABS = [
+  { id: "a", title: "Saved A" },
+  { id: "p1", title: "Private chat", ephemeral: true },
+  { id: "b", title: "Saved B" },
+  { id: "p2", title: "Private chat", ephemeral: true },
+];
+const isPriv = (id) => id === "p1" || id === "p2";
+
+test("planClosePrivateTabs: closes every private tab in one pass, keeps the rest in order", () => {
+  const plan = planClosePrivateTabs(TABS, "a", isPriv);
+  assert.deepEqual(plan.closed, ["p1", "p2"]);
+  assert.deepEqual(plan.tabs.map((t) => t.id), ["a", "b"]);
+  // The front tab is a saved chat — the user stays where they were.
+  assert.equal(plan.activeTab, "a");
+  assert.equal(plan.needsFresh, false);
+  // Input is not mutated.
+  assert.equal(TABS.length, 4);
+});
+
+test("planClosePrivateTabs: a private chat in front hands over to the first remaining tab", () => {
+  const plan = planClosePrivateTabs(TABS, "p2", isPriv);
+  assert.deepEqual(plan.closed, ["p1", "p2"]);
+  assert.equal(plan.activeTab, "a"); // same rule as closeTab
+  assert.equal(plan.needsFresh, false);
+});
+
+test("planClosePrivateTabs: only private chats open → caller must open a fresh chat", () => {
+  const plan = planClosePrivateTabs([{ id: "p1" }, { id: "p2" }], "p1", isPriv);
+  assert.deepEqual(plan.closed, ["p1", "p2"]);
+  assert.deepEqual(plan.tabs, []);
+  assert.equal(plan.activeTab, null);
+  assert.equal(plan.needsFresh, true);
+});
+
+test("planClosePrivateTabs: no private chats → nothing to do, same tab list back", () => {
+  const saved = [{ id: "a" }, { id: "b" }];
+  const plan = planClosePrivateTabs(saved, "b", isPriv);
+  assert.deepEqual(plan.closed, []);
+  assert.equal(plan.tabs, saved, "the very same array — the caller can skip setState");
+  assert.equal(plan.activeTab, "b");
+  assert.equal(plan.needsFresh, false);
+});
+
+test("planClosePrivateTabs: tolerates junk input", () => {
+  assert.deepEqual(planClosePrivateTabs(null, "x", isPriv).closed, []);
+  assert.deepEqual(planClosePrivateTabs(undefined, "x").closed, []);
+  // No predicate → nothing counts as private.
+  assert.deepEqual(planClosePrivateTabs(TABS, "a", null).closed, []);
+});
+
+test("chatIdOfMessage: finds the chat a reply is streaming into, wherever the front tab is", () => {
+  const chats = {
+    a: { id: "a", messages: [{ id: "u1" }, { id: "asst-1" }] },
+    p1: { id: "p1", messages: [{ id: "u2" }, { id: "asst-2" }] },
+    empty: { id: "empty" },
+  };
+  assert.equal(chatIdOfMessage(chats, "asst-2"), "p1");
+  assert.equal(chatIdOfMessage(chats, "asst-1"), "a");
+  assert.equal(chatIdOfMessage(chats, "nope"), null);
+  assert.equal(chatIdOfMessage(chats, null), null);
+  assert.equal(chatIdOfMessage(null, "asst-1"), null);
 });

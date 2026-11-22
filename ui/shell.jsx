@@ -3482,6 +3482,11 @@ function Tab({ tab, active, model, attachmentCount = 0, onSelect, onClose }) {
   const [hover, setHover] = useState(false);
   return (
     <div
+      // Test hooks (tests/e2e/private-chats-window-close.spec.js drives the
+      // real tab strip): the tab's chat id, and whether it is private/active.
+      data-tab-id={tab.id}
+      data-tab-private={tab.ephemeral ? "" : undefined}
+      data-tab-active={active ? "" : undefined}
       onClick={onSelect}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -3560,6 +3565,8 @@ function Tab({ tab, active, model, attachmentCount = 0, onSelect, onClose }) {
       )}
       <button
         onClick={onClose}
+        data-tab-close
+        aria-label="Close tab"
         style={{
           width: 16,
           height: 16,

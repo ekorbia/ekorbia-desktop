@@ -83,12 +83,26 @@ pub(crate) struct CatalogModel {
     pub(crate) purpose: String,
     #[serde(default)]
     pub(crate) recommended: bool,
+    /// May the AUTOMATIC pick choose this model — the first-run screen and
+    /// the model manager's "best for your Mac" fallback, both of which take
+    /// the largest model that fits (`recommendEngineModel` in utils.js)?
+    /// Defaults to true. `false` marks an opt-in entry: listed and
+    /// downloadable like any other, never offered unasked. Without it,
+    /// every big model added to the catalog would become the first thing a
+    /// roomy Mac is told to download — the Gemma ladder (E2B → E4B → 12B →
+    /// 26B-A4B) is the automatic path; everything else is a choice.
+    #[serde(default = "default_true")]
+    pub(crate) suggest: bool,
     pub(crate) min_ram_gb: u64,
     pub(crate) caps: CatalogCaps,
     pub(crate) license: String,
     /// Upstream repo, for attribution/debugging (not fetched at runtime).
     pub(crate) source: String,
     pub(crate) files: Vec<CatalogFile>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -773,6 +787,39 @@ mod tests {
             .models
             .iter()
             .any(|m| m.purpose == "chat" && m.recommended));
+    }
+
+    #[test]
+    fn the_automatic_pick_stays_on_the_gemma_ladder() {
+        let c = catalog();
+        let suggested: Vec<&str> = c
+            .models
+            .iter()
+            .filter(|m| m.purpose == "chat" && m.suggest)
+            .map(|m| m.id.as_str())
+            .collect();
+        // Pinned on purpose: adding a model to the catalog must not change
+        // what first-run offers unless someone decides it should.
+        assert_eq!(
+            suggested,
+            vec!["gemma4-e2b", "gemma4-e4b", "gemma4-12b", "gemma4-26b-a4b"]
+        );
+        // The flagged recommendation has to be something we'd suggest…
+        assert!(c.models.iter().filter(|m| m.recommended).all(|m| m.suggest));
+        // …and the opt-in entries still ship (listed, downloadable).
+        for id in ["gemma4-31b", "qwen3.8-27b", "qwen3.5-4b", "qwen3.5-9b"] {
+            let m = c
+                .models
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap_or_else(|| panic!("{id} missing"));
+            assert!(!m.suggest, "{id} must be opt-in");
+        }
+        // `suggest` reaches the UI, which is where the rule is applied.
+        let payload = engine_catalog();
+        for m in payload["models"].as_array().unwrap() {
+            assert!(m["suggest"].is_boolean(), "{}", m["id"]);
+        }
     }
 
     #[test]

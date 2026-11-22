@@ -382,6 +382,25 @@ impl Supervisor {
     /// than `max_idle`. try_lock: never stalls behind an in-flight
     /// spawn — a busy slot is by definition not idle.
     pub(crate) async fn reap_idle(&self, max_idle: Duration) {
+        self.unload_lease_free(Some(max_idle)).await;
+    }
+
+    /// Unload every resident process that isn't mid-request, NOW — no idle
+    /// window. Called when the main window is hidden (lib.rs): nobody is
+    /// looking at the app, so its models shouldn't keep their memory for
+    /// another ten minutes. Same guarantees as `reap_idle`: a slot holding
+    /// a lease (a reply still streaming, a folder still indexing) is left
+    /// alone, and a slot mid-spawn is skipped rather than waited on.
+    // Its only caller is the macOS close-to-hide path, so elsewhere it is
+    // dead code to clippy (same pattern as selection.rs).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) async fn unload_idle(&self) {
+        self.unload_lease_free(None).await;
+    }
+
+    /// Shared body of `reap_idle` (`older_than` = the idle window) and
+    /// `unload_idle` (`None` = any lease-free process).
+    async fn unload_lease_free(&self, older_than: Option<Duration>) {
         for kind in [SlotKind::Chat, SlotKind::Embed] {
             let unit = self.unit(kind);
             if let Ok(mut inner) = unit.guard.try_lock() {
@@ -389,7 +408,9 @@ impl Supervisor {
                     .shared
                     .m
                     .lock()
-                    .map(|c| c.refcount == 0 && c.last_used.elapsed() > max_idle)
+                    .map(|c| {
+                        c.refcount == 0 && older_than.is_none_or(|d| c.last_used.elapsed() > d)
+                    })
                     .unwrap_or(false);
                 if idle {
                     if let Some(mut p) = inner.proc.take() {
@@ -960,6 +981,55 @@ mod tests {
             "idle process past the window must be unloaded"
         );
         assert!(s.snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unload_idle_frees_lease_free_slots_at_once_and_spares_busy_ones() {
+        let f = FakeSpawner::scripted(&[]);
+        let s = sup(&f);
+        // Chat model idle (lease just dropped — well inside any idle
+        // window), embed model mid-request.
+        drop(
+            s.ensure(SlotKind::Chat, "gemma", CTX, &no_status())
+                .await
+                .unwrap(),
+        );
+        let indexing = s
+            .ensure(SlotKind::Embed, "nomic", CTX, &no_status())
+            .await
+            .unwrap();
+        // The regular reaper would keep both for ten minutes…
+        s.reap_idle(Duration::from_secs(600)).await;
+        assert!(f.state(0).alive.load(std::sync::atomic::Ordering::SeqCst));
+
+        // …hiding the window lets go of the idle one immediately.
+        s.unload_idle().await;
+        assert!(
+            f.state(0).killed.load(std::sync::atomic::Ordering::SeqCst),
+            "an idle model must not keep its memory once the window is hidden"
+        );
+        assert!(
+            f.state(1).alive.load(std::sync::atomic::Ordering::SeqCst),
+            "a slot mid-request is never unloaded"
+        );
+        assert_eq!(s.snapshot(), vec![("nomic".to_string(), "embed")]);
+
+        // Once that request ends, a second call frees it too…
+        drop(indexing);
+        s.unload_idle().await;
+        assert!(f.state(1).killed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(s.snapshot().is_empty());
+
+        // …and the next request simply loads the model again.
+        drop(
+            s.ensure(SlotKind::Chat, "gemma", CTX, &no_status())
+                .await
+                .unwrap(),
+        );
+        assert_eq!(f.spawn_count(), 3);
+        // Nothing resident: a no-op, not a panic.
+        let empty = sup(&FakeSpawner::scripted(&[]));
+        empty.unload_idle().await;
     }
 
     #[tokio::test]

@@ -879,6 +879,22 @@ function App() {
     return () => { unlisten?.(); };
   }, []);
 
+  // The main window was closed. On macOS that HIDES it (lib.rs) — the app
+  // stays up for the hotkeys and Watches — so this webview lives on. Private
+  // chats must not: they end with the window, as they did when closing
+  // destroyed it. Indirect through the ref for the same reason as the
+  // screenshot handler (the latest tabs / chats, not mount-time snapshots).
+  useE(() => {
+    const eventApi = getEventApi();
+    if (!eventApi) return;
+    let unlisten = null;
+    eventApi
+      .listen('main:hidden', () => { mainHiddenHandlerRef.current?.(); })
+      .then((u) => { unlisten = u; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
+  }, []);
+
   // Surface spawn failures from screencapture (binary missing, permissions
   // denied, etc.). User cancels never reach here — Rust just doesn't emit.
   useE(() => {
@@ -3594,6 +3610,59 @@ function App() {
     // openChatInTab). Keeps the map size bounded by open-tab count.
     setAttachedPromptsByChat(m => { const n = { ...m }; delete n[id]; return n; });
   };
+
+  // Close every private chat at once — the window was closed (see the
+  // `main:hidden` listener). One pass, because closeTab computes its result
+  // from this render's `tabs` and would lose all but the last of several
+  // closes made in the same tick. The decision is planClosePrivateTabs
+  // (utils.js, node-tested); this is only the state plumbing, mirroring
+  // closeTab's two branches.
+  const closePrivateTabs = () => {
+    const plan = planClosePrivateTabs(tabs, activeTab, isEphemeralChat);
+    if (!plan.closed.length) return;
+    // A private reply still streaming would keep generating into a chat
+    // that no longer exists, and hold its model in memory. Stop it. A reply
+    // in a SAVED chat is left to finish — it will be there on reopen.
+    const inFlight = abortRef.current;
+    const streamingChat = chatIdOfMessage(chats, inFlight);
+    if (inFlight && streamingChat && plan.closed.includes(streamingChat)) {
+      invoke('llm_chat_stream_cancel', { requestId: inFlight }).catch(() => {});
+      abortRef.current = null;
+      streamingRef.current = false;
+      setStreaming(false);
+    }
+    if (plan.needsFresh) {
+      // Only private chats were open: land on a fresh empty chat, exactly
+      // like closing the last tab. genId() stays outside the reducers
+      // (StrictMode would mint two ids).
+      const fresh = genId();
+      setTabs([{ id: fresh, title: 'New chat', model: model.id }]);
+      setChats(cs => {
+        const upd = {
+          ...cs,
+          [fresh]: { id: fresh, title: 'New chat', messages: [], loaded: true },
+        };
+        plan.closed.forEach((id) => { delete upd[id]; });
+        return upd;
+      });
+      setActiveTab(fresh);
+    } else {
+      setTabs(plan.tabs);
+      if (plan.activeTab !== activeTab) setActiveTab(plan.activeTab);
+      setChats(cs => {
+        const n = { ...cs };
+        plan.closed.forEach((id) => { delete n[id]; });
+        return n;
+      });
+    }
+    setAttachedPromptsByChat(m => {
+      const n = { ...m };
+      plan.closed.forEach((id) => { delete n[id]; });
+      return n;
+    });
+  };
+  const mainHiddenHandlerRef = useR(null);
+  mainHiddenHandlerRef.current = closePrivateTabs;
 
   const openChatInTab = async (c) => {
     // Multi-model tabs carry their tabType + models list through to the

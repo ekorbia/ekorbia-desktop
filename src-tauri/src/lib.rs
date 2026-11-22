@@ -75,6 +75,80 @@ use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectStat
 
 use crate::db::{apply_migrations, DbState, SCHEMA};
 
+// ── Main window: close = hide (macOS) ───────────────────────────────────────
+//
+// On macOS the red button (and ⌘W) HIDES the main window; ⌘Q quits. The app
+// has to outlive its window — the global hotkeys, the quick-query overlay and
+// the Watch poller are the point of running in the background — but until
+// 0.8.0 "close" let Tauri DESTROY the window. The app then ran on with no way
+// back to its UI short of ⌘Q and a relaunch: nothing answered a Dock click,
+// and everything that wanted the main window (a screenshot capture, the
+// overlay's "Send to main") found `get_webview_window("main")` empty and
+// silently did nothing. Hidden, the window is still there for all of them,
+// and comes back with its tabs and drafts intact.
+
+/// Bumped every time the main window is shown, so a hide that was deferred
+/// (see the fullscreen case below) can tell it has been overtaken.
+#[cfg(target_os = "macos")]
+static MAIN_SHOWN_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How long macOS takes to animate a window out of fullscreen.
+#[cfg(target_os = "macos")]
+const FULLSCREEN_EXIT_WAIT: std::time::Duration = std::time::Duration::from_millis(900);
+
+/// Hide the main window in answer to a close request, then let go of the
+/// models' memory.
+#[cfg(target_os = "macos")]
+fn hide_main_window(window: &tauri::Window) {
+    use std::sync::atomic::Ordering;
+    use tauri::Emitter;
+    // Tell the UI first. Its webview outlives the "close" now, so anything
+    // that used to end with the window has to be ended on purpose — today
+    // that is private chats, which App closes on this event (see the
+    // `main:hidden` listener in main.jsx).
+    if let Err(e) = window.emit("main:hidden", ()) {
+        log_warn!("emit main:hidden failed: {e}");
+    }
+    if window.is_fullscreen().unwrap_or(false) {
+        // A fullscreen window owns its own Space; ordering it out would
+        // strand the user on that Space, now black. Leave fullscreen first
+        // and hide once the system's exit animation has finished — unless
+        // the window was asked for again in the meantime.
+        let _ = window.set_fullscreen(false);
+        let epoch = MAIN_SHOWN_EPOCH.load(Ordering::SeqCst);
+        let w = window.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(FULLSCREEN_EXIT_WAIT);
+            if MAIN_SHOWN_EPOCH.load(Ordering::SeqCst) == epoch {
+                let _ = w.hide();
+            }
+        });
+    } else {
+        let _ = window.hide();
+    }
+    // Nobody is looking at the app now, so don't sit on a model's memory for
+    // the rest of the idle window (up to ~27 GB with the largest catalog
+    // models). `unload_idle` never touches a slot that is mid-request — a
+    // reply still streaming into the hidden window, a folder still indexing
+    // — those fall to the regular idle reaper later. The next request (an
+    // overlay query, a Watch, the reopened window) just loads the model again.
+    tauri::async_runtime::spawn(async {
+        engine::supervisor::global().unload_idle().await;
+    });
+}
+
+/// Bring the main window back: the Dock icon was clicked, or the app was
+/// opened again while already running.
+#[cfg(target_os = "macos")]
+fn show_main_window(app: &tauri::AppHandle) {
+    MAIN_SHOWN_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -134,13 +208,25 @@ pub fn run() {
         // Dock icon stays; the user quits via Cmd+Q.
         //
         // Resolution: when the main window is asked to close, we explicitly
-        // call exit(0) on Windows + Linux to match user expectations, and
-        // do nothing on macOS to preserve the dock-stays-alive convention.
+        // call exit(0) on Windows + Linux to match user expectations. On
+        // macOS we refuse the close and HIDE the window instead (see
+        // `hide_main_window` above for why hiding, not closing) — the Dock
+        // icon brings it back through `RunEvent::Reopen` at the bottom of
+        // this function. Only the main window: the overlay has no close
+        // button and manages its own show/hide.
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
+                    #[cfg(target_os = "macos")]
+                    {
+                        api.prevent_close();
+                        hide_main_window(window);
+                    }
                     #[cfg(not(target_os = "macos"))]
-                    window.app_handle().exit(0);
+                    {
+                        let _ = api;
+                        window.app_handle().exit(0);
+                    }
                 }
             }
         })
@@ -543,7 +629,19 @@ pub fn run() {
         // RunEvent::Exit fires on Cmd+Q / exit(0) / last-window-close
         // paths; kill -9 and Force-Quit are covered by the watchdog
         // wrapper each spawn carries (see engine/mod.rs docs).
-        .run(|_app, event| {
+        .run(|app, event| {
+            // macOS: the Dock icon was clicked, or the app was opened again
+            // while running (Finder, Spotlight). The main window may be
+            // hidden by its close button — show it. Deliberately ignores
+            // `has_visible_windows`: the overlay can be the visible one.
+            #[cfg(target_os = "macos")]
+            {
+                if let tauri::RunEvent::Reopen { .. } = event {
+                    show_main_window(app);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = app;
             if let tauri::RunEvent::Exit = event {
                 engine::shutdown_sync();
                 // Free whisper.cpp's cached Metal context before exit()'s C++

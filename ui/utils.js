@@ -622,11 +622,20 @@ function recommendGemmaModel(ramBytes) {
 // (minRamGb) is ≤ actual memory — the floors already bake in OS/app headroom,
 // so we pick the LARGEST qualifying model. Below every floor → smallest model
 // with a lowRam warning; unknown RAM → the catalog's `recommended` pick.
+//
+// Only models the catalog lets us suggest take part (`suggest !== false`).
+// Opt-in entries — the big dense models, the non-Gemma families — are listed
+// and downloadable but never the automatic pick: "largest that fits" would
+// otherwise make every 17 GB addition the first download a roomy Mac is
+// offered. If a catalog marks EVERYTHING opt-in, all chat models take part
+// again rather than recommending nothing.
 function recommendEngineModel(catalog, ramBytes) {
-  const chat = (Array.isArray(catalog) ? catalog : []).filter(
+  const allChat = (Array.isArray(catalog) ? catalog : []).filter(
     (m) => m && m.purpose === "chat",
   );
-  if (!chat.length) return null;
+  if (!allChat.length) return null;
+  const suggestable = allChat.filter((m) => m.suggest !== false);
+  const chat = suggestable.length ? suggestable : allChat;
   const gbStr = (bytes) => `${((bytes || 0) / 1e9).toFixed(1)} GB`;
   const toCard = (m, extra) =>
     Object.assign(
@@ -673,6 +682,55 @@ function recommendEngineModel(catalog, ramBytes) {
   return toCard(fits[fits.length - 1], {
     reason: `Sized for your ${gbRounded} GB of memory, with headroom for the rest of your apps.`,
   });
+}
+
+// ── Private chats end with the window (main.jsx) ───────────────────────────
+//
+// On macOS the main window's close button hides it (lib.rs) instead of
+// destroying it, so in-memory state now survives a "close". Private chats
+// must not: closing the window is a reasonable way to end one, and before
+// 0.8.0 it did. When Rust reports the window hidden, App closes every
+// private tab in ONE step — closing them one by one through closeTab would
+// compute each result from the same stale tab list.
+//
+//   tabs      — the open tabs, in order ([{ id, … }])
+//   activeTab — id of the tab in front
+//   isPrivate — (tabId) => boolean
+//
+// Returns { closed, tabs, activeTab, needsFresh }:
+//   closed     — ids of the private tabs to drop (empty → nothing to do)
+//   tabs       — the tabs that stay, order kept
+//   activeTab  — the front tab afterwards: unchanged if it stays, else the
+//                first remaining tab (what closeTab does), else null
+//   needsFresh — true when nothing stays; the caller opens a new empty chat
+function planClosePrivateTabs(tabs, activeTab, isPrivate) {
+  const list = Array.isArray(tabs) ? tabs : [];
+  const priv = typeof isPrivate === "function" ? isPrivate : () => false;
+  const closed = list.filter((t) => t && priv(t.id)).map((t) => t.id);
+  if (!closed.length) {
+    return { closed, tabs: list, activeTab, needsFresh: false };
+  }
+  const remaining = list.filter((t) => !(t && priv(t.id)));
+  const activeStays = remaining.some((t) => t.id === activeTab);
+  return {
+    closed,
+    tabs: remaining,
+    activeTab: activeStays ? activeTab : remaining.length ? remaining[0].id : null,
+    needsFresh: remaining.length === 0,
+  };
+}
+
+// Which chat holds the message with this id? A reply streams into the chat
+// that was in front when it was sent, which need not be the front tab now —
+// this finds it from the in-flight request's id (the assistant message id).
+// Null when there is no such message.
+function chatIdOfMessage(chats, messageId) {
+  if (!messageId || !chats) return null;
+  for (const id of Object.keys(chats)) {
+    const msgs = (chats[id] && chats[id].messages) || [];
+    if (msgs.some((m) => m && m.id === messageId)) return id;
+  }
+  return null;
 }
 
 // ── Watch recipes + Today digest (watch.jsx, main.jsx) ─────────────────────
@@ -1510,6 +1568,8 @@ if (typeof window !== "undefined") {
   window.ctxSizeLabel = ctxSizeLabel;
   window.recommendGemmaModel = recommendGemmaModel;
   window.recommendEngineModel = recommendEngineModel;
+  window.planClosePrivateTabs = planClosePrivateTabs;
+  window.chatIdOfMessage = chatIdOfMessage;
   window.recipeToFormDefaults = recipeToFormDefaults;
   window.buildTodayDigest = buildTodayDigest;
   window.ekFilesGroupByPath = ekFilesGroupByPath;
@@ -1736,6 +1796,8 @@ if (typeof module !== "undefined" && module.exports) {
     ctxSizeLabel,
     recommendGemmaModel,
     recommendEngineModel,
+    planClosePrivateTabs,
+    chatIdOfMessage,
     ggufNameFromFile,
     parseHfGgufLink,
     parseHfRepo,

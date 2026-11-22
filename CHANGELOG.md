@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Choose the context window.** **Settings → Backend** offers 8K to 128K
   tokens; 32K stays the default. Bigger windows fit longer pastes and use
   more memory.
+- **Two bigger models in the catalog**, both with vision: **Qwen3.8 27B**
+  (17.5 GB, for 32 GB Macs) and **Gemma 4 31B** (18.9 GB, for 36 GB and up).
 
 ### Changed
 
@@ -60,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Long replies no longer stop after two minutes** with "error decoding
   response body".
+- **Closing the window no longer strands the app.** The window now hides
+  instead of being destroyed: click the Dock icon to get it back, tabs and
+  drafts intact. Hotkeys and Watches keep running as before, the model
+  unloads right away to free its memory, and ⌘Q still quits. Private chats
+  still end when you close the window.
 
 ## [0.7.1] - 2026-07-25
 

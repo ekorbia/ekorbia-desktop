@@ -32,7 +32,7 @@ to this PR; delete or strike through the ones that don't. -->
 - [ ] All model/tool-supplied paths go through `sandbox::resolve_within`
 - [ ] No `INSERT OR REPLACE` on tables with FK-cascade children
 - [ ] Components used in modals are hoisted to module scope (not defined inside render)
-- [ ] Schema additions noted in the PR description (existing dev DBs will reset)
+- [ ] Schema additions are migrations at the end of `apply_migrations` (not only in `SCHEMA`)
 
 ## Linked issues
 

@@ -1,4 +1,4 @@
-# Ekorbia — Local AI Chat and Productivity Environment
+# Ekorbia
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS%20%28Apple%20Silicon%29-lightgrey)
@@ -6,381 +6,79 @@
 ![Runs models locally](https://img.shields.io/badge/models-100%25%20local-24c8db)
 [![Launch Certified by FuzzPage](https://fuzzpage.com/badge/ekorbia-ekorbia-desktop.svg)](https://fuzzpage.com/p/ekorbia-ekorbia-desktop)
 
-A native desktop chat and productivity environment for local AI models. Ekorbia runs models **on your own machine** with a bundled engine — pick one from the built-in catalog and it downloads, no separate install and no terminal (prefer [Ollama](https://ollama.com) or an OpenAI-compatible endpoint? those work too, under Settings → Backend). No cloud, no API keys. It pairs multi-tab local chat with the features that set it apart — background **Watches** over folders, feeds, and web pages, a **Spotlight-style quick-query overlay**, and **ephemeral chats, model comparison mode, prompt library** — all fully offline, with no telemetry and no CDN calls.
+Private, local AI for your Mac. Ekorbia runs open models on your own machine with a bundled engine: pick one from the built-in catalog and it downloads. No terminal, no account, no API key. Your chats stay on your Mac.
 
 <p align="center">
-  <img src="docs/screenshots/ekorbia-screenshot-0.7.png" alt="Ekorbia main chat panel" width="800">
+  <img src="docs/screenshots/ekorbia-screenshot-0.7.png" alt="Ekorbia main chat window" width="800">
 </p>
+
+## What it does
+
+- **Ask from any app.** ⌘⇧Space opens a quick-query panel over whatever you are doing.
+- **Act on copied text.** Copy something, press ⌘⇧E, and summarize, rewrite, fix or explain it.
+- **Talk instead of type.** ⌘⇧V dictates from any app, transcribed on your Mac.
+- **Ask about your screen.** ⌘⇧1 captures a region into a new chat.
+- **Chat with your files.** Attach files or a whole folder; answers cite their sources.
+- **Spaces.** Group chats with their own model, pinned files, prompts and memory.
+- **Watches.** Summaries of new files in a folder, new posts in a feed, or changes to a web page, in the background.
+- **Prompt library.** Plain Markdown files you own; 31 are included.
+
+Also: compare two or three models side by side, private chats that are never saved, search across every chat, a memory file, optional thinking before answers, math and diagrams in replies, a ⌘K command palette, files the model saves to a folder you choose, and six themes.
+
+What changed in each release is in the [changelog](CHANGELOG.md). More at [ekorbia.com](https://ekorbia.com).
 
 ## Install
 
-Download the `.dmg` from the
-[Releases page](https://github.com/ekorbia/ekorbia-desktop/releases) and
-drag **Ekorbia.app** into your Applications folder. The build is unsigned,
-so there is a one-time bypass documented below.
+1. Download the `.dmg` from the [latest release](https://github.com/ekorbia/ekorbia-desktop/releases/latest).
+2. Drag **Ekorbia** into Applications and open it.
+3. On first launch Ekorbia looks at your Mac's memory, suggests a model that fits, and downloads it.
 
-Windows and Linux builds ended with 0.7.1; those installers remain on the
-Releases page.
+You need a Mac with Apple Silicon and macOS 12 or newer. 8 GB of memory runs the small models; 16 GB or more is better. Models take 3 to 19 GB of disk each.
 
-Ekorbia is **not** signed with an Apple Developer ID certificate (the
-project doesn't carry a paid Apple Developer membership). macOS
-Gatekeeper will refuse to open it on first launch. Depending on which
-step you're at, you'll see one of two messages — both have the same
-root cause (the browser tagged the download with a quarantine
-attribute) and the same fix.
+Windows and Linux builds ended with 0.7.1. Those installers remain on the Releases page.
 
-**If the `.dmg` itself won't open** — message reads `"Ekorbia_…dmg" is damaged and can't be opened. You should move it to the Trash.`
+### First launch on macOS (important)
 
-The file isn't actually damaged. Your browser quarantined it, and
-because the bundle is unsigned, Gatekeeper refuses outright instead of
-showing a bypass dialog. Strip the quarantine flag in Terminal:
+Ekorbia is not signed with an Apple Developer ID, so macOS blocks it the first time. Both messages below have the same cause, a quarantine mark your browser puts on downloads, and a one-time fix.
+
+**"Ekorbia…dmg is damaged and can't be opened."** The file is fine. Remove the mark, then open the `.dmg` again:
 
 ```bash
 xattr -dr com.apple.quarantine ~/Downloads/Ekorbia_*.dmg
 ```
 
-Then double-click the `.dmg` — it mounts normally — and drag
-`Ekorbia.app` into `/Applications`.
+**macOS says it could not verify Ekorbia.** Open **System Settings → Privacy & Security**, find the message about Ekorbia and click **Open Anyway**. On macOS 14 or earlier you can instead right-click the app and choose **Open**. Or run:
 
-> If `xattr` prints `No such xattr`, the file really is corrupted.
-> Re-download from the Releases page and verify the SHA256 against
-> `SHA256SUMS.txt` (also on the release page):
-> `shasum -a 256 -c SHA256SUMS.txt`
+```bash
+xattr -dr com.apple.quarantine /Applications/Ekorbia.app
+```
 
-**If the `.app` won't open after installing** — message reads `"Ekorbia.app" cannot be opened because the developer cannot be verified.`
+To check a download against the release's checksums, run `shasum -a 256 -c SHA256SUMS.txt` beside it. A [build from source](#build-from-source) needs no bypass.
 
-Pick one:
+## Models
 
-- **Right-click → Open**: in Finder, **right-click** (or Control-click)
-  `Ekorbia.app` in `/Applications` and choose **Open**. The dialog now
-  has an **Open** button — click it. macOS remembers your choice.
-- **Strip quarantine in Terminal**:
-  ```bash
-  xattr -dr com.apple.quarantine /Applications/Ekorbia.app
-  ```
+The bundled engine is [llama.cpp](https://github.com/ggml-org/llama.cpp). The catalog offers Gemma 4 (E2B, E4B, 12B, 26B and 31B) and Qwen (3.5 4B, 3.5 9B and 3.8 27B). Every download is checked against a pinned checksum. Settings → Models also takes a Hugging Face link, so you can add any GGUF model.
 
-Either approach is one-time; future launches work normally.
+Prefer your own runtime? Settings → Backend switches to [Ollama](https://ollama.com) or any OpenAI-compatible server, such as LM Studio, llama-server or vLLM.
 
-If you'd rather not run unsigned binaries, you can [build from source](#build-from-source)
-instead — the source build produces a locally-signed binary that
-Gatekeeper trusts.
+## Privacy and your data
+
+- No telemetry, no account, and no code or fonts loaded from the internet. Once a model is downloaded, Ekorbia works offline.
+- The only network traffic is what you ask for: model downloads from Hugging Face, the feeds and pages your Watches follow, and a custom endpoint if you set one up.
+- Chats are in a SQLite database in `~/Library/Application Support/com.ekorbia.desktop/`, with models in the `models` folder beside it.
+- Prompts and the memory file are plain Markdown in `~/Documents/Ekorbia/`.
+- Closing the window keeps Ekorbia running for its hotkeys and Watches, and ends any private chat. ⌘Q quits.
 
 ## Build from source
 
-Prerequisites: [Rust stable](https://rustup.rs), the Xcode Command Line
-Tools (`xcode-select --install`), and `cmake` (`brew install cmake`) for
-the engine build.
-
-You'll also want [`tauri-cli`](https://tauri.app/start/prerequisites/)
-for the `cargo tauri` command — `cargo install tauri-cli --version '^2'`.
-Node 20+ is optional and only needed if you plan to run the Playwright
-test suite.
-
-**Build:**
+You need [Rust](https://rustup.rs), the Xcode Command Line Tools (`xcode-select --install`), `cmake` (`brew install cmake`) and the Tauri CLI (`cargo install tauri-cli --version '^2'`).
 
 ```bash
 git clone https://github.com/ekorbia/ekorbia-desktop.git
 cd ekorbia-desktop
-./scripts/fetch-llama-server.sh   # builds the bundled engine (one-time)
-cd src-tauri
-cargo tauri build
+./scripts/fetch-llama-server.sh      # build the bundled engine, once
+./scripts/dev.sh                     # run the app in development
+(cd src-tauri && cargo tauri build)  # or build Ekorbia.app and the .dmg
 ```
 
-The bundles land under `src-tauri/target/release/bundle/`:
-`macos/Ekorbia.app` and `dmg/Ekorbia_*.dmg`.
-
-For development with hot-reload, use `cargo tauri dev` from the
-`src-tauri/` directory.
-
-## Requirements
-
-- **A Mac with Apple Silicon** running macOS 12 (Monterey) or newer.
-- **No separate runtime to install.** Ekorbia ships with a **bundled
-  engine** and runs models itself. On first launch it detects your RAM,
-  recommends a right-sized Gemma 4 from the built-in catalog, and
-  downloads it for you (plus an embedding model for folder RAG) — no
-  terminal. Prefer your own runtime? Ekorbia also supports **[Ollama](https://ollama.com)**
-  and any **OpenAI-compatible endpoint** (LM Studio, llama.cpp's
-  `llama-server`, vLLM, …), selectable under Settings → Backend.
-- **~8 GB free RAM** for the recommended models. Smaller models will
-  run on less; larger ones need more.
-- **Disk space for models** — a few GB per model, in the app data folder.
-
-## Features
-
-- **Multi-tab chat** with independent conversation history per tab
-- **Private chats** — click the lock icon next to "New chat" in the sidebar to open an ephemeral session. Messages, attachments, and file saves never touch the database; the conversation lives only in memory and disappears when the tab closes
-- **Compare 2-3 models side-by-side** — click the columns icon next to the lock icon in the sidebar to start a comparison chat. Pick 2 or 3 installed models, send one prompt, and watch the responses stream into adjacent columns in parallel. Click "Keep this" on whichever response you prefer — the chat transitions to a normal single-model conversation with the kept model, and the unpicked responses are preserved under a "▸ N alternatives" disclosure for later inspection.
-- **Spaces — workspaces for related chats** — pick the "+ New Space" button at the top of the sidebar to create a workspace bundling a default model, optional pinned files / folders, optional pinned prompts (any of which can be **locked** so they're always attached and can't be detached per chat), and an optional Space-scoped memory file. New chats created inside a Space inherit all of those automatically — so writing a novel, planning a project, or keeping therapy notes stops being "re-attach the same folder to every chat" and becomes "open the Space, start typing." Drag any chat onto a Space row to file it, or right-click for **Move to Space →**. Hover any Space row for the ⋯ menu: **Edit settings…** / **Rename** / **Change color…** / **Delete**. Chats stay in their Space across launches; click **All chats** at the top to see your full history. A Space with no extra context behaves as a pure folder — Spaces replaced the earlier 0.2.0 "chat groups" concept and existing groups migrate automatically on first launch.
-- **File & folder attachments with local RAG**
-  - Click the paperclip to attach `.txt` / `.md` / `.pdf` files or images, or the folder icon to attach an entire directory
-  - Small files are inlined verbatim; large files and folders are chunked, embedded locally with [nomic-embed-text](https://ollama.com/library/nomic-embed-text) (or any embedding model you pull), and retrieved per-query
-  - The folder walker filters by file type and skips noise (`.git`, `node_modules`, `target`, etc.); configurable in Settings
-  - **Images** route through vision-capable models (Gemma 4, llava, etc.) as base64; a small "VISION" badge on the chip shows when the active model can see them
-  - **Citations**: assistant replies emit `[N]` markers inline that match a Sources footer of clickable file chips. Folder chips expand to show which sub-files matched, with relevance scores. Shift-click any chip to reveal in Finder.
-  - Incremental folder re-index — change one note in a 500-file folder, click ↻, and only that file is re-embedded
-  - Live progress: chip shows `walking…` → `42/387` → `87 files`; aggregated indexing line in the status bar mirrors it
--  **Prompt library backed by Markdown files**
-  - Prompts live as `.md` files with YAML frontmatter under `~/Documents/Ekorbia/Prompts/` — git-friendly, easy to share, editable in any editor
-  - The folder is configurable in Settings (Browse / Reveal in Finder / Reset to default)
-  - Five colored **Favorites** for quick personal-bucket filtering, assignable via right-click; favorite color is per-user (lives in local SQLite) so it doesn't travel with shared files
-  - Flat free-text **tag filters** with full-text search across name, body, and tags
-  - Sort by Recent / A→Z / Z→A / Favorite (defaults to A→Z)
-  - Resizable list column (left half of the panel)
-  - Import prompts from `.md` / `.txt` files
-  - 31 built-in prompts ship with the app: Album Deep Dive, Brainstorm, Cliff Notes, Cloudflare Uptime Watcher, Cover Letter Writer, Devil's Advocate, Email Draft, Explain Simply, Google Cloud Uptime Watcher, How Does It End, Job Posting Watcher, Lateral Thinking Puzzles, Log Triage, Murder Mystery Interrogation, New Listing Watcher, Notes Synthesizer, Personal Website Builder, Price / Availability Watcher, Professional Website Builder, Rental Watcher, Research Paper Tracker, Resume Coach, Sensitive Doc Q&A, Should I Watch This, Summarize, Text Adventure, Tone Reframer, Translate → French, Translate → German, Translate → Spanish, Wikipedia Edit Watcher
-  - "Restore built-in prompts" button in Settings re-copies them if you've deleted any
-- **Quick-query overlay** (⌘⇧Space, customisable in Settings)
-  - Spotlight-style panel that pops up over any app — never steals focus from your work
-  - Inline model and single-prompt pickers, with searchable prompt list
-  - Streaming responses just like the main composer
-  - **Send to main** → continue any overlay session as a full multi-turn chat in the main window
-  - Auto-hides on blur (clicking elsewhere) or ⎋
-- **Screenshot capture** (⌘⇧1 by default, customisable in Settings)
-  - Invokes macOS's native region selector (drag for a region, Space for a window, Esc to cancel) — the same UI you already know from `Cmd+Shift+4`
-  - The captured PNG opens in a fresh chat tab with the image attached as a vision attachment
-  - Auto-switches to a vision-capable model if your current model can't see images (and tells you via toast); warns if no vision model is available
-- **Watch feature (ambient background work)** — three kinds, all writing into the same notes file
-  - **One-click recipes**: start from a gallery of ready-made watches — **Watch my Downloads**, price / availability, job postings, blog / RSS, or a blank **Custom** watch — that pre-fill the folder, prompt, and cadence so the first watch is a single click. The Watches panel shows this gallery whenever you have no watches yet
-  - **Folder**: Ekorbia polls a chosen folder and summarises any new file (PDF / TXT / MD) that lands there
-  - **RSS feed**: Polls an RSS or Atom feed; summarises each unseen entry. If the feed only ships a short teaser and a link, Ekorbia automatically follows the link and extracts the article body so summaries aren't paper-thin
-  - **URL**: Polls an arbitrary public page and only summarises when its visible text actually changes. **Snapshot mode** sends the whole new page to the model; **Diff mode** sends a unified line diff of what changed since the last poll — ideal for release notes, changelogs, leaderboards, status pages
-  - **Per-watch poll cadence**: folder=30s, RSS=10min, URL=30min by default, each tunable in the form. Manual "Run now" bypasses the cadence gate
-  - **Optional CSS selector** on URL watches lets you narrow extraction past nav / footer noise (`article`, `main`, `.post-content`)
-  - **Test button** in the watch form probes the feed/URL once and reports entry count or extracted character count — catches typos before saving
-  - **Edit watches** — pencil icon on each watch row reopens the form pre-filled so you can change the name, prompt, model, cadence, or any other field without deleting and re-creating
-  - **OS notifications** — per-watch opt-in toggle in the form sends a native macOS notification when new events arrive. Multiple events from one poll cycle are coalesced into a single banner ("8 new items from My Folder"). Watches with notifications enabled show a 🔔 glyph in the list. On macOS the form explains the permission request before the OS dialog fires.
-  - Right-panel "Watches" tab shows the activity feed with live processing indicators and a kind glyph (📁 / 📡 / 🌐) per row
-  - **Today view**: an **All / Today** toggle on the feed; *Today* bounds it to the last 24 hours and unlocks **Chat about today**, which opens a chat seeded with a digest of everything your watches surfaced today
-  - **Folder watches skip pre-existing files** — a new folder watch (e.g. the Downloads recipe) only summarises files added *after* you create it, so it won't dump a backlog of everything already in the folder; a "skip files already in folder" checkbox in the form controls this
-  - "Chat with notes" button opens a new chat with the accumulated notes injected as system context — ideal for asking questions across many summaries at once
-- **Live model picker** — lists every installed model, switch mid-session; your selection sticks across launches and auto-falls-back to an installed model if your previous pick is no longer present
-- **In-app model management** — browse, **download**, and delete models without opening a terminal. On the bundled engine it's a curated **catalog** (Gemma 4 tiers + the embedding model) with RAM-fit hints, checksummed + resumable downloads, live progress (with a Cancel button), and one-click delete. Reachable from **Settings → Models**, the picker's **Manage models…** footer, and the guided first-run. (On the Ollama backend the same manager pulls/deletes Ollama models, and you can still `ollama pull` from a terminal.)
-- **Streaming responses** — assistant tokens appear as the model produces them; a **Stop** button mid-generation freezes whatever was written so far and marks the partial message as `Stopped` so you can see exactly where the cut-off happened
-- **Markdown rendering** for assistant replies — headings, lists, tables, blockquotes, inline and fenced code, all rendered cleanly; **syntax-highlighted code blocks** via highlight.js (github-dark) with a per-block **Copy** button on hover. User messages stay as plain text so you see exactly what you typed
-- **Edit & retry messages** — click the pencil icon on any past user message to edit and resend (the conversation truncates from that point so the model re-answers with your revision); click the retry icon on the last assistant reply to regenerate. The DB and FTS index stay consistent — no orphan rows
-- **Chat export** — kebab menu in the chat header exports the conversation to **Markdown** (clean role-tagged sections, tool-call internals filtered out) or **JSON** (full row preservation including tool calls, timestamps, source attribution)
-- **Memory file** — a single user-edited markdown file Ekorbia injects as a system message on every chat send. Read-only from the model's perspective; the `write_file` tool can't touch it. Path is configurable in Settings → Memory; defaults to `~/Documents/Ekorbia/memory.md`
-- **Click-to-rename chats** — click the title in the ChatPane to edit inline; Enter saves, Esc cancels
-- **Full-text search across chat history** — type in the sidebar search box to find matches in any past message; results are ranked by relevance (BM25), highlighted in-place, and clicking a hit opens the parent chat with the query terms highlighted there too
-  - **Stale-embeddings banner** appears automatically if you change the embedding model in Settings, with a one-click "Re-index all" action
-- **Chat-generated file saves**
-  - Tool-capable models (gemma4, llama 3.1+, qwen 2.5+, …) can call a `write_file` tool to save any output file — HTML, CSS, JS, Python, configs, scripts — directly to a per-chat output directory you choose
-  - A first-save permission modal prompts you to pick an output folder (pre-filled to `~/Library/Application Support/…/Outputs/<chat-slug>/`) or block saves entirely for that chat; the choice sticks and you can change it any time via the **Files** panel
-  - The **Files** panel (third tab in the right sidebar, alongside Prompts and Watches) lists every file the model saved, grouped by path, with byte size, age, version count, and per-file **Reveal** and **Open** buttons; clicking a row scrolls the chat to the message that produced the save
-  - Saved files are **atomic** (temp file + rename), so a crash mid-write leaves the previous version intact
-  - A **TOOL** badge appears on the model picker when the active model supports tool use, so you always know which capability path is active
-  - For models that don't use tool calls — or when the tool path is unavailable — fenced code blocks in assistant messages get per-block **Save** buttons that route through the same sandbox and permission flow (source tagged `manual` in the history log)
-  - Every write is sandboxed to the chat's output directory; path-traversal attempts (`..`, absolute paths, symlink escapes) are rejected server-side with unit-tested rules
-- **Tab strip with attachment indicator** — tabs with attached files show a small paperclip + count so you can see context coverage at a glance
-- **History sidebar** with searchable chat history grouped by date, plus per-chat delete
-- **Settings panel** (tabbed: General / Models / Prompts / Memory / Attachments) exposes theme, density, status-bar toggle, overlay hotkey, screenshot hotkey, in-app model install/removal, prompts folder, memory file path, embedding model, top-k chunk count, folder file types and ignore patterns, plus a **Show tour again** button to re-run the onboarding
-- **First-launch onboarding tour** — a 5-slide intro covers the hotkeys, attachments, memory file, and prompts library on the very first launch. Skippable any time with ⎋, and re-openable later from Settings → General → Help → Show tour again
-- **Guided first-run setup** — after the tour, if you have no model yet, Ekorbia detects your system RAM, recommends a right-sized Gemma 4 from the catalog (down to the smallest on low-RAM machines), optionally grabs an embedding model for folder RAG, and downloads them in-app with progress — so you land in a working chat without ever touching a terminal. "Choose a different model" opens the full model manager
-- **Toasts** for non-modal feedback (model not pulled, attachment errors, watch failures) — never blocks the UI
-- **Selectable backend** — **bundled engine** (default; Ekorbia runs models itself), **Ollama** (optional/external), or any **OpenAI-compatible endpoint**, switchable live under **Settings → Backend**. Existing Ollama users get a one-time offer to keep Ollama or switch to the bundled engine; on the Ollama backend Ekorbia still offers to start Ollama if it isn't running
-- **Status bar** that surfaces the model's state (*cold* / *warming* / *loaded*) and backend, plus an aggregated *Indexing docs/ — 42/87* line whenever any attachment is being indexed
-- **Five themes** — One Dark, One Light, Ayu Dark, Ayu Mirage, Ayu Light
-- **Persisted UI state** — sidebar width, right-panel width, prompt-list width, panel open/closed state, right-panel tab, selected model, hotkey, prompts folder, embedding model, top-k, folder filters, and theme all survive across launches
-- **Local storage**
-  - **Chats and messages**: SQLite database at
-    `~/Library/Application Support/com.ekorbia.desktop/ekorbia.db`
-  - **Prompts**: Markdown files in your configured prompts folder
-  - **Search index**: SQLite FTS5 virtual table, kept in sync with messages automatically via triggers
-  - **Attachments**: file paths + metadata in SQLite; chunk embeddings stored as packed `f32` BLOBs (brute-force cosine retrieval — no extension required)
-
-## Prerequisites (developer)
-
-| Tool | Install |
-|------|---------|
-| [Rust](https://rustup.rs) (1.80+) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| [Tauri CLI](https://tauri.app/start/prerequisites/) | `cargo install tauri-cli --version '^2'` |
-| The bundled engine sidecar | `./scripts/fetch-llama-server.sh` (one-time; builds `llama-server` into `src-tauri/binaries/`) |
-| A model | Download one from the in-app catalog on first run (no terminal). Or, to develop against Ollama, install it and `ollama pull <model>` and select it under Settings → Backend |
-
-Plus the Xcode Command Line Tools (`xcode-select --install`) and `cmake`
-(`brew install cmake`) for the engine build.
-
-## Running in dev mode
-
-```bash
-git clone <repo-url>
-cd ekorbia
-cargo tauri dev
-```
-
-The app window opens automatically. The frontend in `ui/` hot-reloads on file save; Rust changes trigger a recompile and restart.
-
-## Building a release executable
-
-```bash
-cargo tauri build
-```
-
-Bundle outputs land under `src-tauri/target/release/bundle/`:
-
-```
-bundle/macos/Ekorbia.app
-bundle/dmg/Ekorbia_*.dmg
-```
-
-For a release, push a `v*` tag and the
-[release workflow](.github/workflows/release.yml) builds the DMG and
-publishes it with a `SHA256SUMS.txt`.
-
-## Switching models
-
-Click the model name button in the bottom-right of the composer to open the model picker. It lists every model currently pulled in Ollama (queried live from `/api/tags` each time the picker opens).
-
-To add a model, click **Manage models…** in the picker footer (or open **Settings → Models**) and download it from the curated starter list or by name — progress shows inline and the new model appears in the picker as soon as it finishes. You can still pull from a terminal if you prefer:
-
-```bash
-ollama pull <model-name>
-```
-
-Then reopen the picker — the new model appears immediately.
-
-Your choice is **sticky across launches**: the composer remembers the last model you used and reopens to it. If the model you previously picked is no longer pulled (e.g. you ran `ollama rm` on it or moved to a new machine), Ekorbia silently falls back to the first available model at startup so the composer is always in a usable state.
-
-The **quick-query overlay** keeps a separate model preference (under `ekorbia.overlay.model` in localStorage), so you can use a heavy reasoning model in the main window for in-depth chats and a small fast model in the overlay for quick lookups. Switch the overlay's model via the picker in its context bar; the main composer is unaffected.
-
-When the active model supports tool use, a **TOOL** badge appears on the model picker button. Tool-capable models (gemma4, llama 3.1+, qwen 2.5+, …) can call `write_file` automatically during chat to save files to disk — see [Saving files from chat](#saving-files-from-chat).
-
-A separate **VISION** badge appears on image attachment chips when the active model can see the attached image (gated per-query via `model_capabilities`).
-
-## Attaching files and folders
-
-Click the **paperclip** to attach individual files (`.txt`, `.md`, `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`) or the **folder icon** to attach an entire directory tree.
-
-**What happens behind the scenes:**
-
-- **Small text files (under 8 KB)**: inlined verbatim into the next prompt. Zero indexing latency, full context.
-- **Large text files and folders**: extracted, chunked (~1000 chars with 100-char overlap, paragraph-aware), and embedded with the model in *Settings → Attachments → Embedding model* (default `nomic-embed-text`). The chip shows live progress: `walking…` → `42/387` → `87 files`.
-- **Images**: if the active chat model is vision-capable (e.g. Gemma 4, llava), the bytes get base64-encoded into the request. Otherwise, attaching is allowed but the model will ignore the image and the Sources footer notes that.
-- **Folders**: respect the file-type allow-list (default: `.md`, `.txt`, `.pdf`) and the ignore-dir list (`.git`, `node_modules`, `target`, `dist`, `build`, `.venv`, etc.). Both are editable in Settings. Capped at 1000 files per folder.
-
-**At send time**, Ekorbia embeds your question and retrieves the top 6 most relevant chunks across all attachments. The model gets the chunks as a system message with `[1]`, `[2]`, … citation indices, and is instructed to mark its references inline. The Sources footer under the reply shows clickable file chips matching those indices — folder chips expand to show which sub-files contributed and their relevance scores.
-
-**Re-indexing a folder** (click the `↻` on a ready folder chip) is incremental: only files whose mtime has changed get re-embedded; unchanged files reuse their existing chunks.
-
-**If you change the embedding model** in Settings, a yellow banner appears above the chat: *"N attachments were embedded with a different model. Re-index them with X to make them searchable again."* — one click handles the lot.
-
-## Searching chat history
-
-Start typing in the **search box at the top of the History sidebar**. After ~150 ms of idle time, Ekorbia searches across every message ever saved — user and assistant — and shows ranked results below the title matches in a "Messages" section. Each hit shows the parent chat title and a 3-line snippet with the matched words highlighted.
-
-- **Multi-word queries** AND together — `code review` finds messages containing both
-- **Prefix matching** is automatic — `interrog` matches "interrogation"
-- **Punctuation is ignored** — `it's` searches the same as `its`
-- **Clicking a hit** opens the parent chat with the same query terms highlighted in every message, so you can scan for context
-
-## Watching folders, feeds, and URLs
-
-Open the right-side **Watches** panel and click **+ Configure** to open the **recipe gallery** — ready-made watches you can start with one click (**Watch my Downloads**, price / availability, job postings, blog / RSS) or **Custom** for a blank form. (With no watches yet, the panel shows this gallery directly.) Picking a recipe drops you into the watch form pre-filled for that recipe. To edit an existing watch instead, click the **pencil icon** on its row. Each watch has a kind:
-
-- **Folder** — Ekorbia scans the directory every 30 s (configurable). When a new `.pdf` / `.txt` / `.md` lands, it summarises the file and appends the summary to your notes file.
-
-- **RSS feed** — Paste a feed URL (RSS 2.0, RSS 1.0, or Atom — all handled by `feed-rs`). Defaults to polling every 10 minutes. For each unseen entry, the summary uses whichever is longest of `<content>`, `<summary>`/`<description>`, or — when the feed only carries a teaser — the article body fetched from the entry's link. Click **Test** before saving to see how many entries the feed currently exposes.
-
-- **URL** — Paste any public page. Defaults to polling every 30 minutes. Ekorbia fetches the page, strips HTML to text, and **only summarises if the visible text changed** since the last poll.
-  - **Snapshot mode** (default): the whole current page goes to the model when something changes.
-  - **Diff mode**: only the added/removed lines (unified diff, 3 lines of context) go to the model — useful when you mostly care about deltas (release notes, changelogs, leaderboards).
-  - **Advanced → CSS selector**: optionally narrow extraction to a sub-tree (`article`, `main`, `.post-content`). If the selector matches nothing on a given poll, the whole page is used as a fallback so the watch doesn't silently break.
-
-All three kinds share the same notes file, model, and (optional) summarisation prompt. The activity feed in the right panel shows kind glyph (📁 / 📡 / 🌐), source label, model, processing dots, and each event's full summary inline (click to expand truncated entries).
-
-**Today view**: the feed has an **All / Today** toggle. *Today* bounds it to the last 24 hours and enables **Chat about today**, which opens a new chat seeded with a digest of everything your watches captured today — handy for a single morning catch-up across all of them.
-
-**Folder watches skip pre-existing files**: a newly-created folder watch (e.g. the Downloads recipe) summarises only files that arrive *after* you set it up — it won't flood your notes with a backlog of everything already sitting in the folder. The "skip files already in folder" checkbox in the form controls this.
-
-**Editing a watch**: click the pencil icon between the on/off toggle and the trash icon on any watch row. The form opens pre-filled; saving runs the same upsert so pipeline state (`last_content`, `last_polled_at`) is preserved — the next poll continues from where it left off rather than re-firing a baseline summary.
-
-**OS notifications**: enable the *Notify* toggle in the watch form to receive a native OS notification whenever new events arrive. Multiple events from the same poll cycle are coalesced — e.g. five new files produces one "5 new items from My Folder" banner rather than five separate alerts. Watches with notifications on show a 🔔 in the list. On macOS the form shows an inline explainer before the OS permission dialog fires so you understand what you're granting.
-
-**Note on URL watches**: the first fetch after creating a diff-mode watch always emits a full-page summary because there's nothing to diff against yet. Subsequent polls produce diff-only summaries.
-
-## Saving files from chat
-
-When you use a tool-capable model (look for the **TOOL** badge), the model can call `write_file` during the conversation to save any generated file to disk — HTML pages, Python scripts, config files, anything.
-
-**First save**: the first time a model tries to save in a chat, a permission modal appears. You can:
-- **Allow** — pick an output folder (pre-filled to `~/Library/Application Support/com.ekorbia.desktop/Outputs/<chat-slug>/`)
-- **Block** — prevents any saves for this chat (the model is told it can't save)
-- **Not now** — skips this write only; the modal reappears on the next attempt
-
-**Files panel**: open the third right-panel tab (the document icon in the title bar) to see all files saved in the current chat. Each row shows:
-- Relative path, byte size, age, and version count if the model has overwritten a file
-- **Reveal** to show the file in Finder; **Open** to open it with your default application
-- Click the row to scroll the chat to the message that produced the save
-
-**Heuristic fallback** (for models without tool support): fenced code blocks in assistant messages display a **Save** button. Ekorbia infers a filename from comment hints inside the block (e.g. `<!-- index.html -->`, `# main.py`) or falls back to the language tag. The same permission flow and output directory apply.
-
-**Output dir management**: in the Files panel header you can click **Change…** to pick a new folder, **Reveal** to open the current folder in Finder, or **Block** to prevent any further saves for this chat.
-
-## Exporting chats
-
-Click the **kebab (⋯)** in the chat header for export options:
-
-- **Export to Markdown** — a clean human-readable transcript with role-tagged sections (`## You`, `## Assistant`). Assistant messages keep their markdown intact; tool-call internals (`role: tool` rows) are filtered out so the export reads like a conversation, not a transcript with debug noise
-- **Export to JSON** — every row in the conversation, including system context, tool calls, tool results, timestamps, and source attribution. Round-trips cleanly into other tools or scripts
-
-Both options write to a path you pick via the standard save dialog. The export is read-only — your chat in Ekorbia stays untouched.
-
-The kebab is hidden on private (ephemeral) chats since there's nothing to export.
-
-## Memory file
-
-A single user-edited markdown file Ekorbia injects as a system message on every chat send. Useful for habitual context you'd otherwise re-type into every prompt — facts about you, preferences, writing style, project conventions.
-
-- **Default path**: `~/Documents/Ekorbia/memory.md`. Change it via **Settings → Memory → Choose file…**, or reset via **Reset to default**.
-- **Edit memory** opens the file in your OS default text editor (creating it from a small template if it doesn't exist yet)
-- **Read-only from the model's perspective** — the `write_file` tool cannot touch it; only you can edit it externally. This is deliberate: the memory is your shared context with the model, not something it gets to rewrite on its own
-- **Soft cap at ~10 KB** — over that and an inline warning appears. The file's contents are added to *every* send, so token cost scales linearly with size
-
-Memory is global, not per-chat. If you want chat-specific notes the model should see, use an attachment instead.
-
-## Private chats
-
-Click the **lock icon** beside "New chat" in the sidebar to open an ephemeral session. Messages, attachments, file saves — none of it touches the SQLite database. The conversation lives only in memory and disappears when you close the tab.
-
-- The lock glyph appears on the tab and as a banner above the composer so a private chat is never visually confused with a persisted one
-- The composer hides the **paperclip** and **folder** buttons — no attachments in private mode (they'd persist to disk via the attachment store, defeating the purpose)
-- The export kebab is hidden too — there's nothing on disk to export from
-- Useful for quick scratch work, sensitive prompts, anything you want to leave no trace of in the chat history
-
-Switching the active tab away from a private chat doesn't destroy it — the conversation stays in memory until the tab itself closes.
-
-## Capturing screenshots
-
-Press **⌘⇧1** (default; rebindable in Settings → General → Screenshot) anywhere to invoke macOS's native region selector — the same crosshair UI you already know from `Cmd+Shift+4`. Drag for a region, press **Space** to switch to window mode, or **Esc** to cancel.
-
-When you complete a capture:
-
-- A new chat tab opens automatically with the screenshot attached as a vision attachment
-- If your current model can see images, you're good to go — type a question and send
-- If your current model **can't** see images but a vision model is cached from earlier this session, Ekorbia switches to it and toasts *"Switched to vision model: <name>"*
-- If no vision model is available at all, a toast warns you the image will be ignored — download one (every catalog Gemma 4 model can see images) and reattach
-
-The captured PNG is written to your system temp directory and referenced by path from the attachment store, so don't delete it before sending the first message. On macOS the OS reclaims temp files on reboot.
-
-## Contributing
-
-PRs are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev
-setup, test gates, and architectural invariants that patches need to
-respect. For bug reports and feature ideas, open a [GitHub Issue](https://github.com/ekorbia/ekorbia-desktop/issues).
-
-If you're reporting a security vulnerability, please use GitHub's
-private security advisory mechanism instead — see [`SECURITY.md`](SECURITY.md).
-
-Larger architectural decisions and the rationale behind the codebase's
-invariants live in [`CLAUDE.md`](CLAUDE.md) (originally written for AI
-coding assistants, but the most authoritative "why is this code shaped
-this way" reference in the repo).
-
-## License
-
-Ekorbia is released under the [MIT License](LICENSE).
-
-Copyright (c) 2026 Ekorbia.
-
-Third-party crate attributions are enumerated in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). The front-end libraries (React, ReactDOM, Babel-standalone, marked, highlight.js, DOMPurify) and fonts (Inter, JetBrains Mono, Instrument Serif) are **vendored into [`ui/vendor/`](ui/vendor/) and served locally** — Ekorbia loads no code or fonts from any CDN, so it boots fully offline; the only network traffic it produces is downloading a model you choose (and, if you opt into one, requests to a custom endpoint you configure). See [`ui/vendor/README.md`](ui/vendor/README.md) for pinned versions and upstream sources, and [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSES.md) for their license texts.
+Run the tests with `./scripts/run-all-tests.sh`. The UI suite needs Node 20 or newer, `npm ci` and `npx playwright install webkit`. [CONTRIBUTING.md](CONTRIBUTING.md) lists the test gates and the conventions a patch has to follow.

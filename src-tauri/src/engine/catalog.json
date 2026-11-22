@@ -111,10 +111,39 @@
       ]
     },
     {
+      "id": "gemma4-31b",
+      "label": "Gemma 4 31B",
+      "blurb": "Gemma's largest — the strongest answers in the family, at about half the 12B's speed. For 36 GB+ Macs; on 32 GB it runs with little else open. Official QAT 4-bit build with vision.",
+      "purpose": "chat",
+      "suggest": false,
+      "minRamGb": 36,
+      "caps": {
+        "vision": true,
+        "tools": true
+      },
+      "license": "apache-2.0",
+      "source": "google/gemma-4-31B-it-qat-q4_0-gguf",
+      "files": [
+        {
+          "url": "https://huggingface.co/google/gemma-4-31B-it-qat-q4_0-gguf/resolve/main/gemma-4-31B_q4_0-it.gguf",
+          "sha256": "179cfb99212709597eae5929112cfca677e1bbf566178b479ae1da0c4772874b",
+          "bytes": 17651001568,
+          "dest": "gemma4-31b.gguf"
+        },
+        {
+          "url": "https://huggingface.co/google/gemma-4-31B-it-qat-q4_0-gguf/resolve/main/gemma-4-31B-it-mmproj.gguf",
+          "sha256": "6bd60bdb958548b4093196d38744b0f2290c12503a3fddd7486bffa9c5eb07a4",
+          "bytes": 1200726368,
+          "dest": "gemma4-31b.mmproj.gguf"
+        }
+      ]
+    },
+    {
       "id": "qwen3.5-4b",
       "label": "Qwen3.5 4B",
-      "blurb": "Alibaba's compact Qwen — strong reasoning, coding, and tool use with a thinking mode. Snappy on 8 GB+ Macs. 4-bit build.",
+      "blurb": "Alibaba's compact Qwen — strong reasoning, coding, and tool use. Snappy on 8 GB+ Macs, and it thinks before answering when Thinking is on in Settings. 4-bit build.",
       "purpose": "chat",
+      "suggest": false,
       "minRamGb": 8,
       "caps": {
         "vision": false,
@@ -134,8 +163,9 @@
     {
       "id": "qwen3.5-9b",
       "label": "Qwen3.5 9B",
-      "blurb": "A meatier Qwen for sharper reasoning and coding, still light on memory. Text and tools, with a thinking mode. 4-bit build.",
+      "blurb": "A meatier Qwen for sharper reasoning and coding, still light on memory. Text and tools; it thinks before answering when Thinking is on in Settings. 4-bit build.",
       "purpose": "chat",
+      "suggest": false,
       "minRamGb": 8,
       "caps": {
         "vision": false,
@@ -149,6 +179,34 @@
           "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
           "bytes": 5680522464,
           "dest": "qwen3.5-9b.gguf"
+        }
+      ]
+    },
+    {
+      "id": "qwen3.8-27b",
+      "label": "Qwen3.8 27B",
+      "blurb": "Alibaba's newest Qwen at full size — strong at coding, tools and long reasoning, slower than the Gemmas. For 32 GB+ Macs with little else open. 4-bit build with vision.",
+      "purpose": "chat",
+      "suggest": false,
+      "minRamGb": 32,
+      "caps": {
+        "vision": true,
+        "tools": true
+      },
+      "license": "apache-2.0",
+      "source": "unsloth/Qwen3.8-27B-GGUF",
+      "files": [
+        {
+          "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q4_K_M.gguf",
+          "sha256": "1bce504dfecd84153666928a41d8a66706f0158d3a317bc5196b72819d7dc529",
+          "bytes": 16564259744,
+          "dest": "qwen3.8-27b.gguf"
+        },
+        {
+          "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/mmproj-F16.gguf",
+          "sha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e",
+          "bytes": 927607488,
+          "dest": "qwen3.8-27b.mmproj.gguf"
         }
       ]
     },
