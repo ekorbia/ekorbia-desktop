@@ -28,6 +28,29 @@
 #                       without Homebrew. We serve loopback HTTP only.
 #   Metal shader      — embedded in the binary by default (no .metal
 #                       sidecar file needed at runtime).
+#   LLAMA_USE_PREBUILT_UI=OFF (with LLAMA_BUILD_UI=OFF)
+#                     — CRITICAL since v0.9.0. By default the llama.cpp
+#                       build DOWNLOADS its web UI from a Hugging Face
+#                       bucket in the middle of the build, and when the
+#                       bundle for its build number is missing it falls
+#                       back to an UNPINNED "latest" one. That bundle
+#                       changed layout in Nov 2026, v0.9.0's own asset
+#                       check rejected it, and the 0.8.0 release build
+#                       died ("UI: missing required asset(s)") two weeks
+#                       after the very same pin had built fine. Ekorbia
+#                       never serves that UI (`--no-webui`), so build
+#                       without one: no network during the build, and
+#                       nothing unpinned inside the binary.
+#
+# The build must be HERMETIC — the pinned, checksummed tarball and the
+# system toolchain, nothing else. Three guards keep it so:
+#   • the build tree is recreated on every run (a stale one can carry
+#     downloaded assets and old cache values into a "pinned" binary);
+#   • GIT_CEILING_DIRECTORIES stops llama.cpp's build-info step from
+#     walking up into the Ekorbia repo and stamping ITS commit count and
+#     hash into llama-server's version string;
+#   • the hermetic gate fails the script if the build log shows any
+#     download.
 #
 # The portability gate at the end fails the script if the produced
 # binary links anything outside /usr/lib + /System — so the OpenSSL
@@ -117,28 +140,60 @@ elif [[ "$LLAMA_TAG" == v[0-9]* ]]; then
   VERSION_FLAG="-DLLAMA_BUILD_IS_DEV=OFF"
 fi
 
-echo "▸ configuring (static, Metal, no openssl)…"
+# Always a clean build tree (see "HERMETIC" in the header). This script
+# only gets this far when the binary is missing or --force was given, so
+# there is no incremental build worth protecting.
+if [[ -n "$SRC" && -d "${SRC}/build" ]]; then
+  rm -rf "${SRC}/build"
+fi
+
+# Keep git inside the llama.cpp tree: without this its build-info step
+# finds the Ekorbia checkout above it.
+export GIT_CEILING_DIRECTORIES="$WORK_DIR"
+
+# A log that only exists on a CI runner helps nobody: on failure, print
+# its tail so the real error is in the job output.
+fail_with_log() {
+  local what="$1" log="$2"
+  echo "error: ${what} — last lines of ${log}:" >&2
+  tail -n 60 "$log" >&2 || true
+  exit 1
+}
+
+echo "▸ configuring (static, Metal, no openssl, no web UI)…"
 cmake -S "$SRC" -B "${SRC}/build" \
   -DBUILD_SHARED_LIBS=OFF \
   -DCMAKE_BUILD_TYPE=Release \
   -DGGML_NATIVE=OFF \
   -DLLAMA_OPENSSL=OFF \
+  -DLLAMA_BUILD_UI=OFF \
+  -DLLAMA_USE_PREBUILT_UI=OFF \
   $VERSION_FLAG \
   -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=OFF \
   -DLLAMA_BUILD_TOOLS=ON \
-  > "${WORK_DIR}/configure.log" 2>&1 || {
-    echo "error: cmake configure failed — see ${WORK_DIR}/configure.log"; exit 1;
-  }
+  > "${WORK_DIR}/configure.log" 2>&1 \
+  || fail_with_log "cmake configure failed" "${WORK_DIR}/configure.log"
 
 echo "▸ building llama-server (-j${JOBS}, a few minutes on first run)…"
 cmake --build "${SRC}/build" --target llama-server -j "$JOBS" \
-  > "${WORK_DIR}/build.log" 2>&1 || {
-    echo "error: build failed — see ${WORK_DIR}/build.log"; exit 1;
-  }
+  > "${WORK_DIR}/build.log" 2>&1 \
+  || fail_with_log "build failed" "${WORK_DIR}/build.log"
 
 BUILT="${SRC}/build/bin/llama-server"
 [[ -x "$BUILT" ]] || { echo "error: build produced no binary at $BUILT"; exit 1; }
+
+# ── Hermetic gate ─────────────────────────────────────────────────────
+# Nothing may be fetched while building. llama.cpp announces its web-UI
+# fetch as "UI: downloading from …"; any download line fails the script,
+# so a future pin that grows another build-time fetch can't slip through.
+if grep -E -i -q 'downloading from|download succeeded' \
+     "${WORK_DIR}/configure.log" "${WORK_DIR}/build.log"; then
+  echo "error: the build downloaded something — it must be hermetic:" >&2
+  grep -E -i -h 'downloading from|download succeeded' \
+    "${WORK_DIR}/configure.log" "${WORK_DIR}/build.log" | head -5 >&2
+  exit 1
+fi
 
 # ── Portability gate ──────────────────────────────────────────────────
 # The binary must link ONLY OS-provided libraries (/usr/lib + /System
