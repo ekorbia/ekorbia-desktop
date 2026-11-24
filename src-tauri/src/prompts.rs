@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-//! Prompts (file-system store).
+//! Templates (file-system store). The app calls them templates; the code,
+//! the commands and the folder keep the older word "prompt".
 #![allow(clippy::needless_pass_by_value)]
 
 //!
@@ -8,13 +9,20 @@
 //! directory (default ~/Documents/Ekorbia/Prompts). The filename (sans .md)
 //! is the prompt's stable id ("slug"). Sharing a prompt = sharing one file.
 //!
-//! SQLite holds only `prompt_meta`: per-user UI preferences (favorite color,
-//! etc.) that should NOT travel with a shared file. Joined to file data at
-//! read time, keyed by slug.
+//! Frontmatter: `name`, plus three optional lines — `description` (the one
+//! line under the name on a card), `hint` (what the message box says while
+//! the template is on) and `tags` (kept, no longer shown). A file with none
+//! of them still loads.
 //!
-//! Built-ins are baked into the binary via include_str! (see BUILTIN_PROMPTS)
-//! and copied into the prompts dir on first launch, after which they're just
-//! files the user owns and can edit/delete freely.
+//! SQLite holds only `prompt_meta`: per-user preferences that should NOT
+//! travel with a shared file — today, whether it is starred (`favorite` is
+//! non-null; older installs stored a colour name there, which still counts).
+//! Joined to file data at read time, keyed by slug.
+//!
+//! The starter set is baked into the binary via include_str! (see
+//! BUILTIN_PROMPTS). Each starter is copied into the folder ONCE, the first
+//! launch that knows about it (`builtins_offered` records which); after that
+//! it is the user's file to edit or delete, and a deleted one stays deleted.
 
 use crate::db::{file_mtime_unix, get_setting, now_unix, set_setting, DbState};
 use crate::log::log_warn;
@@ -31,6 +39,15 @@ use tauri::Manager;
 #[serde(default)]
 pub(crate) struct PromptFrontmatter {
     name: String,
+    /// One line saying what you get. Optional.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    description: String,
+    /// What the message box shows while this template is on. Optional.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    hint: String,
+    /// Kept in the file for anyone who uses them; the app no longer shows
+    /// or edits tags.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     tags: Vec<String>,
 }
 
@@ -42,9 +59,12 @@ pub(crate) struct Prompt {
     /// and avoids churn for downstream watchers / git history).
     id: String,
     name: String,
+    description: String,
+    hint: String,
     tags: Vec<String>,
     body: String,
-    /// One of FAVORITE_COLORS ids ("amber" | "blue" | ...) or None.
+    /// Non-null = starred. New stars are written as "star"; an older
+    /// install's colour name ("amber", "blue", …) counts as starred too.
     /// Lives in `prompt_meta` so it doesn't leak into shared files.
     favorite: Option<String>,
     /// True if this slug matches a known built-in (used by the UI to gate
@@ -62,127 +82,67 @@ pub(crate) struct Prompt {
 /// regular files the user can edit, rename, or delete.
 const BUILTIN_PROMPTS: &[(&str, &str)] = &[
     (
-        "explain-simply",
-        include_str!("../builtin-prompts/explain-simply.md"),
-    ),
-    ("summarize", include_str!("../builtin-prompts/summarize.md")),
-    (
-        "translate-spanish",
-        include_str!("../builtin-prompts/translate-spanish.md"),
+        "summarise-a-document",
+        include_str!("../builtin-prompts/summarise-a-document.md"),
     ),
     (
-        "translate-french",
-        include_str!("../builtin-prompts/translate-french.md"),
+        "explain-in-plain-english",
+        include_str!("../builtin-prompts/explain-in-plain-english.md"),
     ),
     (
-        "translate-german",
-        include_str!("../builtin-prompts/translate-german.md"),
+        "letter-to-a-client",
+        include_str!("../builtin-prompts/letter-to-a-client.md"),
     ),
     (
-        "brainstorm",
-        include_str!("../builtin-prompts/brainstorm.md"),
+        "change-the-tone",
+        include_str!("../builtin-prompts/change-the-tone.md"),
     ),
     (
-        "sensitive-doc-qa",
-        include_str!("../builtin-prompts/sensitive-doc-qa.md"),
+        "answer-only-from-the-document",
+        include_str!("../builtin-prompts/answer-only-from-the-document.md"),
+    ),
+    (
+        "argue-the-other-side",
+        include_str!("../builtin-prompts/argue-the-other-side.md"),
+    ),
+    ("translate", include_str!("../builtin-prompts/translate.md")),
+    (
+        "chronology-of-events",
+        include_str!("../builtin-prompts/chronology-of-events.md"),
+    ),
+    (
+        "key-dates-and-deadlines",
+        include_str!("../builtin-prompts/key-dates-and-deadlines.md"),
+    ),
+    ("file-note", include_str!("../builtin-prompts/file-note.md")),
+    (
+        "meeting-minutes",
+        include_str!("../builtin-prompts/meeting-minutes.md"),
+    ),
+    (
+        "house-style",
+        include_str!("../builtin-prompts/house-style.md"),
     ),
     (
         "notes-synthesizer",
         include_str!("../builtin-prompts/notes-synthesizer.md"),
     ),
-    (
-        "email-draft",
-        include_str!("../builtin-prompts/email-draft.md"),
-    ),
-    (
-        "website-personal",
-        include_str!("../builtin-prompts/website-personal.md"),
-    ),
-    (
-        "website-professional",
-        include_str!("../builtin-prompts/website-professional.md"),
-    ),
-    (
-        "game-text-adventure",
-        include_str!("../builtin-prompts/game-text-adventure.md"),
-    ),
-    (
-        "game-lateral-thinking",
-        include_str!("../builtin-prompts/game-lateral-thinking.md"),
-    ),
-    (
-        "game-murder-mystery",
-        include_str!("../builtin-prompts/game-murder-mystery.md"),
-    ),
-    (
-        "log-triage",
-        include_str!("../builtin-prompts/log-triage.md"),
-    ),
-    (
-        "resume-coach",
-        include_str!("../builtin-prompts/resume-coach.md"),
-    ),
-    (
-        "cover-letter",
-        include_str!("../builtin-prompts/cover-letter.md"),
-    ),
-    (
-        "careers-watcher",
-        include_str!("../builtin-prompts/careers-watcher.md"),
-    ),
-    (
-        "tone-reframer",
-        include_str!("../builtin-prompts/tone-reframer.md"),
-    ),
-    (
-        "devils-advocate",
-        include_str!("../builtin-prompts/devils-advocate.md"),
-    ),
-    (
-        "paper-tracker",
-        include_str!("../builtin-prompts/paper-tracker.md"),
-    ),
-    (
-        "wikipedia-watch",
-        include_str!("../builtin-prompts/wikipedia-watch.md"),
-    ),
-    (
-        "price-watcher",
-        include_str!("../builtin-prompts/price-watcher.md"),
-    ),
-    (
-        "new-listings-watcher",
-        include_str!("../builtin-prompts/new-listings-watcher.md"),
-    ),
-    (
-        "rental-watcher",
-        include_str!("../builtin-prompts/rental-watcher.md"),
-    ),
-    (
-        "gcp-uptime",
-        include_str!("../builtin-prompts/gcp-uptime.md"),
-    ),
-    (
-        "cloudflare-uptime",
-        include_str!("../builtin-prompts/cloudflare-uptime.md"),
-    ),
-    (
-        "how-does-it-end",
-        include_str!("../builtin-prompts/how-does-it-end.md"),
-    ),
-    (
-        "cliff-notes",
-        include_str!("../builtin-prompts/cliff-notes.md"),
-    ),
-    (
-        "should-i-watch",
-        include_str!("../builtin-prompts/should-i-watch.md"),
-    ),
-    (
-        "album-deep-dive",
-        include_str!("../builtin-prompts/album-deep-dive.md"),
-    ),
 ];
+
+/// Starters that are starred when they are first copied in: the six cards
+/// a new chat offers on a fresh install.
+const DEFAULT_STARRED: &[&str] = &[
+    "summarise-a-document",
+    "chronology-of-events",
+    "letter-to-a-client",
+    "file-note",
+    "key-dates-and-deadlines",
+    "explain-in-plain-english",
+];
+
+/// `app_settings` key: comma-separated slugs of every starter this install
+/// has already been offered (copied in, or found already present).
+const OFFERED_KEY: &str = "builtins_offered";
 
 fn is_builtin_slug(slug: &str) -> bool {
     BUILTIN_PROMPTS.iter().any(|(s, _)| *s == slug)
@@ -284,6 +244,11 @@ pub(crate) fn parse_prompt_file(text: &str) -> (PromptFrontmatter, String) {
     (fm, body.trim_start_matches('\n').to_string())
 }
 
+/// A frontmatter value is one line: collapse any line breaks and trim.
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<&str>>().join(" ")
+}
+
 /// Render a prompt back to file form: YAML frontmatter + blank line + body.
 fn render_prompt_file(fm: &PromptFrontmatter, body: &str) -> Result<String, String> {
     let yaml = serde_yaml::to_string(fm).map_err(|e| format!("YAML emit failed: {e}"))?;
@@ -373,6 +338,8 @@ pub(crate) fn prompts_list(app: tauri::AppHandle) -> Result<Vec<Prompt>, String>
         out.push(Prompt {
             id: slug.clone(),
             name: display_name,
+            description: fm.description.trim().to_string(),
+            hint: fm.hint.trim().to_string(),
             tags: fm.tags,
             body,
             favorite,
@@ -401,6 +368,8 @@ pub(crate) fn prompts_save(
     name: String,
     tags: Vec<String>,
     body: String,
+    description: Option<String>,
+    hint: Option<String>,
 ) -> Result<String, String> {
     let dir = ensure_prompts_dir(&app)?;
     let trimmed_slug = slug.trim();
@@ -413,7 +382,12 @@ pub(crate) fn prompts_save(
         // out-of-scope for v1 — file id stays sticky).
         trimmed_slug.to_string()
     };
-    let fm = PromptFrontmatter { name, tags };
+    let fm = PromptFrontmatter {
+        name,
+        description: one_line(description.as_deref().unwrap_or("")),
+        hint: one_line(hint.as_deref().unwrap_or("")),
+        tags,
+    };
     let content = render_prompt_file(&fm, &body)?;
     let path = dir.join(format!("{final_slug}.md"));
     std::fs::write(&path, content).map_err(|e| format!("Write {}: {e}", path.display()))?;
@@ -458,31 +432,72 @@ pub(crate) fn prompts_meta_set(
     Ok(())
 }
 
-/// Copy any built-in prompts that aren't already present in the prompts dir.
-/// Idempotent: once a built-in file exists in the dir, this skips it — so
-/// user edits to a built-in are preserved across launches. Stamps a flag in
-/// app_settings so the very first run is distinguishable from later ones.
-#[tauri::command]
-pub(crate) fn prompts_seed_builtins(app: tauri::AppHandle) -> Result<u32, String> {
-    let dir = ensure_prompts_dir(&app)?;
-    let mut written = 0u32;
+/// Which starters to copy in now. A starter this install has not been
+/// offered yet is written if its file is missing, and counts as offered
+/// either way. One already offered is left alone — so a starter the user
+/// deleted stays deleted. Returns (slugs written, every slug now offered).
+fn seed_missing(
+    dir: &std::path::Path,
+    offered: &std::collections::BTreeSet<String>,
+) -> Result<(Vec<&'static str>, std::collections::BTreeSet<String>), String> {
+    let mut written: Vec<&'static str> = Vec::new();
+    let mut now_offered = offered.clone();
     for (slug, contents) in BUILTIN_PROMPTS {
-        let path = dir.join(format!("{slug}.md"));
-        if path.exists() {
+        if offered.contains(*slug) {
             continue;
         }
-        std::fs::write(&path, contents).map_err(|e| format!("Seed {}: {e}", path.display()))?;
-        written += 1;
+        let path = dir.join(format!("{slug}.md"));
+        if !path.exists() {
+            std::fs::write(&path, contents).map_err(|e| format!("Seed {}: {e}", path.display()))?;
+            written.push(slug);
+        }
+        now_offered.insert((*slug).to_string());
     }
-    let db = app.state::<DbState>();
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    set_setting(&conn, "builtins_seeded_v1", "1")?;
-    Ok(written)
+    Ok((written, now_offered))
 }
 
-/// Overwrite all built-in prompts from the embedded copies, regardless of
+fn parse_offered(raw: &str) -> std::collections::BTreeSet<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Copy in any starter template this install has not been offered yet (see
+/// `seed_missing`), and star the ones a new chat shows as cards. Runs at
+/// every launch; after the first it writes nothing unless a release adds a
+/// starter. A star is only ever added for a file written just now, and only
+/// if the user has no setting for that slug already.
+#[tauri::command]
+pub(crate) fn prompts_seed_builtins(app: tauri::AppHandle) -> Result<u32, String> {
+    // Resolve the folder BEFORE taking the DB lock: resolving reads a
+    // setting under that same (non-reentrant) lock.
+    let dir = ensure_prompts_dir(&app)?;
+    let db = app.state::<DbState>();
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let offered = parse_offered(&get_setting(&conn, OFFERED_KEY).unwrap_or_default());
+    let (written, now_offered) = seed_missing(&dir, &offered)?;
+    for slug in &written {
+        if DEFAULT_STARRED.contains(slug) {
+            if let Err(e) = conn.execute(
+                "INSERT OR IGNORE INTO prompt_meta (slug, favorite) VALUES (?1, 'star')",
+                [slug],
+            ) {
+                log_warn!("starring starter {slug} failed: {e}");
+            }
+        }
+    }
+    let joined = now_offered.into_iter().collect::<Vec<String>>().join(",");
+    set_setting(&conn, OFFERED_KEY, &joined)?;
+    set_setting(&conn, "builtins_seeded_v1", "1")?;
+    Ok(u32::try_from(written.len()).unwrap_or(u32::MAX))
+}
+
+/// Overwrite every starter template from the embedded copies, regardless of
 /// existing files. Useful when the user wants to revert local edits, or has
-/// deleted a built-in and wants it back. User-created prompts are untouched.
+/// deleted a starter and wants it back. Their own templates are untouched,
+/// and so are stars.
 #[tauri::command]
 pub(crate) fn prompts_restore_builtins(app: tauri::AppHandle) -> Result<u32, String> {
     let dir = ensure_prompts_dir(&app)?;
@@ -582,9 +597,192 @@ mod tests {
     fn is_builtin_slug_recognises_known() {
         // Sanity: a handful of well-known built-in slugs from
         // BUILTIN_PROMPTS must return true.
-        assert!(is_builtin_slug("explain-simply"));
-        assert!(is_builtin_slug("summarize"));
-        assert!(is_builtin_slug("brainstorm"));
+        assert!(is_builtin_slug("summarise-a-document"));
+        assert!(is_builtin_slug("file-note"));
+        assert!(is_builtin_slug("notes-synthesizer"));
+        // Prompts shipped before the starter set are no longer built in.
+        assert!(!is_builtin_slug("summarize"));
+        assert!(!is_builtin_slug("brainstorm"));
+    }
+
+    // ── the starter set ────────────────────────────────────────────────────
+
+    #[test]
+    fn starter_set_is_twelve_templates_and_the_notes_synthesizer() {
+        assert_eq!(BUILTIN_PROMPTS.len(), 13);
+        let mut slugs: Vec<&str> = BUILTIN_PROMPTS.iter().map(|(s, _)| *s).collect();
+        slugs.sort_unstable();
+        slugs.dedup();
+        assert_eq!(slugs.len(), 13, "no slug twice");
+    }
+
+    #[test]
+    fn every_starter_parses_with_a_name_matching_its_file() {
+        for (slug, text) in BUILTIN_PROMPTS {
+            let (fm, body) = parse_prompt_file(text);
+            assert!(!fm.name.is_empty(), "{slug}: name");
+            assert!(!body.trim().is_empty(), "{slug}: body");
+            // A new template made in the app with this name gets this file
+            // name; keep the shipped ones consistent with that.
+            assert_eq!(
+                &slugify(&fm.name),
+                slug,
+                "{slug}: file name follows the name"
+            );
+            // One line each: a line break would be folded into the card.
+            assert!(!fm.description.contains('\n'), "{slug}: description");
+            assert!(!fm.hint.contains('\n'), "{slug}: hint");
+            if *slug != "notes-synthesizer" {
+                assert!(!fm.description.is_empty(), "{slug}: description");
+            }
+        }
+    }
+
+    #[test]
+    fn starred_starters_exist_and_carry_a_hint() {
+        assert_eq!(DEFAULT_STARRED.len(), 6);
+        for slug in DEFAULT_STARRED {
+            let text = BUILTIN_PROMPTS
+                .iter()
+                .find(|(s, _)| s == slug)
+                .map(|(_, t)| *t)
+                .unwrap_or_else(|| panic!("{slug} is not a starter"));
+            let (fm, _) = parse_prompt_file(text);
+            // A card you choose in a chat tells the message box what to ask for.
+            assert!(!fm.hint.is_empty(), "{slug}: hint");
+        }
+        // The always-on example is never chosen in a chat, so it has none.
+        let house = BUILTIN_PROMPTS
+            .iter()
+            .find(|(s, _)| *s == "house-style")
+            .unwrap()
+            .1;
+        assert!(parse_prompt_file(house).0.hint.is_empty());
+    }
+
+    // ── description and hint ───────────────────────────────────────────────
+
+    #[test]
+    fn parse_reads_description_and_hint() {
+        let text = "---\nname: File note\ndescription: Notes into a note for the file\nhint: Dictate or paste your notes\n---\nBody.";
+        let (fm, body) = parse_prompt_file(text);
+        assert_eq!(fm.name, "File note");
+        assert_eq!(fm.description, "Notes into a note for the file");
+        assert_eq!(fm.hint, "Dictate or paste your notes");
+        assert!(fm.tags.is_empty());
+        assert_eq!(body, "Body.");
+    }
+
+    #[test]
+    fn a_file_without_the_new_lines_still_loads() {
+        let (fm, body) = parse_prompt_file("---\nname: Old one\ntags: [a]\n---\nBody.");
+        assert_eq!(fm.name, "Old one");
+        assert_eq!(fm.description, "");
+        assert_eq!(fm.hint, "");
+        assert_eq!(fm.tags, vec!["a".to_string()]);
+        assert_eq!(body, "Body.");
+    }
+
+    #[test]
+    fn render_leaves_out_empty_lines_and_round_trips() {
+        let bare = PromptFrontmatter {
+            name: "Plain".into(),
+            ..Default::default()
+        };
+        let text = render_prompt_file(&bare, "Body.").unwrap();
+        assert_eq!(text, "---\nname: Plain\n---\nBody.");
+
+        let full = PromptFrontmatter {
+            name: "Change the tone".into(),
+            description: "Four versions: formal, warm, casual, firm".into(),
+            hint: "Paste your draft".into(),
+            tags: vec!["writing".into()],
+        };
+        let text = render_prompt_file(&full, "Rewrite it.").unwrap();
+        let (fm, body) = parse_prompt_file(&text);
+        // A colon in the description survives the trip (YAML quotes it).
+        assert_eq!(fm.description, "Four versions: formal, warm, casual, firm");
+        assert_eq!(fm.hint, "Paste your draft");
+        assert_eq!(fm.tags, vec!["writing".to_string()]);
+        assert_eq!(body, "Rewrite it.");
+    }
+
+    #[test]
+    fn one_line_folds_line_breaks_and_trims() {
+        assert_eq!(one_line("  two\nlines \t here "), "two lines here");
+        assert_eq!(one_line(""), "");
+    }
+
+    // ── copying the starters in ────────────────────────────────────────────
+
+    #[test]
+    fn a_new_folder_gets_every_starter_once() {
+        let dir = tmpdir();
+        let (written, offered) = seed_missing(&dir, &Default::default()).unwrap();
+        assert_eq!(written.len(), 13);
+        assert_eq!(offered.len(), 13);
+        assert!(dir.join("file-note.md").exists());
+
+        // Next launch: nothing to do.
+        let (again, offered2) = seed_missing(&dir, &offered).unwrap();
+        assert!(again.is_empty());
+        assert_eq!(offered2, offered);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_deleted_starter_stays_deleted() {
+        let dir = tmpdir();
+        let (_, offered) = seed_missing(&dir, &Default::default()).unwrap();
+        fs::remove_file(dir.join("house-style.md")).unwrap();
+        let (written, _) = seed_missing(&dir, &offered).unwrap();
+        assert!(written.is_empty());
+        assert!(!dir.join("house-style.md").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_existing_file_is_never_overwritten() {
+        let dir = tmpdir();
+        fs::write(dir.join("file-note.md"), "mine").unwrap();
+        let (written, offered) = seed_missing(&dir, &Default::default()).unwrap();
+        assert!(!written.contains(&"file-note"));
+        assert_eq!(written.len(), 12);
+        // It still counts as offered, so it is not written later either.
+        assert!(offered.contains("file-note"));
+        assert_eq!(
+            fs::read_to_string(dir.join("file-note.md")).unwrap(),
+            "mine"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_install_from_before_the_starter_set_gets_the_new_ones_and_keeps_its_files() {
+        // The folder as an earlier version left it; nothing recorded as offered.
+        let dir = tmpdir();
+        fs::write(dir.join("summarize.md"), "old summarize").unwrap();
+        fs::write(dir.join("notes-synthesizer.md"), "edited by the user").unwrap();
+        let (written, _) = seed_missing(&dir, &Default::default()).unwrap();
+        assert_eq!(written.len(), 12);
+        assert!(dir.join("summarise-a-document.md").exists());
+        assert_eq!(
+            fs::read_to_string(dir.join("summarize.md")).unwrap(),
+            "old summarize"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("notes-synthesizer.md")).unwrap(),
+            "edited by the user"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn parse_offered_reads_a_comma_list() {
+        let set = parse_offered("file-note, translate,,house-style ");
+        assert_eq!(set.len(), 3);
+        assert!(set.contains("translate"));
+        assert!(parse_offered("").is_empty());
     }
 
     #[test]

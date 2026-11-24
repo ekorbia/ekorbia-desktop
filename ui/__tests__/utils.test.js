@@ -45,6 +45,12 @@ const {
   lightenHex,
   isLocalEndpoint,
   greetingForHour,
+  isStarred,
+  sortTemplates,
+  starredTemplates,
+  filterTemplates,
+  templateHint,
+  templateCopyName,
   previewSnippet,
   paletteFuzzyScore,
   spaceAmbientTint,
@@ -2067,3 +2073,66 @@ test("chatDocumentCount: every file in a folder, plus each single file", () => {
   assert.equal(documentsLabel(0), "0 documents");
 });
 
+
+
+// ── Templates ──────────────────────────────────────────────────────────────
+const TPL = [
+  { id: "translate", name: "Translate", description: "Into the language you name", hint: "Name the language, then paste the text", favorite: null },
+  { id: "file-note", name: "File note", description: "Notes into a note for the file", hint: "Dictate or paste your notes", favorite: "star" },
+  { id: "house-style", name: "House style", description: "Our spelling, tone and sign-off", hint: "", favorite: null },
+  { id: "old", name: "brainstorm", description: "", hint: "", favorite: "amber" },
+  { id: "notes-1", name: "Downloads notes", _virtual: true, favorite: null },
+];
+
+test("isStarred: a star or an older colour both count", () => {
+  assert.equal(isStarred({ favorite: "star" }), true);
+  assert.equal(isStarred({ favorite: "amber" }), true);
+  assert.equal(isStarred({ favorite: null }), false);
+  assert.equal(isStarred({}), false);
+  assert.equal(isStarred(null), false);
+});
+
+test("sortTemplates: starred first, then by name, without one-chat rows", () => {
+  assert.deepEqual(sortTemplates(TPL).map((t) => t.id), ["old", "file-note", "house-style", "translate"]);
+  assert.deepEqual(sortTemplates(null), []);
+  // It does not reorder the list it was given.
+  assert.equal(TPL[0].id, "translate");
+});
+
+test("starredTemplates: only the starred, capped", () => {
+  assert.deepEqual(starredTemplates(TPL).map((t) => t.id), ["old", "file-note"]);
+  assert.deepEqual(starredTemplates(TPL, 1).map((t) => t.id), ["old"]);
+  assert.deepEqual(starredTemplates([], 6), []);
+});
+
+test("filterTemplates: matches the name or the description", () => {
+  assert.deepEqual(filterTemplates(TPL, "note").map((t) => t.id), ["file-note"]);
+  assert.deepEqual(filterTemplates(TPL, "SPELLING").map((t) => t.id), ["house-style"]);
+  assert.equal(filterTemplates(TPL, "  ").length, 4);
+  assert.deepEqual(filterTemplates(TPL, "zzz"), []);
+});
+
+test("templateHint: the latest chosen template that has one", () => {
+  const byId = Object.fromEntries(TPL.map((t) => [t.id, t]));
+  assert.equal(templateHint([byId["file-note"]]), "Dictate or paste your notes");
+  assert.equal(templateHint([byId["file-note"], byId.translate]), "Name the language, then paste the text");
+  // One without a hint does not blank an earlier one's.
+  assert.equal(templateHint([byId["file-note"], byId["house-style"]]), "Dictate or paste your notes");
+  assert.equal(templateHint([byId["house-style"]]), "");
+  assert.equal(templateHint([]), "");
+  assert.equal(templateHint(null), "");
+});
+
+test("templateHint: a template that is always on in the workspace stays quiet", () => {
+  const always = { id: "intake", name: "Intake", hint: "Paste the intake form" };
+  const chosen = { id: "file-note", name: "File note", hint: "Dictate or paste your notes" };
+  assert.equal(templateHint([always], new Set(["intake"])), "");
+  assert.equal(templateHint([chosen, always], new Set(["intake"])), "Dictate or paste your notes");
+});
+
+test("templateCopyName: a free name for a copy", () => {
+  assert.equal(templateCopyName("File note", ["File note"]), "File note copy");
+  assert.equal(templateCopyName("File note", ["File note", "file note COPY"]), "File note copy 2");
+  assert.equal(templateCopyName("File note", ["File note copy", "File note copy 2"]), "File note copy 3");
+  assert.equal(templateCopyName("", []), "Template copy");
+});

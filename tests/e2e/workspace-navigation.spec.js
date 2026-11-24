@@ -284,12 +284,14 @@ test("search: Home finds messages everywhere, a workspace only its own", async (
   await expect(page.locator("[data-sidebar]")).not.toContainText("Does the gift fail?");
 });
 
-test("the settings menu reaches Settings and the three panels", async ({ page }) => {
+test("the settings menu reaches Settings, Templates and the two panels", async ({ page }) => {
   await openApp(page, seedWorkspaces);
   await page.locator("[data-more-menu-button]").click();
   const menu = page.locator("[data-more-menu]");
   await expect(menu).toContainText("Settings…");
-  await expect(menu.locator("[data-more-panel]")).toHaveCount(3);
+  // Templates moved from a panel into Settings.
+  await expect(menu.locator("[data-more-templates]")).toHaveText("Templates…");
+  await expect(menu.locator("[data-more-panel]")).toHaveCount(2);
   await menu.locator('[data-more-panel="watches"]').click();
   await expect(menu).toHaveCount(0);
   // The panel opens beside Home, on the tab asked for.

@@ -278,13 +278,12 @@ function QuickQuery() {
   // dev (pure-browser preview) where there's nothing to invoke.
   const invoke = getInvoke() ?? (() => Promise.reject("no tauri"));
 
-  // ── Load prompts from the shared file-system store ─────────────────────────
-  // Runs once at mount. Rust seeds built-ins on startup before any window is
-  // shown, so this is reliable even on a cold launch. Prompts are returned
-  // already shaped (tags as array, favorite from prompt_meta join) — no
-  // post-processing needed beyond the favorite-null normalisation.
+  // ── Load templates from the shared folder ──────────────────────────────────
+  // At mount, and again each time the panel comes forward, so a template
+  // written or starred in the main window is here the next time it is
+  // summoned. Rust copies the starter set in before any window is shown.
   qE(() => {
-    invoke("prompts_list")
+    const load = () => invoke("prompts_list")
       .then((rows) => {
         const loaded = (rows || []).map((r) => ({
           ...r,
@@ -298,7 +297,10 @@ function QuickQuery() {
           curr && !loaded.find((p) => p.id === curr) ? null : curr,
         );
       })
-      .catch(() => setPrompts([]));
+      .catch(() => {});
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
   }, []);
 
   // ── Dismiss ────────────────────────────────────────────────────────────────
@@ -460,12 +462,7 @@ function QuickQuery() {
     // the main app's Message component renders an identical chip.
     let promptsJson = null;
     if (attached) {
-      const fav = attached.favorite
-        ? FAVORITE_COLOR_MAP[attached.favorite]
-        : null;
-      promptsJson = JSON.stringify([
-        { id: attached.id, name: attached.name, color: fav?.color || null },
-      ]);
+      promptsJson = JSON.stringify([{ id: attached.id, name: attached.name }]);
     }
 
     try {
@@ -632,7 +629,7 @@ function QuickQuery() {
   // `action` is a SELECTION_ACTIONS verb, a one-off built from the input, or
   // the attached prompt itself (id "attached" — see submit). Library prompts
   // take part the same way they do everywhere else in the overlay: attached
-  // through the context bar's "+ prompt", they ride along ahead of the
+  // through the context bar's "+ template", they ride along ahead of the
   // instruction. The one exception is when the attached prompt IS the
   // instruction — sending its body twice, once as persona and once as the
   // task, would just be the same paragraph stuttered at the model.
@@ -728,23 +725,9 @@ function QuickQuery() {
   // but sentMessage drives visibility so the question paints instantly
   // without waiting for the first streamed token.)
   const hasContent = !!response || streaming || !!sentMessage;
-  // Filter first, then sort A→Z by name. prompts_list returns rows
-  // sorted by updated_at DESC (the main app's "Recent" default), but
-  // the overlay's prompt picker should match the main PromptLibrary's
-  // default A→Z sort — easier to scan when you don't remember which
-  // prompt you last edited. .slice() before sort so we don't mutate
-  // the source array.
-  const visiblePrompts = (promptSearch.trim()
-    ? prompts.filter((p) => {
-        const q = promptSearch.toLowerCase();
-        return (
-          p.name.toLowerCase().includes(q) ||
-          (p.body || "").toLowerCase().includes(q) ||
-          (p.tags || []).some((t) => t.toLowerCase().includes(q))
-        );
-      })
-    : prompts
-  ).slice().sort((a, b) => a.name.localeCompare(b.name));
+  // Starred first, then by name — the order every template list uses.
+  // Searching matches names and descriptions.
+  const visiblePrompts = filterTemplates(prompts, promptSearch);
 
   // The selection hotkey as the user actually has it bound. Both windows
   // share an origin, so the overlay can read the value Settings persisted
@@ -857,9 +840,9 @@ function QuickQuery() {
             // name leads so a long one ellipsizes the filler, not the cue.
             selection
               ? attached
-                ? `⏎ runs ${attached.name} — or type what to do…`
+                ? `Return runs ${attached.name} — or type what to do…`
                 : "Or describe what to do with it…"
-              : "Ask anything…"
+              : (attached && attached.hint) || "Ask anything…"
           }
           autoFocus
           style={{
@@ -953,34 +936,31 @@ function QuickQuery() {
           borderBottom: hasContent || picker ? `1px solid ${C_BORDER}` : "none",
         }}
       >
-        {/* Prompt slot — either the attached chip, or a "+ prompt" trigger. */}
+        {/* Template slot — either the chosen one's chip, or a "+ template" trigger. */}
         {/* Clicking the chip body re-opens the picker (to swap), the × clears. */}
         {attached ? (() => {
-          const fav = attached.favorite
-            ? FAVORITE_COLOR_MAP[attached.favorite]
-            : null;
-          const favColor = fav?.color || null;
           return (
             <span
               style={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 4,
-                padding: "2px 4px 2px 7px",
-                background: favColor ? favColor + "22" : C_BG2,
-                border: `1px solid ${favColor ? favColor + "55" : C_BORDER_STRONG}`,
-                borderRadius: 4,
+                padding: "2px 6px 2px 9px",
+                background: C_BG2,
+                border: `1px solid ${C_BORDER_STRONG}`,
+                borderRadius: 999,
                 fontFamily: FONT_SANS,
                 fontSize: 11.5,
-                color: favColor || C_FG1,
-                maxWidth: 220,
+                color: C_FG,
+                maxWidth: 240,
               }}
             >
               <button
                 onClick={() =>
                   setPicker((p) => (p === "prompt" ? null : "prompt"))
                 }
-                title="Swap prompt"
+                data-overlay-template={attached.id}
+                title="Choose another template"
                 style={{
                   background: "transparent",
                   border: "none",
@@ -998,7 +978,8 @@ function QuickQuery() {
               </button>
               <button
                 onClick={() => setAttachedPromptId(null)}
-                title="Detach"
+                aria-label={`Remove ${attached.name}`}
+                title="Remove"
                 style={{
                   background: "none",
                   border: "none",
@@ -1036,7 +1017,7 @@ function QuickQuery() {
               fontSize: 11.5,
             }}
           >
-            + prompt
+            + template
           </button>
         )}
 
@@ -1167,7 +1148,7 @@ function QuickQuery() {
         >
           <div style={{ padding: "6px 10px 4px", flexShrink: 0 }}>
             <input
-              placeholder="Search prompts…"
+              placeholder="Search templates…"
               value={promptSearch}
               onChange={(e) => setPromptSearch(e.target.value)}
               autoFocus
@@ -1204,19 +1185,16 @@ function QuickQuery() {
                 }}
               >
                 {prompts.length === 0
-                  ? "No prompts yet — create some in the main window."
-                  : "no matches"}
+                  ? "No templates yet. Write one in Settings → Templates in the main window."
+                  : "No template matches."}
               </div>
             )}
             {visiblePrompts.map((p) => {
               const sel = p.id === attachedPromptId;
-              const fav = p.favorite
-                ? FAVORITE_COLOR_MAP[p.favorite]
-                : null;
-              const favColor = fav?.color || null;
               return (
                 <button
                   key={p.id}
+                  data-overlay-template-option={p.id}
                   onClick={() => pickPrompt(p.id)}
                   style={{
                     display: "flex",
@@ -1242,25 +1220,21 @@ function QuickQuery() {
                       e.currentTarget.style.background = "transparent";
                   }}
                 >
-                  <span
-                    style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: 99,
-                      background: favColor || "transparent",
-                      flexShrink: 0,
-                      boxShadow: favColor ? `0 0 4px ${favColor}88` : "none",
-                    }}
-                  />
+                  <span style={{ color: C_FG, fontWeight: 500, whiteSpace: "nowrap", flexShrink: 0 }}>
+                    {p.name}
+                  </span>
                   <span
                     style={{
                       flex: 1,
+                      minWidth: 0,
+                      color: C_FG2,
+                      fontSize: 12,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {p.name}
+                    {p.description || ""}
                   </span>
                   {sel && (
                     <span style={{ color: C_AMBER, fontSize: 12 }}>✓</span>

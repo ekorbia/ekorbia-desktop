@@ -771,6 +771,81 @@ function documentsLabel(n) {
   return n === 1 ? '1 document' : `${n} documents`;
 }
 
+// ── Templates ──────────────────────────────────────────────────────────────
+//
+// A template is a saved instruction with a name (what the app used to call
+// a prompt; the files, the commands and much of the code keep that word).
+// Rows come from `prompts_list`: { id, name, description, hint, tags, body,
+// favorite, builtin, updatedAt }. `_virtual` rows are made in memory for a
+// single chat (a Watch's notes) and are never listed.
+
+// Starred = shown on a new chat's cards and in the + menu. `favorite` is
+// "star" for a star set today; an older install stored a colour name
+// there ("amber", "blue", …), which counts as starred too.
+const TEMPLATE_STAR = 'star';
+function isStarred(t) {
+  return !!(t && t.favorite);
+}
+
+// The order every list uses: starred first, then by name.
+function sortTemplates(list) {
+  return (Array.isArray(list) ? list : [])
+    .filter((t) => t && !t._virtual)
+    .slice()
+    .sort((a, b) => {
+      const sa = isStarred(a) ? 0 : 1;
+      const sb = isStarred(b) ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
+    });
+}
+
+// The starred ones, in list order. `limit` caps how many (the cards on a
+// new chat show six).
+function starredTemplates(list, limit) {
+  const out = sortTemplates(list).filter(isStarred);
+  return typeof limit === 'number' ? out.slice(0, limit) : out;
+}
+
+// Search by name or description. An empty query matches everything.
+function filterTemplates(list, query) {
+  const q = String(query || '').trim().toLowerCase();
+  const all = sortTemplates(list);
+  if (!q) return all;
+  return all.filter(
+    (t) =>
+      String(t.name || '').toLowerCase().includes(q) ||
+      String(t.description || '').toLowerCase().includes(q),
+  );
+}
+
+// What the message box should say while templates are on: the hint of the
+// most recently added one that has a hint. A template that is always on in
+// the workspace does not speak here — nobody chose it for this chat.
+function templateHint(attached, lockedIds) {
+  const locked = lockedIds && typeof lockedIds.has === 'function' ? lockedIds : null;
+  const list = Array.isArray(attached) ? attached : [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const t = list[i];
+    if (!t || !t.hint || !String(t.hint).trim()) continue;
+    if (locked && locked.has(t.id)) continue;
+    return String(t.hint).trim();
+  }
+  return '';
+}
+
+// A name for a copy: "File note copy", then "File note copy 2", …
+function templateCopyName(name, existingNames) {
+  const base = `${String(name || 'Template').trim()} copy`;
+  const taken = new Set((existingNames || []).map((n) => String(n || '').toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let n = 2; n < 1000; n++) {
+    const cand = `${base} ${n}`;
+    if (!taken.has(cand.toLowerCase())) return cand;
+  }
+  return base;
+}
+
 // ── Private chats end with the window (main.jsx) ───────────────────────────
 //
 // On macOS the main window's close button hides it (lib.rs) instead of
@@ -1846,6 +1921,13 @@ if (typeof window !== "undefined") {
   window.describeModel = describeModel;
   window.chatDocumentCount = chatDocumentCount;
   window.documentsLabel = documentsLabel;
+  window.TEMPLATE_STAR = TEMPLATE_STAR;
+  window.isStarred = isStarred;
+  window.sortTemplates = sortTemplates;
+  window.starredTemplates = starredTemplates;
+  window.filterTemplates = filterTemplates;
+  window.templateHint = templateHint;
+  window.templateCopyName = templateCopyName;
   window.chatsInWorkspace = chatsInWorkspace;
   window.workspaceSummaries = workspaceSummaries;
   window.recentChatItems = recentChatItems;
@@ -2095,6 +2177,13 @@ if (typeof module !== "undefined" && module.exports) {
     describeModel,
     chatDocumentCount,
     documentsLabel,
+    TEMPLATE_STAR,
+    isStarred,
+    sortTemplates,
+    starredTemplates,
+    filterTemplates,
+    templateHint,
+    templateCopyName,
     chatsInWorkspace,
     workspaceSummaries,
     recentChatItems,

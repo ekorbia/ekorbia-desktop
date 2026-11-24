@@ -17,8 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to Home and a settings button for the workspace. Private chats and
   comparisons are in the menu beside **New chat**, and **⌘N** starts a chat.
 - **The tab strip, the title-bar buttons and the status bar are gone.** One
-  line at the foot of the sidebar says where chats stay. Prompts, Watches
-  and saved files are in the settings menu beside it for now.
+  line at the foot of the sidebar says where chats stay. Watches and saved
+  files are in the settings menu beside it for now.
 - Moving a chat to another workspace is in its right-click menu. Dragging
   it onto a Space is gone.
 - **Models have plain names.** Settings → Models offers Fast, Balanced and
@@ -48,9 +48,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The quick-question panel** follows the app's light or dark look and
   answers with the default model; it no longer has its own model chooser.
   Its microphone stays at the right edge and the key hint is spelled out.
+- **Prompts are now templates.** They are the same files in the same
+  folder. Settings → Templates lists them, with a star to put one on a new
+  chat's cards and in the + menu; the right-hand prompt panel is gone, and
+  so are favourite colours (anything coloured is starred), tag filters and
+  the sort menu.
+- **A new chat offers your starred templates as cards.** Choosing one puts
+  its chip above the message box, which then asks for what the template
+  needs.
+- A template file can carry two new optional lines, `description` and
+  `hint`. Files without them work as before.
+- **Twelve starter templates for professional work** replace the 31 prompts
+  shipped before. Files already in your folder are left alone.
+- Workspace settings has "Always use these templates" in place of pinned
+  and locked prompts.
 
 ### Fixed
 
+- **A starter template you delete stays deleted.** Missing ones used to be
+  copied back in at every launch.
 - **A chat started in a workspace with pinned documents stays there.** It
   used to turn up under All chats after a relaunch.
 - Ending a private chat while its reply is arriving now stops the reply.

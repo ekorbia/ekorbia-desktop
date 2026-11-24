@@ -993,7 +993,7 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
             onClick={() => name.trim() && onSubmit(name.trim(), color, true)}
             disabled={!name.trim()}
             data-space-create-and-configure
-            title="Create the Space and open its settings dialog so you can set system prompt, default model, memory file, pinned prompts, and pinned attachments"
+            title="Create the workspace and open its settings: model, notes, templates and documents"
             style={ekBtn("secondary", { disabled: !name.trim() })}
           >
             Create &amp; configure…
@@ -1135,8 +1135,8 @@ function SpaceColorPickerPopover({ anchorRect, current, onPick, onClose }) {
 //   2. Default model (dropdown — model id preselected for new chats in
 //      this Space; empty = inherit the global default)
 //   3. Memory file (path display + Browse / Edit / Reveal / Clear)
-//   4. Pinned prompts (search + alphabetised list with lock toggle
-//      per pinned row + "+ New prompt for this Space" affordance)
+//   4. Always use these templates (chips + Add; every one is both
+//      pre-selected in new chats and locked there)
 //   5. Pinned attachments (list with Add file / Add folder / Remove)
 //
 // Draft state lives in this component — Cancel reverts cleanly without
@@ -1145,7 +1145,7 @@ function SpaceColorPickerPopover({ anchorRect, current, onPick, onClose }) {
 //   {
 //     row: { ...space, name, color, defaultModel, memoryPath },
 //     promptSlugs:   string[],          // desired final pin set
-//     lockedSlugs:   string[],          // subset that's locked
+//     lockedSlugs:   string[],          // the same list: all are locked
 //     attachments:   [{ kind, path }],  // desired final pin set
 //   }
 //
@@ -1197,28 +1197,9 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per open
   }, []);
-  // Search filter for the pinned-prompts picker. Empty string means
-  // "show everything" — the picker still splits into Pinned + All.
-  const [promptSearch, setPromptSearch] = useState("");
-  // Subset of `promptSlugs` that's locked. Loaded from the
-  // `space_prompts_list` rows' `locked` flag on mount; mutated when the
-  // user toggles the lock icon on a pinned row. The parent uses this
-  // alongside `promptSlugs` to diff against the live DB state on save
-  // (add new pins with locked=true, fire space_prompt_set_locked on
-  // existing pins whose lock state changed).
-  const [lockedSlugs, setLockedSlugs] = useState(new Set());
-  // "+ New prompt for this Space" inline form state. `null` when closed,
-  // `{name, body}` when open. The form materialises a new prompt in the
-  // user's library AND pins it (locked) on save.
-  const [newPromptForm, setNewPromptForm] = useState(null);
-  // Prompts created via the inline form during this modal session.
-  // Merged with the live `promptsLibrary` prop for picker rendering so
-  // they appear immediately — the parent's library refresh fires on
-  // modal close and brings them in officially.
-  const [newlyCreatedPrompts, setNewlyCreatedPrompts] = useState([]);
-  // Saving-in-flight flag for the inline form — disables Save while the
-  // backend round-trips so the user can't double-fire.
-  const [newPromptSaving, setNewPromptSaving] = useState(false);
+  // "Always use these templates": whether the list of templates that can
+  // still be added is showing.
+  const [addTemplateOpen, setAddTemplateOpen] = useState(false);
 
   // ── Pinned prompts + attachments (loaded lazily) ──
   // We fetch on mount so the user opens the modal and immediately sees
@@ -1255,14 +1236,9 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
         if (cancelled) return;
         const slugList = (prompts || []).map((p) => p.promptSlug).filter(Boolean);
         setPromptSlugs(slugList);
-        // Bootstrap the locked-set from the rows' `locked` flag. Slugs
-        // not in the set are unlocked; the diff in `saveSpaceSettings`
-        // catches both "newly locked" and "newly unlocked" by reading
-        // membership against this Set.
-        const lockedFromRows = new Set(
-          (prompts || []).filter((p) => p && p.locked).map((p) => p.promptSlug),
-        );
-        setLockedSlugs(lockedFromRows);
+        // Every template listed here is "always on". (An older version
+        // also allowed one that was merely pre-selected and could be
+        // removed in a chat; saving this dialog makes those always on.)
         setAttachments(
           (attaches || []).map((a) => ({ id: a.id, kind: a.kind, path: a.path })),
         );
@@ -1395,11 +1371,8 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
         memoryPath: notesPath || null,
       },
       promptSlugs,
-      // Only include slugs that are ALSO in promptSlugs — a lock flag
-      // on an unpinned slug is meaningless. Filter defensively in case
-      // the user toggled lock-then-unpin without the lockedSlugs Set
-      // catching up; the parent shouldn't have to think about it.
-      lockedSlugs: promptSlugs.filter((s) => lockedSlugs.has(s)),
+      // Always on = in every chat here and not removable in a chat.
+      lockedSlugs: promptSlugs.slice(),
       attachments: attachments.map((a) => ({ kind: a.kind, path: a.path })),
     };
     onSave(draft);
@@ -1613,422 +1586,116 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
             )}
           </div>
 
-          {/* ── 4. Pinned prompts ──
-              Search-and-section picker (Option A from the proposal):
-                • Search input pinned at the top filters by name (case-
-                  insensitive substring match).
-                • Two stacked sections inside one scrollable area —
-                  "Pinned" (current selection, alphabetical) then "All
-                  prompts" (everything else, alphabetical).
-                • Each row: checkbox + favourite color dot + prompt name.
-                • Click anywhere on the row to toggle pinned state — the
-                  row instantly reflows between the two sections.
-                • Sections collapse to empty when they have no matches
-                  for the current filter; if BOTH are empty the picker
-                  shows a "no matches" message. */}
-          <div>
+          {/* ── 4. Always use these templates ──
+              Templates that are on in every chat in this workspace (a
+              house style, say). In a chat their chips show a lock and
+              cannot be removed. Templates themselves are written in
+              Settings → Templates. */}
+          <div data-space-settings-templates>
             <SectionLabel>
-              Pinned prompts
+              Always use these templates
               <SectionHint>
-                Auto-attached to every new chat in this Space. Click a row to toggle.
+                On in every chat in this workspace, such as a house style.
+                They cannot be turned off inside a chat.
               </SectionHint>
             </SectionLabel>
             {!loaded ? (
-              <div style={{ color: T.fg3, fontSize: 12.5, fontFamily: T.sans }}>
-                loading…
-              </div>
-            ) : promptsLibrary.length === 0 && newlyCreatedPrompts.length === 0 ? (
-              <div style={{ color: T.fg3, fontSize: 12, fontFamily: T.sans }}>
-                No prompts in your library yet — add some in the Prompts panel, or use "+ New prompt for this Space" below.
-              </div>
-            ) : (
-              (() => {
-                // Compute pinned + unpinned splits once per render. Cheap
-                // for libraries under a few hundred prompts (the loop is
-                // single-pass) — useMemo would be over-optimisation since
-                // the inputs (promptsLibrary identity, promptSlugs array,
-                // promptSearch string) all change rarely.
-                //
-                // Merge `newlyCreatedPrompts` with the live library
-                // (deduped by id) so prompts the user just created via
-                // the inline form appear immediately, without waiting
-                // for the parent's library refresh on modal close.
-                const q = promptSearch.trim().toLowerCase();
-                const matches = (p) =>
-                  !q || (p.name || p.id).toLowerCase().includes(q);
-                const sorter = (a, b) =>
-                  (a.name || a.id).localeCompare(b.name || b.id);
-                const pinnedSet = new Set(promptSlugs);
-                const seen = new Set();
-                const merged = [];
-                for (const p of [...newlyCreatedPrompts, ...promptsLibrary]) {
-                  if (!p || !p.id || seen.has(p.id)) continue;
-                  seen.add(p.id);
-                  merged.push(p);
-                }
-                const pinned = [];
-                const unpinned = [];
-                for (const p of merged) {
-                  if (!matches(p)) continue;
-                  if (pinnedSet.has(p.id)) pinned.push(p);
-                  else unpinned.push(p);
-                }
-                pinned.sort(sorter);
-                unpinned.sort(sorter);
-
-                const renderRow = (p, isSelected) => {
-                  const fav = p.favorite && window.FAVORITE_COLOR_MAP
-                    ? window.FAVORITE_COLOR_MAP[p.favorite]
-                    : null;
-                  return (
-                    <div
-                      key={p.id}
-                      onClick={() => togglePromptSlug(p.id)}
-                      data-prompt-toggle={p.id}
-                      data-selected={isSelected ? "true" : "false"}
-                      role="checkbox"
-                      aria-checked={isSelected}
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === " " || e.key === "Enter") {
-                          e.preventDefault();
-                          togglePromptSlug(p.id);
-                        }
-                      }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        padding: "6px 10px",
-                        cursor: "pointer",
-                        background: isSelected ? `${T.amber}14` : "transparent",
-                        borderLeft: isSelected
-                          ? `2px solid ${T.amber}`
-                          : "2px solid transparent",
-                        fontFamily: T.sans,
-                        fontSize: 12,
-                        color: isSelected ? T.fg : T.fg1,
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!isSelected) e.currentTarget.style.background = T.bg3;
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isSelected) e.currentTarget.style.background = "transparent";
-                      }}
-                    >
-                      {/* Checkbox indicator */}
+              <div style={ekHint()}>Loading…</div>
+            ) : (() => {
+              const library = sortTemplates(promptsLibrary);
+              const byId = new Map(library.map((p) => [p.id, p]));
+              const remaining = library.filter((p) => !promptSlugs.includes(p.id));
+              return (
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, position: "relative" }}>
+                  {promptSlugs.map((slug) => {
+                    const t = byId.get(slug);
+                    return (
                       <span
-                        aria-hidden="true"
-                        style={{
-                          width: 14,
-                          height: 14,
-                          flexShrink: 0,
-                          border: `1px solid ${isSelected ? T.amber : T.borderStrong}`,
-                          background: isSelected ? T.amber : "transparent",
-                          borderRadius: 3,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          color: T.bg0,
-                          fontSize: 12,
-                          fontWeight: 700,
-                          lineHeight: 1,
-                        }}
+                        key={slug}
+                        data-space-template={slug}
+                        title={t ? t.description || undefined : "This template's file is no longer in the folder"}
+                        style={{ ...ekChip("plain"), height: 28, gap: 6, padding: "0 8px 0 10px", opacity: t ? 1 : 0.6 }}
                       >
-                        {isSelected ? "✓" : ""}
-                      </span>
-                      {/* Favourite color dot (only when the prompt has one
-                          set). The dot uses the same colour the prompt
-                          library uses for its favourites — keeps visual
-                          continuity across screens. */}
-                      {fav && (
-                        <span
-                          aria-hidden="true"
-                          title={`Favourite: ${p.favorite}`}
-                          style={{
-                            width: 7,
-                            height: 7,
-                            flexShrink: 0,
-                            borderRadius: "50%",
-                            background: fav.color || fav,
-                          }}
-                        />
-                      )}
-                      <span
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {p.name || p.id}
-                      </span>
-                      {/* Lock toggle — only meaningful for pinned rows.
-                          A locked pin (filled amber lock) is always
-                          attached to new chats in this Space AND its
-                          composer chip's × is suppressed at render time.
-                          Clicking the lock stops propagation so it
-                          doesn't also fire the row's "toggle pinned"
-                          handler. */}
-                      {isSelected && (
+                        <I.Lock size={11} />
+                        <span style={{ color: T.fg }}>{t ? t.name : slug}</span>
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setLockedSlugs((cur) => {
-                              const next = new Set(cur);
-                              if (next.has(p.id)) next.delete(p.id);
-                              else next.add(p.id);
-                              return next;
-                            });
-                          }}
-                          title={
-                            lockedSlugs.has(p.id)
-                              ? "Locked — always attached to chats in this Space. Click to unlock."
-                              : "Click to lock — the prompt will always be attached, can't be detached per-chat."
-                          }
-                          data-prompt-lock-toggle={p.id}
-                          data-locked={lockedSlugs.has(p.id) ? "true" : "false"}
+                          type="button"
+                          data-space-template-remove={slug}
+                          aria-label={`Stop always using ${t ? t.name : slug}`}
+                          onClick={() => togglePromptSlug(slug)}
                           style={{
-                            background: "transparent",
-                            border: "none",
-                            padding: 2,
-                            cursor: "pointer",
-                            color: lockedSlugs.has(p.id) ? T.amber : T.fg3,
-                            display: "flex",
+                            display: "inline-flex",
                             alignItems: "center",
-                            flexShrink: 0,
-                          }}
-                          onMouseEnter={(e) => {
-                            if (!lockedSlugs.has(p.id))
-                              e.currentTarget.style.color = T.fg1;
-                          }}
-                          onMouseLeave={(e) => {
-                            if (!lockedSlugs.has(p.id))
-                              e.currentTarget.style.color = T.fg3;
+                            background: "none",
+                            border: "none",
+                            padding: 0,
+                            cursor: "pointer",
+                            color: T.fg2,
                           }}
                         >
-                          <I.Lock size={11} />
+                          <I.X size={10} />
                         </button>
-                      )}
-                    </div>
-                  );
-                };
-
-                const sectionHeader = (label) => (
-                  <div
-                    data-prompt-section-header={label}
-                    style={{
-                      padding: "5px 10px 4px",
-                      fontFamily: T.sans,
-                      fontSize: 12,
-                      color: T.fg3,
-                      background: T.bg3,
-                      borderBottom: `1px solid ${T.border}`,
-                      position: "sticky",
-                      top: 0,
-                      zIndex: 1,
-                    }}
+                      </span>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    data-space-template-add
+                    aria-haspopup="menu"
+                    aria-expanded={addTemplateOpen}
+                    disabled={remaining.length === 0}
+                    onClick={() => setAddTemplateOpen((o) => !o)}
+                    style={ekBtn("secondary", { small: true, disabled: remaining.length === 0 })}
                   >
-                    {label}
-                  </div>
-                );
-
-                return (
-                  <>
-                    <input
-                      type="text"
-                      placeholder="Search prompts…"
-                      value={promptSearch}
-                      onChange={(e) => setPromptSearch(e.target.value)}
-                      data-space-settings-prompts-search
-                      style={{
-                        ...modalInputStyle(),
-                        marginBottom: 6,
-                        fontFamily: T.sans,
-                      }}
-                    />
+                    <I.Plus size={11} />
+                    Add
+                  </button>
+                  {library.length === 0 && (
+                    <span style={ekHint()}>No templates yet. Write one in Settings → Templates.</span>
+                  )}
+                  {addTemplateOpen && remaining.length > 0 && (
                     <div
-                      data-space-settings-prompts-list
+                      role="menu"
+                      data-space-template-options
+                      // The dialog scrolls: bring the list into view when it
+                      // opens near the foot.
+                      ref={(el) => { if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest" }); }}
                       style={{
-                        maxHeight: 280,
+                        position: "absolute",
+                        left: 0,
+                        top: "calc(100% + 6px)",
+                        zIndex: 5,
+                        minWidth: 260,
+                        maxWidth: 380,
+                        maxHeight: 220,
                         overflowY: "auto",
-                        border: `1px solid ${T.border}`,
-                        borderRadius: 4,
-                        background: T.bg2,
+                        padding: 5,
+                        background: T.isLight ? T.bg0 : T.bg2,
+                        border: `1px solid ${T.borderStrong}`,
+                        borderRadius: 10,
+                        boxShadow: T.shadowPop,
+                        fontFamily: T.sans,
+                        fontSize: 13,
                       }}
                     >
-                      {pinned.length > 0 && sectionHeader(`Pinned (${pinned.length})`)}
-                      {pinned.map((p) => renderRow(p, true))}
-                      {unpinned.length > 0 && sectionHeader(
-                        pinned.length > 0 ? "All prompts" : `All prompts (${unpinned.length})`,
-                      )}
-                      {unpinned.map((p) => renderRow(p, false))}
-                      {pinned.length === 0 && unpinned.length === 0 && (
-                        <div
-                          data-prompts-no-matches
-                          style={{
-                            padding: "14px 10px",
-                            color: T.fg3,
-                            fontSize: 12,
-                            fontFamily: T.sans,
-                            textAlign: "center",
+                      {remaining.map((p) => (
+                        <MenuItem
+                          key={p.id}
+                          data-space-template-option={p.id}
+                          title={p.description || undefined}
+                          onClick={() => {
+                            togglePromptSlug(p.id);
+                            setAddTemplateOpen(false);
                           }}
                         >
-                          No prompts match "{promptSearch}".
-                        </div>
-                      )}
+                          {p.name}
+                        </MenuItem>
+                      ))}
                     </div>
-                  </>
-                );
-              })()
-            )}
-
-            {/* ── "+ New prompt for this Space" inline affordance ──
-                Creates a new prompt in the user's library AND auto-pins
-                it (locked) on this Space. Button → form: name + body,
-                Save + Cancel. The new prompt also appears in the user's
-                regular prompt library — it's not Space-private, just
-                created from here for convenience. */}
-            {!newPromptForm && (
-              <button
-                onClick={() => setNewPromptForm({
-                  name: `${space.name} framing`,
-                  body: "",
-                })}
-                data-space-new-prompt-open
-                style={{
-                  marginTop: 8,
-                  padding: "5px 10px",
-                  background: "transparent",
-                  border: `1px dashed ${T.border}`,
-                  borderRadius: 8,
-                  color: T.fg3,
-                  fontFamily: T.sans,
-                  fontSize: 12,
-                  cursor: "pointer",
-                  width: "100%",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = T.fg1;
-                  e.currentTarget.style.borderColor = T.borderStrong;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = T.fg3;
-                  e.currentTarget.style.borderColor = T.border;
-                }}
-              >
-                + New prompt for this Space
-              </button>
-            )}
-            {newPromptForm && (
-              <div
-                data-space-new-prompt-form
-                style={{
-                  marginTop: 8,
-                  padding: 10,
-                  background: T.bg2,
-                  border: `1px solid ${T.borderStrong}`,
-                  borderRadius: 5,
-                }}
-              >
-                <SectionLabel>Name</SectionLabel>
-                <input
-                  value={newPromptForm.name}
-                  onChange={(e) =>
-                    setNewPromptForm((cur) => ({ ...cur, name: e.target.value }))
-                  }
-                  placeholder="Prompt name"
-                  data-space-new-prompt-name
-                  style={{ ...modalInputStyle(), marginBottom: 8 }}
-                />
-                <SectionLabel>Body</SectionLabel>
-                <textarea
-                  value={newPromptForm.body}
-                  onChange={(e) =>
-                    setNewPromptForm((cur) => ({ ...cur, body: e.target.value }))
-                  }
-                  placeholder="Prompt body — what the model should see as a system message."
-                  data-space-new-prompt-body
-                  rows={4}
-                  style={{
-                    ...modalInputStyle(),
-                    resize: "vertical",
-                    minHeight: 80,
-                  }}
-                />
-                <SectionHint>
-                  Creates the prompt in your library and pins it (locked) on this Space.
-                </SectionHint>
-                <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end", gap: 6 }}>
-                  <SmallButton
-                    onClick={() => setNewPromptForm(null)}
-                    data-space-new-prompt-cancel
-                  >
-                    Cancel
-                  </SmallButton>
-                  <SmallButton
-                    onClick={async () => {
-                      const trimmedName = (newPromptForm.name || "").trim();
-                      const trimmedBody = (newPromptForm.body || "").trim();
-                      if (!trimmedName || !trimmedBody || newPromptSaving) return;
-                      const invoke = window.getInvoke && window.getInvoke();
-                      if (!invoke) return;
-                      setNewPromptSaving(true);
-                      try {
-                        // prompts_save derives the slug from the name on
-                        // the Rust side, dedupes against the prompts dir,
-                        // and returns the resulting prompt row. We use
-                        // that row's id (= slug) for the pin so the
-                        // settings save's pinned-prompts diff matches it
-                        // against the library on disk.
-                        const created = await invoke("prompts_save", {
-                          // No id = create new (vs. update existing).
-                          name: trimmedName,
-                          body: trimmedBody,
-                          tags: [],
-                          favorite: null,
-                        });
-                        if (created && created.id) {
-                          // Local optimistic merge — the picker render
-                          // shows it immediately. Parent's library
-                          // refresh on modal close brings it in
-                          // canonically.
-                          setNewlyCreatedPrompts((cur) => [created, ...cur]);
-                          setPromptSlugs((cur) =>
-                            cur.includes(created.id) ? cur : [...cur, created.id],
-                          );
-                          setLockedSlugs((cur) => {
-                            const next = new Set(cur);
-                            next.add(created.id);
-                            return next;
-                          });
-                        }
-                        setNewPromptForm(null);
-                      } catch (e) {
-                        console.error("prompts_save (Space inline) failed:", e);
-                        window.ekToast?.({
-                          kind: "error",
-                          title: "Couldn't create prompt",
-                          body: String(e),
-                        });
-                      } finally {
-                        setNewPromptSaving(false);
-                      }
-                    }}
-                    disabled={
-                      newPromptSaving
-                      || !(newPromptForm.name || "").trim()
-                      || !(newPromptForm.body || "").trim()
-                    }
-                    data-space-new-prompt-save
-                  >
-                    {newPromptSaving ? "Saving…" : "Save & pin"}
-                  </SmallButton>
+                  )}
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           {/* ── 5. Pinned attachments ── */}
@@ -2946,7 +2613,6 @@ function RightPanelTabs({ tab, onTab, onClose }) {
         borderBottom: `1px solid ${T.border}`,
       }}
     >
-      <TabButton id="prompts" label="Prompts" />
       <TabButton id="watches" label="Watches" />
       <TabButton id="files" label="Files" />
       <button
@@ -3076,7 +2742,7 @@ function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttac
 // the Prompts, Watches and Files panels are gone, and those panels move
 // into Settings (Templates, Watches) or go away (Files) in later steps of
 // the redesign. Until then this is how they are reached.
-function MoreMenu({ onSettings, onPanel }) {
+function MoreMenu({ onSettings, onPanel, onTemplates }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -3134,7 +2800,7 @@ function MoreMenu({ onSettings, onPanel }) {
         >
           <MenuItem onClick={run(onSettings)} data-more-settings>Settings…</MenuItem>
           <MenuDivider />
-          <MenuItem onClick={run(() => onPanel && onPanel("prompts"))} data-more-panel="prompts">Prompt library</MenuItem>
+          <MenuItem onClick={run(onTemplates)} data-more-templates>Templates…</MenuItem>
           <MenuItem onClick={run(() => onPanel && onPanel("watches"))} data-more-panel="watches">Watches</MenuItem>
           <MenuItem onClick={run(() => onPanel && onPanel("files"))} data-more-panel="files">Saved files</MenuItem>
         </div>

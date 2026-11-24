@@ -186,3 +186,166 @@ test.describe("Composer prompt slash picker", () => {
     await expect(chip.locator('[data-attached-prompt-lock="alpha"]')).toHaveCount(0);
   });
 });
+
+// ── Templates in the message box ─────────────────────────────────────────
+//
+// A template is chosen from the picker above (typing `/`), from the list
+// beside "Use a template" in the + menu (the starred ones), or from a card
+// on a new chat. While one is on, the box shows its hint.
+
+const LIBRARY = [
+  { id: "translate", name: "Translate", description: "Into the language you name", hint: "Name the language, then paste the text", favorite: null },
+  { id: "file-note", name: "File note", description: "Rough or dictated notes into a note for the file", hint: "Dictate or paste your notes", favorite: "star" },
+  { id: "summarise", name: "Summarise a document", description: "The main points, grouped by section", hint: "Attach a document or paste the text", favorite: "star" },
+  { id: "house-style", name: "House style", description: "Our spelling, tone and sign-off", hint: "", favorite: null },
+];
+
+async function mountBox(page, opts = {}) {
+  await page.evaluate(
+    ({ library, opts }) => {
+      window.__B = { picked: [], manage: 0 };
+      const host = document.getElementById("test-root");
+      if (window.__TEST_ROOT) { try { window.__TEST_ROOT.unmount(); } catch (_) {} }
+      host.innerHTML = "";
+      host.style.cssText = "display:flex;flex-direction:column;justify-content:flex-end;height:100vh";
+      const root = ReactDOM.createRoot(host);
+      const byId = Object.fromEntries(library.map((t) => [t.id, t]));
+      const render = (extra) =>
+        root.render(
+          React.createElement(window.Composer, Object.assign({
+            model: { id: "gemma4-12b", name: "Balanced" },
+            onSend: () => undefined, isStreaming: false, onStop: () => undefined,
+            prompts: library,
+            onPickPrompt: (p) => window.__B.picked.push(p.id),
+            attachedPrompts: (opts.attached || []).map((id) => byId[id]),
+            lockedPromptSlugs: new Set(opts.locked || []),
+            onDetachPrompt: () => undefined,
+            attachments: [], onAttachFile: () => undefined, onAttachFolder: () => undefined,
+            onManageTemplates: () => { window.__B.manage += 1; },
+            documentCount: opts.documentCount || 0,
+          }, extra || {})),
+        );
+      window.__RENDER = render;
+      render();
+      window.__TEST_ROOT = root;
+    },
+    { library: opts.library || LIBRARY, opts },
+  );
+  await expect(page.locator("[data-composer-input]")).toBeVisible();
+}
+
+test.describe("Templates in the message box", () => {
+  test("the picker lists starred templates first, each with its description", async ({ page }) => {
+    await mountBox(page);
+    const ta = page.locator("[data-composer-input]");
+    await ta.focus();
+    await ta.press("/");
+    const rows = page.locator("[data-prompt-picker] [data-template-option]");
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(0)).toHaveAttribute("data-template-option", "file-note");
+    await expect(rows.nth(1)).toHaveAttribute("data-template-option", "summarise");
+    await expect(rows.nth(2)).toHaveAttribute("data-template-option", "house-style");
+    await expect(rows.nth(0)).toContainText("Rough or dictated notes into a note for the file");
+  });
+
+  test("typing after the slash also searches descriptions", async ({ page }) => {
+    await mountBox(page);
+    const ta = page.locator("[data-composer-input]");
+    await ta.focus();
+    await ta.press("/");
+    await ta.type("spelling");
+    const rows = page.locator("[data-prompt-picker] [data-template-option]");
+    await expect(rows).toHaveCount(1);
+    await expect(rows).toHaveAttribute("data-template-option", "house-style");
+  });
+
+  test("the picker ends with a way to manage templates", async ({ page }) => {
+    await mountBox(page);
+    const ta = page.locator("[data-composer-input]");
+    await ta.focus();
+    await ta.press("/");
+    await page.locator("[data-template-manage]").click();
+    expect(await page.evaluate(() => window.__B.manage)).toBe(1);
+  });
+
+  test("a signal from outside opens the picker (the 'All templates' link)", async ({ page }) => {
+    await mountBox(page);
+    await expect(page.locator("[data-prompt-picker]")).toHaveCount(0);
+    await page.evaluate(() => window.__RENDER({ openPickerSignal: 1 }));
+    await expect(page.locator("[data-prompt-picker]")).toBeVisible();
+  });
+
+  test("the box shows the hint of the template that is on", async ({ page }) => {
+    await mountBox(page);
+    await expect(page.locator("[data-composer-input]")).toHaveAttribute("placeholder", "Ask anything");
+    await mountBox(page, { attached: ["file-note"] });
+    await expect(page.locator("[data-composer-input]")).toHaveAttribute("placeholder", "Dictate or paste your notes");
+    // It wins over the documents line.
+    await mountBox(page, { attached: ["file-note"], documentCount: 14 });
+    await expect(page.locator("[data-composer-input]")).toHaveAttribute("placeholder", "Dictate or paste your notes");
+  });
+
+  test("a template without a hint, or one the workspace keeps always on, leaves the usual words", async ({ page }) => {
+    await mountBox(page, { attached: ["house-style"], documentCount: 14 });
+    await expect(page.locator("[data-composer-input]")).toHaveAttribute("placeholder", "Ask about the 14 documents attached");
+    await mountBox(page, { attached: ["translate"], locked: ["translate"] });
+    await expect(page.locator("[data-composer-input]")).toHaveAttribute("placeholder", "Ask anything");
+  });
+
+  test("the chip is plain: no colour from an old favourite", async ({ page }) => {
+    await mountBox(page, {
+      library: [{ id: "old", name: "Board paper", description: "", hint: "", favorite: "red" }],
+      attached: ["old"],
+    });
+    const chip = page.locator('[data-attached-prompt-chip="old"]');
+    await expect(chip).toHaveText("Board paper");
+    const plain = await page.evaluate(() => ekChip("plain").background);
+    expect(await chip.evaluate((el) => el.style.background)).toBe(
+      await page.evaluate((c) => { const d = document.createElement("div"); d.style.background = c; return d.style.background; }, plain),
+    );
+  });
+
+  test("+ → Use a template lists the starred ones; choosing one turns it on", async ({ page }) => {
+    await mountBox(page, { attached: ["summarise"] });
+    await page.locator("[data-composer-plus]").click();
+    await expect(page.locator("[data-plus-template-list]")).toHaveCount(0);
+    await page.locator("[data-plus-template]").click();
+    const list = page.locator("[data-plus-template-list]");
+    await expect(list).toBeVisible();
+    const items = list.locator("[data-plus-template-item]");
+    await expect(items).toHaveCount(2);
+    await expect(items.nth(0)).toHaveText("File note");
+    // The one already on is ticked.
+    await expect(items.nth(1)).toHaveAttribute("aria-checked", "true");
+    await expect(items.nth(0)).toHaveAttribute("aria-checked", "false");
+    await items.nth(0).click();
+    expect(await page.evaluate(() => window.__B.picked)).toEqual(["file-note"]);
+    // Both menus close.
+    await expect(page.locator("[data-composer-plus-menu]")).toHaveCount(0);
+  });
+
+  test("+ → Use a template → All templates… opens the picker", async ({ page }) => {
+    await mountBox(page);
+    await page.locator("[data-composer-plus]").click();
+    await page.locator("[data-plus-template]").click();
+    await page.locator("[data-plus-template-all]").click();
+    await expect(page.locator("[data-prompt-picker]")).toBeVisible();
+    await expect(page.locator("[data-composer-plus-menu]")).toHaveCount(0);
+  });
+
+  test("one the workspace keeps always on cannot be turned off from the + menu", async ({ page }) => {
+    await mountBox(page, { attached: ["file-note"], locked: ["file-note"] });
+    await page.locator("[data-composer-plus]").click();
+    await page.locator("[data-plus-template]").click();
+    await page.locator('[data-plus-template-item="file-note"]').click();
+    expect(await page.evaluate(() => window.__B.picked)).toEqual([]);
+  });
+
+  test("with nothing starred, Use a template goes straight to the picker", async ({ page }) => {
+    await mountBox(page, { library: LIBRARY.map((t) => ({ ...t, favorite: null })) });
+    await page.locator("[data-composer-plus]").click();
+    await page.locator("[data-plus-template]").click();
+    await expect(page.locator("[data-plus-template-list]")).toHaveCount(0);
+    await expect(page.locator("[data-prompt-picker]")).toBeVisible();
+  });
+});

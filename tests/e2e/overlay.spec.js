@@ -108,8 +108,8 @@ test("the key hint is in the bar below the input, in words", async ({ page }) =>
   await mountPanel(page);
   const hint = page.locator("[data-overlay-hint]");
   await expect(hint).toHaveText("Return to ask · Esc to close");
-  // It goes away while the prompt list is open.
-  await page.getByRole("button", { name: "+ prompt" }).click();
+  // It goes away while the template list is open.
+  await page.getByRole("button", { name: "+ template" }).click();
   await expect(hint).toHaveCount(0);
 });
 
@@ -126,12 +126,67 @@ test("the microphone stays at the right edge of the input row in every state", a
   expect(await mic.evaluate((el) => el.nextElementSibling === null)).toBe(true);
 
   // A list open.
-  await page.getByRole("button", { name: "+ prompt" }).click();
-  await expect(page.getByPlaceholder("Search prompts…")).toBeVisible();
+  await page.getByRole("button", { name: "+ template" }).click();
+  await expect(page.getByPlaceholder("Search templates…")).toBeVisible();
   expect(await rightEdge()).toBe(idle);
   await page.keyboard.press("Escape");
 
   // An answer on screen.
   await ask(page, "What is the notice period?");
   expect(await rightEdge()).toBe(idle);
+});
+
+// ── Templates in the panel ───────────────────────────────────────────────
+
+async function mountWithTemplates(page) {
+  await mountPanel(page, () => {
+    window.__INVOKE_RESPONSES.prompts_list = () => [
+      { id: "translate", name: "Translate", description: "Into the language you name", hint: "Name the language, then paste the text", body: "Translate it.", tags: [], favorite: null },
+      { id: "file-note", name: "File note", description: "Rough or dictated notes into a note for the file", hint: "Dictate or paste your notes", body: "Make a file note.", tags: [], favorite: "star" },
+      { id: "old", name: "Board paper", description: "", hint: "", body: "Board paper.", tags: [], favorite: "red" },
+    ];
+  });
+}
+
+test("+ template lists templates starred first, with descriptions; search covers both", async ({ page }) => {
+  await mountWithTemplates(page);
+  await page.getByRole("button", { name: "+ template" }).click();
+  const rows = page.locator("[data-overlay-template-option]");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toHaveAttribute("data-overlay-template-option", "old");
+  await expect(rows.nth(1)).toHaveAttribute("data-overlay-template-option", "file-note");
+  await expect(rows.nth(1)).toContainText("Rough or dictated notes into a note for the file");
+  await page.getByPlaceholder("Search templates…").fill("language");
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toHaveAttribute("data-overlay-template-option", "translate");
+});
+
+test("a chosen template shows as a plain chip and its hint becomes the placeholder", async ({ page }) => {
+  await mountWithTemplates(page);
+  const input = page.locator("[data-quick-panel] input").first();
+  await expect(input).toHaveAttribute("placeholder", "Ask anything…");
+  await page.getByRole("button", { name: "+ template" }).click();
+  await page.locator('[data-overlay-template-option="file-note"]').click();
+  await expect(page.locator('[data-overlay-template="file-note"]')).toHaveText("File note");
+  await expect(input).toHaveAttribute("placeholder", "Dictate or paste your notes");
+  // The template's instructions lead the request.
+  await ask(page, "Met the client at 3pm.");
+  const body = await page.evaluate(() => window.__INVOKES.filter((i) => i.cmd === "llm_chat_stream")[0].args.body);
+  expect(body.messages[0]).toEqual({ role: "system", content: "Make a file note." });
+  // Removing it restores the usual words.
+  await page.getByRole("button", { name: "Remove File note" }).click();
+  await expect(page.locator("[data-overlay-template]")).toHaveCount(0);
+});
+
+test("templates are re-read when the panel comes forward", async ({ page }) => {
+  await mountWithTemplates(page);
+  await page.evaluate(() => {
+    window.__INVOKE_RESPONSES.prompts_list = () => [
+      { id: "minutes", name: "Meeting minutes", description: "Decisions and actions", hint: "", body: "Minutes.", tags: [], favorite: null },
+    ];
+    window.dispatchEvent(new Event("focus"));
+  });
+  await page.getByRole("button", { name: "+ template" }).click();
+  await expect(page.locator("[data-overlay-template-option]")).toHaveCount(1);
+  await expect(page.locator('[data-overlay-template-option="minutes"]')).toBeVisible();
 });

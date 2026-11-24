@@ -55,7 +55,7 @@ test("settings: panes are listed down the left, technical settings under Advance
   const nav = root.locator("[data-settings-nav]");
 
   // Platform-invariant panes are always present, in this order.
-  for (const label of ["General", "Models", "Advanced"]) {
+  for (const label of ["General", "Models", "Templates", "Advanced"]) {
     await expect(nav.getByRole("button", { name: label, exact: true })).toBeVisible();
   }
   // The tabs that named how the app is built are gone from the list.
@@ -70,9 +70,17 @@ test("settings: panes are listed down the left, technical settings under Advance
   // Advanced holds what used to be Backend, Models and Files.
   await nav.getByRole("button", { name: "Advanced", exact: true }).click();
   const body = root.locator("[data-settings-body]");
-  for (const label of ["Engine and servers", "Every model", "Prompts folder", "Memory file", "Attachments", "Show technical details"]) {
+  for (const label of ["Engine and servers", "Every model", "Memory file", "Attachments", "Show technical details"]) {
     await expect(body.getByText(label, { exact: true })).toBeVisible();
   }
+  // The templates folder moved to the Templates pane with the templates.
+  await expect(body.getByText("Prompts folder", { exact: true })).toHaveCount(0);
+
+  // Templates sits between Models and Dictation and opens its pane.
+  await nav.getByRole("button", { name: "Templates", exact: true }).click();
+  await expect(root.locator("[data-templates-settings]")).toBeVisible();
+  const order = await nav.locator("[data-settings-tab]").evaluateAll((els) => els.map((e) => e.getAttribute("data-settings-tab")));
+  expect(order.indexOf("templates")).toBe(order.indexOf("models") + 1);
 
   // Models opens the plain-names pane, which links on to Advanced.
   await nav.getByRole("button", { name: "Models", exact: true }).click();
@@ -144,4 +152,39 @@ test("settings: Advanced with a long model list — no section is squeezed or ov
   for (let i = 1; i < layout.kids.length; i++) {
     expect(layout.kids[i].top).toBeGreaterThanOrEqual(layout.kids[i - 1].bottom - 0.5);
   }
+});
+
+// Settings can be opened straight onto a pane, and on Templates straight
+// onto one template (the "Manage templates…" row, the corner menu).
+test("settings: a request can name the pane, and a template to open in it", async ({ page }) => {
+  await page.evaluate(() => {
+    window.THEMES = { one_dark: { label: "Midnight" }, one_light: { label: "Daylight" } };
+    window.__TEST_MOUNT("SettingsModal", {
+      tweaks: { theme: "one_dark", showDetails: false },
+      setTweak: () => {},
+      chatCount: 0,
+      templates: [
+        { id: "file-note", name: "File note", description: "Notes into a note for the file", hint: "", body: "x", tags: [], favorite: "star" },
+      ],
+    });
+  });
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "__activate_edit_mode", tab: "templates" } }));
+  });
+  const root = page.locator("#test-root");
+  await expect(root.locator("[data-templates-settings]")).toBeVisible();
+  await expect(root.locator('[data-template-row][data-template-id="file-note"]')).toBeVisible();
+  await expect(root.locator("[data-template-editor]")).toHaveCount(0);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "__activate_edit_mode", tab: "templates", template: "file-note" } }));
+  });
+  await expect(root.locator("[data-template-editor]")).toHaveAttribute("data-template-id", "file-note");
+
+  // A plain request leaves the pane where it was.
+  await page.locator("[data-template-cancel]").click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "__activate_edit_mode" } }));
+  });
+  await expect(root.locator("[data-templates-settings]")).toBeVisible();
 });

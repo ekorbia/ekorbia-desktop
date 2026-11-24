@@ -493,7 +493,9 @@ function App() {
   const [sidebarWidth, setSidebarWidth] = usePersistedState('ekorbia.sidebar.width', 252);
   const [rightPanelWidth, setRightPanelWidth] = usePersistedState('ekorbia.rightpanel.width', 380);
   // Which tab is showing in the right panel: 'prompts' or 'watches'.
-  const [rightPanelTab, setRightPanelTab] = usePersistedState('ekorbia.rightpanel.tab', 'prompts');
+  const [rightPanelTabRaw, setRightPanelTab] = usePersistedState('ekorbia.rightpanel.tab', 'watches');
+  // 'prompts' was a tab here until templates moved into Settings.
+  const rightPanelTab = rightPanelTabRaw === 'files' ? 'files' : 'watches';
   const sidebarStartRef = useR(220);
   const rightPanelStartRef = useR(380);
   // Bumped every time a new watch is created so the WatchPanel reloads its
@@ -536,14 +538,13 @@ function App() {
   const [composerSeedKey, setComposerSeedKey] = useS(0);
   const [composerSeedText, setComposerSeedText] = useS("");
   const [composerFocusKey, setComposerFocusKey] = useS(0);
+  // Bumped to open the message box's template picker ("All templates").
+  const [templatePickerKey, setTemplatePickerKey] = useS(0);
   const [query, setQuery] = useS('');
   // Full-text-search hits across message content. Populated by a debounced
   // call to the Rust `search_chats` command whenever `query` changes; an
   // empty list both at startup (no query) and during the debounce window.
   const [messageHits, setMessageHits] = useS([]);
-  // Default-selected prompt: just the first one the backend returns.
-  // Hardcoding a slug here would silently break if the user deletes it.
-  const [selectedPromptId, setSelectedPromptId] = useS(null);
   // Empty until the file-system-backed `prompts_list` resolves on mount.
   // Built-ins are seeded by Rust at startup so this won't stay empty long.
   const [prompts, setPrompts] = useS([]);
@@ -560,9 +561,18 @@ function App() {
   const [attachedPromptsByChat, setAttachedPromptsByChat] = useS({});
   const attachedPromptIds = attachedPromptsByChat[activeTab] || [];
   const attachedPrompts = attachedPromptIds.map(id => prompts.find(p => p.id === id)).filter(Boolean);
+  // True when the workspace of the chat in front keeps this template
+  // always on: it can then be neither removed nor toggled off in the chat.
+  const isAlwaysOnHere = (templateId) => {
+    const tab = tabs.find((t) => t.id === activeTab);
+    const spaceId = (chats[activeTab] && chats[activeTab].spaceId) || (tab && tab.spaceId);
+    const locked = spaceId ? lockedSlugsBySpace[spaceId] : null;
+    return !!(locked && locked.has(templateId));
+  };
   const togglePromptAttach = (p) => {
     setAttachedPromptsByChat(m => {
       const curr = m[activeTab] || [];
+      if (curr.includes(p.id) && isAlwaysOnHere(p.id)) return m;
       const next = curr.includes(p.id) ? curr.filter(x => x !== p.id) : [...curr, p.id];
       return { ...m, [activeTab]: next };
     });
@@ -574,32 +584,25 @@ function App() {
     }));
   };
 
-  // Empty-state starter cards: attach a real library prompt when one matches
-  // (by display name, case-insensitive, or by slug), otherwise fall back to
-  // seeding example text — so a deleted or renamed prompt still does
-  // something useful. Attach-only (never toggles a match back off).
-  const handleStarterPrompt = (promptName, fallbackText) => {
-    const match = (prompts || []).find(
-      (p) =>
-        !p._virtual &&
-        ((p.name || "").toLowerCase() === promptName.toLowerCase() ||
-          p.id === promptName.toLowerCase().replace(/\s+/g, "-")),
-    );
-    if (match) {
-      setAttachedPromptsByChat((m) => {
-        const curr = m[activeTab] || [];
-        return curr.includes(match.id)
-          ? m
-          : { ...m, [activeTab]: [...curr, match.id] };
-      });
-      // Attaching doesn't touch the composer text, so nudge focus explicitly.
-      setComposerFocusKey((k) => k + 1);
-    } else {
-      // Seeding text focuses via the seedKey effect already.
-      setComposerSeedText(fallbackText);
-      setComposerSeedKey((k) => k + 1);
-    }
+  // Turn a template on for the chat in front (a card on a new chat, the +
+  // menu). Choosing one that is already on turns it off again, as its chip's
+  // × would — except one the workspace keeps always on.
+  const useTemplateInChat = (id) => {
+    const t = (prompts || []).find((p) => p.id === id);
+    if (!t) return;
+    setAttachedPromptsByChat((m) => {
+      const curr = m[activeTab] || [];
+      if (curr.includes(id) && isAlwaysOnHere(id)) return m;
+      return { ...m, [activeTab]: curr.includes(id) ? curr.filter((x) => x !== id) : [...curr, id] };
+    });
+    // Choosing does not touch the message box's text, so focus it here.
+    setComposerFocusKey((k) => k + 1);
   };
+
+  // Settings, optionally straight onto a pane (and, on Templates, one
+  // template's editor; "new" for a blank one).
+  const openSettings = (tab, template) =>
+    window.postMessage({ type: '__activate_edit_mode', tab: tab || undefined, template: template || undefined }, '*');
 
   // ── Chat attachments ──────────────────────────────────────────────────────
   // Map of chatId → Attachment[] mirrors the Rust `attachments` table. The
@@ -1316,19 +1319,29 @@ function App() {
       const rows = await invoke('prompts_list');
       const mapped = rows.map((r) => ({
         ...r,
+        description: r.description || '',
+        hint: r.hint || '',
         favorite: r.favorite ?? null,
         updated: relativeTime(r.updatedAt),
       }));
-      setPrompts(mapped);
-      // Seed a sensible selection on first load — first item by recency.
-      setSelectedPromptId((curr) =>
-        curr && mapped.some((p) => p.id === curr) ? curr : (mapped[0]?.id ?? null),
-      );
+      // One-chat rows (a Watch's notes) live only here: keep them.
+      setPrompts((prev) => [...prev.filter((p) => p._virtual), ...mapped]);
     } catch (e) {
       console.error('prompts_list failed:', e);
-      setPrompts([]);
+      // Keep what is on screen: a failed re-read (the folder is briefly
+      // unreachable) must not empty the list or strip chips from chats.
     }
   };
+
+  // A file dropped into the templates folder (or edited in a text editor)
+  // shows up the next time the window comes forward.
+  const refreshPromptsRef = useR(null);
+  refreshPromptsRef.current = refreshPrompts;
+  useE(() => {
+    const onFocus = () => { refreshPromptsRef.current && refreshPromptsRef.current(); };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
 
   useE(() => {
     (async () => {
@@ -1954,12 +1967,11 @@ function App() {
     const userMsg = {
       id: userId,
       role: 'user', content: text, time: now(),
-      // Resolve favorite → color here so historical messages keep their tint
-      // even if the underlying prompt's favorite is later cleared or changed.
-      prompts: attachedPrompts.length ? attachedPrompts.map(p => {
-        const fav = p.favorite ? FAVORITE_COLOR_MAP[p.favorite] : null;
-        return { id: p.id, name: p.name, color: fav?.color || null };
-      }) : undefined,
+      // Which templates were on, by name, so the record shows the
+      // instruction used even if the template is later renamed or deleted.
+      prompts: attachedPrompts.length
+        ? attachedPrompts.map(p => ({ id: p.id, name: p.name }))
+        : undefined,
     };
     // Snapshot of citation sources at send time, attached to the assistant
     // message so its Sources footer renders the right files even if the user
@@ -2765,10 +2777,7 @@ function App() {
     // chats keep their tint even if a prompt's favorite is later
     // cleared. Mirrors handleSend's userMsg construction.
     const userPromptChips = attachedPrompts.length
-      ? attachedPrompts.map(p => {
-          const fav = p.favorite ? FAVORITE_COLOR_MAP[p.favorite] : null;
-          return { id: p.id, name: p.name, color: fav?.color || null };
-        })
+      ? attachedPrompts.map(p => ({ id: p.id, name: p.name }))
       : undefined;
     const userMsgUi = {
       id: userId,
@@ -4501,90 +4510,74 @@ function App() {
     setComposerSeedKey(k => k + 1);
   };
 
-  // Update an existing prompt. Two paths:
-  //   • Favorite-only change → prompts_meta_set (SQLite write, no file touch).
-  //   • Anything else → prompts_save (rewrites the .md file). Favorite is
-  //     orthogonal to file content so we keep its persistence separate even
-  //     when it's part of a larger patch.
-  const updatePrompt = (id, patch) => {
-    setPrompts(ps => ps.map(p => {
-      if (p.id !== id) return p;
-      const updated = { ...p, ...patch, updated: 'just now' };
-      const favoriteChanged = 'favorite' in patch && patch.favorite !== p.favorite;
-      const fileChanged = ['name', 'tags', 'body'].some(
-        (k) => k in patch && patch[k] !== p[k],
-      );
-      if (favoriteChanged) {
-        invoke('prompts_meta_set', {
-          slug: id,
-          favorite: updated.favorite ?? null,
-        }).catch(console.error);
-      }
-      if (fileChanged) {
-        invoke('prompts_save', {
-          slug: id,
-          name: updated.name,
-          tags: updated.tags ?? [],
-          body: updated.body ?? '',
-        }).catch(console.error);
-      }
-      return updated;
-    }));
-  };
-
-  // Create a new prompt. Optimistic UI: insert with a placeholder slug, then
-  // swap to the slug Rust returns (it dedupes against existing files, so
-  // `code-review` could come back as `code-review-2`). The placeholder is
-  // distinguished from real slugs by the `pending-` prefix so subsequent
-  // state lookups still resolve correctly until the save settles.
-  const createPrompt = async (init = {}) => {
-    const placeholder = 'pending-' + Math.random().toString(36).slice(2, 7);
-    const p = {
-      id: placeholder,
-      name: init.name || 'New prompt',
-      tags: init.tags || [],
-      body: init.body || '',
-      favorite: init.favorite ?? null,
-      builtin: false,
-      updated: 'just now',
-    };
-    setPrompts(ps => [p, ...ps]);
-    setSelectedPromptId(placeholder);
+  // ── Templates: save, copy, delete, star ────────────────────────────────
+  // (Settings → Templates.) The file is written first and the list re-read
+  // from the folder afterwards, so what is on screen is what is on disk.
+  //
+  // Save one. `draft` = { id?, name, description, hint, body }; no id means
+  // a new template. Tags the file already carries are written back
+  // untouched — the app no longer shows them, but it must not drop them.
+  // Resolves to the template's id (its file name), or null on failure.
+  const saveTemplate = async (draft) => {
+    const existing = draft.id ? prompts.find((p) => p.id === draft.id) : null;
     try {
       const slug = await invoke('prompts_save', {
-        slug: '',
-        name: p.name,
-        tags: p.tags,
-        body: p.body,
+        slug: draft.id || '',
+        name: draft.name,
+        tags: existing ? existing.tags || [] : [],
+        body: draft.body || '',
+        description: draft.description || '',
+        hint: draft.hint || '',
       });
-      // Swap the placeholder for the real slug. Re-map selection too so the
-      // UI doesn't lose its place after the save resolves.
-      setPrompts(ps => ps.map(x => x.id === placeholder ? { ...x, id: slug } : x));
-      setSelectedPromptId(curr => curr === placeholder ? slug : curr);
-      if (p.favorite) {
-        invoke('prompts_meta_set', { slug, favorite: p.favorite }).catch(console.error);
-      }
+      await refreshPrompts();
       return slug;
     } catch (e) {
       console.error('prompts_save failed:', e);
-      // Roll the placeholder out so a failed save doesn't leave a ghost row.
-      setPrompts(ps => ps.filter(x => x.id !== placeholder));
+      window.ekToast?.({ kind: 'error', title: "Couldn't save the template", body: String(e) });
       return null;
     }
   };
 
-  // Delete a prompt by slug — works for both built-ins and user prompts.
-  // We close any context menus the caller had open by removing the row from
-  // state immediately, then fire-and-forget the backend delete.
-  const deletePrompt = (id) => {
-    if (!id || id.startsWith('pending-')) return;
+  // A copy under a free name ("File note copy"). Resolves to the copy's id.
+  const duplicateTemplate = async (id) => {
+    const src = prompts.find((p) => p.id === id);
+    if (!src) return null;
+    try {
+      const slug = await invoke('prompts_save', {
+        slug: '',
+        name: templateCopyName(src.name, prompts.map((p) => p.name)),
+        tags: src.tags || [],
+        body: src.body || '',
+        description: src.description || '',
+        hint: src.hint || '',
+      });
+      await refreshPrompts();
+      return slug;
+    } catch (e) {
+      console.error('prompts_save failed:', e);
+      window.ekToast?.({ kind: 'error', title: "Couldn't copy the template", body: String(e) });
+      return null;
+    }
+  };
+
+  // The star is this person's own (SQLite), never written to the file, so
+  // a shared templates folder leaves each person their own stars.
+  const toggleTemplateStar = (id) => {
+    const t = prompts.find((p) => p.id === id);
+    if (!t) return;
+    const favorite = isStarred(t) ? null : TEMPLATE_STAR;
+    setPrompts((ps) => ps.map((p) => (p.id === id ? { ...p, favorite } : p)));
+    invoke('prompts_meta_set', { slug: id, favorite }).catch((e) => {
+      console.error('prompts_meta_set failed:', e);
+      refreshPrompts();
+    });
+  };
+
+  // Delete the file. It is also taken off every chat it was on, and out
+  // of every workspace that kept it always on.
+  const deleteTemplate = async (id) => {
+    if (!id) return;
     setPrompts(ps => ps.filter(p => p.id !== id));
-    setSelectedPromptId(curr => curr === id ? null : curr);
-    // Detach the deleted prompt from EVERY chat's attached set — not
-    // just the active one. Without this sweep, an old chat with the
-    // now-deleted prompt would re-render its chip from stale state
-    // on next open (until the .filter(Boolean) in attachedPrompts
-    // hides it anyway, but the underlying id would still be there).
     setAttachedPromptsByChat(m => {
       const out = {};
       for (const [k, v] of Object.entries(m)) {
@@ -4592,16 +4585,13 @@ function App() {
       }
       return out;
     });
-    invoke('prompts_delete', { slug: id }).catch(console.error);
-  };
-  const importPromptFromFile = async (file) => {
-    if (!file) return;
-    const text = await file.text();
-    const baseName = file.name.replace(/\.(md|markdown|txt)$/i, '');
-    // First markdown H1 wins as name, if present
-    const h1 = text.match(/^\s*#\s+(.+)$/m);
-    const name = (h1 ? h1[1] : baseName).trim().slice(0, 60) || 'Imported';
-    createPrompt({ name, body: text, tags: ['imported'] });
+    try {
+      await invoke('prompts_delete', { slug: id });
+    } catch (e) {
+      console.error('prompts_delete failed:', e);
+      window.ekToast?.({ kind: 'error', title: "Couldn't delete the template", body: String(e) });
+    }
+    await refreshPrompts();
   };
 
   // First-run setup gate (Phase 5). ONE state drives whichever gate the
@@ -4859,7 +4849,8 @@ function App() {
       />
       <span style={{ flex: 1 }} />
       <MoreMenu
-        onSettings={() => window.postMessage({ type: '__activate_edit_mode' }, '*')}
+        onSettings={() => openSettings()}
+        onTemplates={() => openSettings('templates')}
         onPanel={(tab) => { setRightPanelTab(tab); setRightPanelOpen(true); }}
       />
     </>
@@ -4959,6 +4950,11 @@ function App() {
         tweaks={tweaks}
         setTweak={setTweak}
         onPromptsChanged={refreshPrompts}
+        templates={prompts}
+        onSaveTemplate={saveTemplate}
+        onDeleteTemplate={deleteTemplate}
+        onDuplicateTemplate={duplicateTemplate}
+        onToggleTemplateStar={toggleTemplateStar}
         chatCount={totalChatCount}
         onClearAllChats={clearAllChats}
         defaultModel={appDefaultModel}
@@ -5204,7 +5200,10 @@ function App() {
                     engineCtx={engineCtx}
                     // Empty-state starter cards attach a matching library
                     // prompt (falling back to seeding example text).
-                    onStarter={handleStarterPrompt}
+                    templates={prompts}
+                    activeTemplateIds={attachedPromptIds}
+                    onUseTemplate={useTemplateInChat}
+                    onAllTemplates={() => setTemplatePickerKey((k) => k + 1)}
                     documentCount={chatDocumentCount(attachments)}
                     nameOfModel={nameModel}
                   />
@@ -5233,6 +5232,8 @@ function App() {
                     // shouldn't appear as user-selectable presets.
                     prompts={prompts.filter(p => !p._virtual)}
                     onPickPrompt={togglePromptAttach}
+                    onManageTemplates={() => openSettings('templates')}
+                    openPickerSignal={templatePickerKey}
                     attachments={attachments}
                     onAttachFile={onAttachFile}
                     onAttachFolder={onAttachFolder}
@@ -5276,30 +5277,6 @@ function App() {
                   onClose={() => setRightPanelOpen(false)}
                 />
               );
-              if (rightPanelTab === 'prompts') {
-                return (
-                  <PromptLibrary
-                    tabHeader={tabHeader}
-                    // Hide _virtual prompts — these are transient,
-                    // session-only contexts (e.g. notes-from-a-watch)
-                    // that get attached behind the scenes by features
-                    // like "Chat with notes". They're real in the
-                    // attached-prompts flow but shouldn't clutter the
-                    // user-visible library.
-                    prompts={prompts.filter((p) => !p._virtual)}
-                    selectedId={selectedPromptId}
-                    onSelect={setSelectedPromptId}
-                    onUse={togglePromptAttach}
-                    attachedIds={attachedPromptIds}
-                    onUpdate={updatePrompt}
-                    onCreate={createPrompt}
-                    onDelete={deletePrompt}
-                    onRefresh={refreshPrompts}
-                    onImport={importPromptFromFile}
-                    width={rightPanelWidth}
-                  />
-                );
-              }
               if (rightPanelTab === 'files') {
                 return (
                   <FilesPanel

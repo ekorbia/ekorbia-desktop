@@ -1,6 +1,6 @@
 // settings.jsx -- Settings surface:
 //   Hotkey constants + formatHotkey + hotkeyFromEvent + HotkeyCapture,
-//   isEmbeddingModelName, AttachmentsSettings, PromptsFolderRow,
+//   isEmbeddingModelName, AttachmentsSettings,
 //   SettingsModal (tabbed: General / Prompts / Attachments).
 // Depends on: tokens, atoms, icons.
 
@@ -368,146 +368,6 @@ function AttachmentsSettings() {
       {savingKey && (
         <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, textAlign: "right" }}>
           saving…
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PromptsFolderRow({ onPromptsChanged }) {
-  const invoke = getInvoke();
-  const dialogApi = getDialogApi();
-  const [path, setPath] = useState("");
-  const [status, setStatus] = useState(null);
-
-  // Initial path fetch. Done in an effect so the modal can open instantly;
-  // the row briefly shows blank until Rust answers (which is essentially
-  // immediate — a single SQLite read).
-  useEffect(() => {
-    if (!invoke) return;
-    invoke("prompts_dir_get").then(setPath).catch(console.error);
-  }, [invoke]);
-
-  const applyPath = async (next) => {
-    if (!invoke || !next) return;
-    try {
-      await invoke("prompts_dir_set", { path: next });
-      setPath(next);
-      setStatus({ ok: true, msg: "Folder updated. Reloading prompts…" });
-      if (onPromptsChanged) await onPromptsChanged();
-    } catch (e) {
-      setStatus({ ok: false, msg: String(e) });
-    }
-  };
-
-  const browse = async () => {
-    if (!dialogApi) return;
-    try {
-      const picked = await dialogApi.open({
-        directory: true,
-        multiple: false,
-        title: "Choose Prompts Folder",
-      });
-      if (picked) await applyPath(typeof picked === "string" ? picked : picked.path);
-    } catch (e) {
-      setStatus({ ok: false, msg: String(e) });
-    }
-  };
-
-  // Native opener via the prompts_dir_reveal Tauri command — NOT
-  // tauri-plugin-shell.open. The shell plugin's default capability scope
-  // rejects bare filesystem paths (only allows mailto/tel/http URLs), so
-  // the old shellApi.open(path) silently no-op'd. The Rust command re-
-  // resolves the prompts dir itself so the caller has no path to pass.
-  const reveal = async () => {
-    if (!invoke) return;
-    try {
-      await invoke("prompts_dir_reveal");
-    } catch (e) {
-      console.error("prompts_dir_reveal failed:", e);
-      window.ekToast?.({
-        kind: "warn",
-        title: "Could not reveal prompts folder",
-        body: String(e),
-      });
-    }
-  };
-
-  // Reset to default works by clearing the override; Rust falls back to
-  // ~/Documents/Ekorbia/Prompts and we just re-read the resolved path.
-  const resetDefault = async () => {
-    if (!invoke) return;
-    try {
-      await invoke("prompts_dir_set", { path: "" });
-      const fresh = await invoke("prompts_dir_get");
-      setPath(fresh);
-      setStatus({ ok: true, msg: "Reset to default." });
-      if (onPromptsChanged) await onPromptsChanged();
-    } catch (e) {
-      setStatus({ ok: false, msg: String(e) });
-    }
-  };
-
-  const restoreBuiltins = async () => {
-    if (!invoke) return;
-    try {
-      const n = await invoke("prompts_restore_builtins");
-      setStatus({ ok: true, msg: `Restored ${n} built-in prompt${n === 1 ? "" : "s"}.` });
-      if (onPromptsChanged) await onPromptsChanged();
-    } catch (e) {
-      setStatus({ ok: false, msg: String(e) });
-    }
-  };
-
-  const Btn = ({ children, onClick, title }) => (
-    <button
-      onClick={onClick}
-      title={title}
-      style={ekBtn("secondary", { small: true })}
-    >
-      {children}
-    </button>
-  );
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <div
-        style={{
-          fontFamily: T.sans,
-          fontSize: 12,
-          color: T.fg2,
-          background: T.bg2,
-          border: `1px solid ${T.border}`,
-          borderRadius: 8,
-          padding: "5px 8px",
-          // Prompts dirs deep in the home tree wrap onto multiple lines; let
-          // them break mid-word so the modal doesn't blow out horizontally.
-          wordBreak: "break-all",
-        }}
-        title={path}
-      >
-        {path || "—"}
-      </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <Btn onClick={browse} title="Pick a different folder">Browse…</Btn>
-        <Btn onClick={reveal} title="Open this folder in Finder">Reveal</Btn>
-        <Btn onClick={resetDefault} title="Reset to ~/Documents/Ekorbia/Prompts">Reset</Btn>
-        <Btn
-          onClick={restoreBuiltins}
-          title="Re-copy the built-in prompts (overwrites local edits to built-ins)"
-        >
-          Restore built-ins
-        </Btn>
-      </div>
-      {status && (
-        <div
-          style={{
-            fontFamily: T.sans,
-            fontSize: 12,
-            color: status.ok ? T.fg2 : T.red,
-          }}
-        >
-          {status.msg}
         </div>
       )}
     </div>
@@ -899,7 +759,7 @@ function ModelsSettings({ defaultModel = "", onDefaultModel, spaces = [], onOpen
 //
 //   defaultModel / onDefaultModel — the app-wide model (main.jsx owns it)
 //   spaces                        — to say which workspaces use a model
-function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onClearAllChats, defaultModel = "", onDefaultModel, spaces = [] }) {
+function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onClearAllChats, defaultModel = "", onDefaultModel, spaces = [], templates = [], onSaveTemplate, onDeleteTemplate, onDuplicateTemplate, onToggleTemplateStar }) {
   const [open, setOpen] = useState(false);
   // Danger-zone state. Confirm modal sits above the settings modal at
   // zIndex 9999 (settings is 9998), so opening it while settings is up
@@ -949,10 +809,19 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
   });
   const [selectionHotkeyError, setSelectionHotkeyError] = useState(null);
   const [activeTab, setActiveTab] = useState("general");
+  const [templateRequest, setTemplateRequest] = useState(null);
 
   useEffect(() => {
     const onMsg = (e) => {
-      if (e.data?.type === "__activate_edit_mode") setOpen(true);
+      if (e.data?.type === "__activate_edit_mode") {
+        setOpen(true);
+        // Optional: which pane to show, and which template to open in it
+        // ("new" for a blank one). Without them Settings opens as it was.
+        if (e.data.tab) setActiveTab(e.data.tab);
+        if (e.data.tab === "templates" && e.data.template) {
+          setTemplateRequest((r) => ({ id: e.data.template, n: (r ? r.n : 0) + 1 }));
+        }
+      }
       if (e.data?.type === "__deactivate_edit_mode") setOpen(false);
     };
     window.addEventListener("message", onMsg);
@@ -1202,6 +1071,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
           {[
             { id: "general", label: "General" },
             { id: "models", label: "Models" },
+            { id: "templates", label: "Templates" },
             // Dictation is macOS-only (the Whisper backend is macOS-gated).
             ...(IS_MAC ? [{ id: "voice", label: "Dictation" }] : []),
             // Shortcuts: Quick Query is macOS+Windows; dictation + screenshot
@@ -1564,6 +1434,18 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
 
           {/* ── Advanced: what only makes sense if you know how the app
               works underneath. Was the Backend, Models and Files tabs. ── */}
+          {activeTab === "templates" && (
+            <TemplatesSettings
+              templates={templates}
+              onSave={onSaveTemplate}
+              onDelete={onDeleteTemplate}
+              onDuplicate={onDuplicateTemplate}
+              onToggleStar={onToggleTemplateStar}
+              onChanged={onPromptsChanged}
+              openRequest={templateRequest}
+            />
+          )}
+
           {activeTab === "advanced" && (
             <>
               <SectionLabel label="Engine and servers" />
@@ -1573,21 +1455,6 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               {/* ModelManagerPanel lives in model-manager.jsx: the whole
                   catalog, a model from a link, and removal. */}
               <ModelManagerPanel activeModel={defaultModel || "gemma4:latest"} />
-
-              <SectionLabel label="Prompts folder" />
-              <div
-                style={{
-                  fontFamily: T.sans,
-                  fontSize: 12,
-                  color: T.fg2,
-                  lineHeight: 1.5,
-                  marginBottom: 4,
-                }}
-              >
-                Prompts are stored as .md files. Pick any folder you like —
-                drop it in a git repo to version or share your library.
-              </div>
-              <PromptsFolderRow onPromptsChanged={onPromptsChanged} />
 
               <SectionLabel label="Memory file" />
               <div

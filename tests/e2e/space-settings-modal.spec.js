@@ -84,9 +84,9 @@ async function mountModal(page, opts = {}) {
           updatedAt: 1,
         },
         promptsLibrary: opts.promptsLibrary || [
-          { id: "tone-reframer", name: "Tone reframer" },
-          { id: "brainstorm", name: "Brainstorm" },
-          { id: "summarize", name: "Summarize" },
+          { id: "tone-reframer", name: "Tone reframer", description: "Four versions of a draft", favorite: null },
+          { id: "brainstorm", name: "Brainstorm", description: "", favorite: null },
+          { id: "summarize", name: "Summarize", description: "The main points", favorite: "star" },
         ],
         onCancel: () => { window.__CANCELLED++; },
         onSave: (draft) => { window.__SAVE_DRAFTS.push(draft); },
@@ -101,11 +101,10 @@ async function mountModal(page, opts = {}) {
   // backing field exists in this run — the loading skeleton replaces
   // the lists with "loading…" text.
   await expect(page.locator("[data-space-settings-modal]")).toBeVisible();
-  await page.waitForFunction(() => {
-    const list = document.querySelector("[data-space-settings-prompts-list]");
-    const noLib = document.querySelector("[data-space-settings-modal]")?.innerText?.includes("No prompts in your library");
-    return list !== null || noLib;
-  }, { timeout: 5000 });
+  await page.waitForFunction(
+    () => document.querySelector("[data-space-template-add]") !== null,
+    { timeout: 5000 },
+  );
 }
 
 // ── Render shape ─────────────────────────────────────────────────────────
@@ -143,9 +142,8 @@ test("modal: fetches pinned prompts + pinned attachments on mount", async ({ pag
   const cmds = invokes.map((i) => i.cmd).sort();
   expect(cmds).toContain("space_prompts_list");
   expect(cmds).toContain("space_attachments_list");
-  // Pinned prompt renders as a selected chip.
-  await expect(page.locator('[data-prompt-toggle="tone-reframer"]'))
-    .toHaveAttribute("data-selected", "true");
+  // The template the workspace always uses is listed.
+  await expect(page.locator('[data-space-template="tone-reframer"]')).toContainText("Tone reframer");
   // Pinned attachment renders as a row.
   await expect(page.locator('[data-space-attachment-row][data-attachment-kind="folder"]'))
     .toContainText("/notes");
@@ -269,314 +267,111 @@ test("modal: picking a different installed model round-trips on Save", async ({ 
 
 // ── Pinned-prompts picker (Option A: search + section + list) ────────────
 
-test("picker: pinned prompts surface in a 'Pinned' section above 'All prompts'", async ({ page }) => {
-  // Currently-pinned prompts float to the top of the list so the user
-  // always sees the current state without scrolling. Both sections sort
-  // alphabetically within themselves.
-  await mountModal(page, {
-    responses: {
-      // Two pre-pinned slugs; the library has three prompts total.
-      space_prompts_list: [
-        { id: "sp1", spaceId: "s1", promptSlug: "tone-reframer", sortIndex: 0 },
-        { id: "sp2", spaceId: "s1", promptSlug: "brainstorm", sortIndex: 1 },
-      ],
-      space_attachments_list: [],
-    },
-    promptsLibrary: [
-      { id: "summarize", name: "Summarize" },
-      { id: "tone-reframer", name: "Tone reframer" },
-      { id: "brainstorm", name: "Brainstorm" },
-    ],
-  });
+// ── Always use these templates ───────────────────────────────────────────
+//
+// One list replaced the old picker (two sections, a search box, a lock
+// toggle per row and an inline "new prompt" form). Every template listed
+// is on in every chat here and cannot be removed inside a chat; templates
+// themselves are written in Settings → Templates.
 
-  // The Pinned section header surfaces with the count.
-  await expect(page.locator('[data-prompt-section-header="Pinned (2)"]'))
-    .toBeVisible();
-  // The All-prompts header (no number when Pinned is also present —
-  // count would be redundant).
-  await expect(page.locator('[data-prompt-section-header="All prompts"]'))
-    .toBeVisible();
-
-  // Pinned rows appear before unpinned rows in DOM order.
-  const rows = page.locator("[data-prompt-toggle]");
-  await expect(rows).toHaveCount(3);
-  // Within Pinned, alphabetical: Brainstorm before Tone reframer.
-  await expect(rows.nth(0)).toHaveAttribute("data-prompt-toggle", "brainstorm");
-  await expect(rows.nth(1)).toHaveAttribute("data-prompt-toggle", "tone-reframer");
-  // Then the unpinned: just Summarize.
-  await expect(rows.nth(2)).toHaveAttribute("data-prompt-toggle", "summarize");
-});
-
-test("picker: typing in the search input filters both sections", async ({ page }) => {
-  await mountModal(page, {
-    responses: {
-      space_prompts_list: [
-        { id: "sp1", spaceId: "s1", promptSlug: "tone-reframer", sortIndex: 0 },
-      ],
-      space_attachments_list: [],
-    },
-    promptsLibrary: [
-      { id: "summarize", name: "Summarize" },
-      { id: "tone-reframer", name: "Tone reframer" },
-      { id: "brainstorm", name: "Brainstorm" },
-    ],
-  });
-
-  await page.locator("[data-space-settings-prompts-search]").fill("tone");
-  const rows = page.locator("[data-prompt-toggle]");
-  // Only tone-reframer matches.
-  await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toHaveAttribute("data-prompt-toggle", "tone-reframer");
-});
-
-test("picker: empty search result shows a 'no matches' hint", async ({ page }) => {
-  await mountModal(page, {
-    responses: { space_prompts_list: [], space_attachments_list: [] },
-    promptsLibrary: [
-      { id: "summarize", name: "Summarize" },
-      { id: "brainstorm", name: "Brainstorm" },
-    ],
-  });
-  await page.locator("[data-space-settings-prompts-search]").fill("zzz");
-  await expect(page.locator("[data-prompts-no-matches]")).toBeVisible();
-  await expect(page.locator("[data-prompts-no-matches]")).toContainText('No prompts match "zzz"');
-});
-
-test("picker: clicking a Pinned row moves it to All prompts on the next tick", async ({ page }) => {
-  // The pinned/unpinned split is recomputed on every toggle, so a
-  // newly-unpinned row should reflow from the top section into the
-  // bottom section without a re-mount.
-  await mountModal(page, {
-    responses: {
-      space_prompts_list: [
-        { id: "sp1", spaceId: "s1", promptSlug: "brainstorm", sortIndex: 0 },
-      ],
-      space_attachments_list: [],
-    },
-    promptsLibrary: [
-      { id: "summarize", name: "Summarize" },
-      { id: "brainstorm", name: "Brainstorm" },
-    ],
-  });
-
-  // Pre-condition: Pinned (1) header + Brainstorm at index 0.
-  await expect(page.locator('[data-prompt-section-header^="Pinned"]')).toBeVisible();
-  let rows = page.locator("[data-prompt-toggle]");
-  await expect(rows.nth(0)).toHaveAttribute("data-prompt-toggle", "brainstorm");
-  await expect(rows.nth(0)).toHaveAttribute("data-selected", "true");
-
-  // Click Brainstorm to unpin.
-  await rows.nth(0).click();
-
-  // Pinned section header is gone (count went to 0).
-  await expect(page.locator('[data-prompt-section-header^="Pinned"]'))
-    .toHaveCount(0);
-  // All prompts now contains both — alphabetical: Brainstorm then Summarize.
-  rows = page.locator("[data-prompt-toggle]");
-  await expect(rows.nth(0)).toHaveAttribute("data-prompt-toggle", "brainstorm");
-  await expect(rows.nth(0)).toHaveAttribute("data-selected", "false");
-  await expect(rows.nth(1)).toHaveAttribute("data-prompt-toggle", "summarize");
-});
-
-// ── Prompt toggling ──────────────────────────────────────────────────────
-
-test("modal: clicking a prompt chip toggles its selected state", async ({ page }) => {
-  await mountModal(page, {
-    responses: {
-      space_prompts_list: [{ id: "sp1", spaceId: "s1", promptSlug: "tone-reframer", sortIndex: 0 }],
-      space_attachments_list: [],
-    },
-  });
-  const toneChip = page.locator('[data-prompt-toggle="tone-reframer"]');
-  const brainstormChip = page.locator('[data-prompt-toggle="brainstorm"]');
-  // Pre-loaded selected.
-  await expect(toneChip).toHaveAttribute("data-selected", "true");
-  await expect(brainstormChip).toHaveAttribute("data-selected", "false");
-  // Toggle tone OFF, brainstorm ON.
-  await toneChip.click();
-  await brainstormChip.click();
-  await expect(toneChip).toHaveAttribute("data-selected", "false");
-  await expect(brainstormChip).toHaveAttribute("data-selected", "true");
-});
-
-// ── Locked pinned prompts (Phase 1 of the lock work) ────────────────────
-
-test("modal: locked pin loads with the lock icon in its 'locked' state", async ({ page }) => {
-  // A `space_prompts` row with `locked: true` bootstraps the lock-toggle
-  // affordance in the locked state. Unlocked pins still get the lock
-  // icon but in the muted off-state.
+test("templates: the ones the workspace always uses are listed as chips", async ({ page }) => {
   await mountModal(page, {
     responses: {
       space_prompts_list: [
         { id: "sp1", spaceId: "s1", promptSlug: "tone-reframer", sortIndex: 0, locked: true },
-        { id: "sp2", spaceId: "s1", promptSlug: "brainstorm",    sortIndex: 1, locked: false },
+        // Pre-selected but removable in an older version: listed all the same.
+        { id: "sp2", spaceId: "s1", promptSlug: "brainstorm", sortIndex: 1, locked: false },
       ],
-      space_attachments_list: [],
     },
   });
-  await expect(page.locator('[data-prompt-lock-toggle="tone-reframer"]'))
-    .toHaveAttribute("data-locked", "true");
-  await expect(page.locator('[data-prompt-lock-toggle="brainstorm"]'))
-    .toHaveAttribute("data-locked", "false");
+  const section = page.locator("[data-space-settings-templates]");
+  await expect(section).toContainText("Always use these templates");
+  await expect(section.locator("[data-space-template]")).toHaveCount(2);
+  await expect(section.locator('[data-space-template="tone-reframer"]')).toHaveText("Tone reframer");
+  await expect(section.locator('[data-space-template="brainstorm"]')).toHaveText("Brainstorm");
+  // The old picker's controls are gone.
+  await expect(page.locator("[data-space-settings-prompts-search]")).toHaveCount(0);
+  await expect(page.locator("[data-prompt-lock-toggle]")).toHaveCount(0);
+  await expect(page.locator("[data-space-new-prompt-open]")).toHaveCount(0);
 });
 
-test("modal: clicking the lock icon flips data-locked without unpinning", async ({ page }) => {
-  // Lock toggle is independent of the pin toggle. Clicking it must not
-  // remove the slug from the pinned set — only flip locked state.
+test("templates: Add offers the rest, starred first, and adds the one chosen", async ({ page }) => {
   await mountModal(page, {
     responses: {
-      space_prompts_list: [
-        { id: "sp1", spaceId: "s1", promptSlug: "tone-reframer", sortIndex: 0, locked: false },
-      ],
-      space_attachments_list: [],
+      space_prompts_list: [{ id: "sp1", spaceId: "s1", promptSlug: "tone-reframer", sortIndex: 0, locked: true }],
     },
   });
-  const lockBtn = page.locator('[data-prompt-lock-toggle="tone-reframer"]');
-  const rowBtn = page.locator('[data-prompt-toggle="tone-reframer"]');
-  await expect(lockBtn).toHaveAttribute("data-locked", "false");
-  await lockBtn.click();
-  await expect(lockBtn).toHaveAttribute("data-locked", "true");
-  // The row is still pinned.
-  await expect(rowBtn).toHaveAttribute("data-selected", "true");
+  await expect(page.locator("[data-space-template-options]")).toHaveCount(0);
+  await page.locator("[data-space-template-add]").click();
+  const options = page.locator("[data-space-template-option]");
+  // Not the one already on; the starred one leads.
+  await expect(options).toHaveCount(2);
+  await expect(options.nth(0)).toHaveText("Summarize");
+  await expect(options.nth(1)).toHaveText("Brainstorm");
+  await options.nth(0).click();
+  await expect(page.locator("[data-space-template-options]")).toHaveCount(0);
+  await expect(page.locator('[data-space-template="summarize"]')).toBeVisible();
 });
 
-test("modal: lock icon is absent on unpinned rows", async ({ page }) => {
-  // Locking only makes sense for pinned prompts — unpinned rows must
-  // not show the lock affordance at all.
+test("templates: the × takes one off the list", async ({ page }) => {
   await mountModal(page, {
     responses: {
-      space_prompts_list: [], // nothing pinned
-      space_attachments_list: [],
+      space_prompts_list: [{ id: "sp1", spaceId: "s1", promptSlug: "tone-reframer", sortIndex: 0, locked: true }],
     },
-    promptsLibrary: [
-      { id: "tone-reframer", name: "Tone reframer" },
-      { id: "brainstorm", name: "Brainstorm" },
-    ],
   });
-  await expect(page.locator('[data-prompt-lock-toggle="tone-reframer"]')).toHaveCount(0);
-  await expect(page.locator('[data-prompt-lock-toggle="brainstorm"]')).toHaveCount(0);
+  await page.locator('[data-space-template-remove="tone-reframer"]').click();
+  await expect(page.locator("[data-space-template]")).toHaveCount(0);
+  // It can be added again.
+  await page.locator("[data-space-template-add]").click();
+  await expect(page.locator('[data-space-template-option="tone-reframer"]')).toBeVisible();
 });
 
-test("modal: locked state round-trips through onSave as `lockedSlugs`", async ({ page }) => {
-  // Lock one pin, save, assert the draft includes it in lockedSlugs.
-  // The parent's diff (in saveSpaceSettings) reads this and fires
-  // space_prompt_set_locked for any drift.
+test("templates: with every template on, there is nothing left to add", async ({ page }) => {
+  await mountModal(page, {
+    promptsLibrary: [{ id: "house-style", name: "House style", description: "", favorite: null }],
+    responses: {
+      space_prompts_list: [{ id: "sp1", spaceId: "s1", promptSlug: "house-style", sortIndex: 0, locked: true }],
+    },
+  });
+  await expect(page.locator("[data-space-template-add]")).toBeDisabled();
+});
+
+test("templates: one whose file has gone still shows, so it can be taken off", async ({ page }) => {
   await mountModal(page, {
     responses: {
-      space_prompts_list: [
-        { id: "sp1", spaceId: "s1", promptSlug: "tone-reframer", sortIndex: 0, locked: false },
-        { id: "sp2", spaceId: "s1", promptSlug: "brainstorm",    sortIndex: 1, locked: false },
-      ],
-      space_attachments_list: [],
+      space_prompts_list: [{ id: "sp1", spaceId: "s1", promptSlug: "deleted-one", sortIndex: 0, locked: true }],
     },
   });
-  // Lock brainstorm.
-  await page.locator('[data-prompt-lock-toggle="brainstorm"]').click();
-  await page.locator("[data-space-settings-save]").click();
-  const drafts = await page.evaluate(() => window.__SAVE_DRAFTS);
-  expect(drafts).toHaveLength(1);
-  expect(drafts[0].lockedSlugs).toEqual(["brainstorm"]);
-  // promptSlugs still carries both pinned slugs — locked is a flag,
-  // not a separate set.
-  expect(drafts[0].promptSlugs.sort()).toEqual(["brainstorm", "tone-reframer"]);
+  const chip = page.locator('[data-space-template="deleted-one"]');
+  await expect(chip).toHaveText("deleted-one");
+  await page.locator('[data-space-template-remove="deleted-one"]').click();
+  await expect(chip).toHaveCount(0);
 });
 
-test("modal: unlocking a saved-locked pin clears it from lockedSlugs", async ({ page }) => {
+test("templates: everything on the list is saved as always on", async ({ page }) => {
   await mountModal(page, {
     responses: {
       space_prompts_list: [
         { id: "sp1", spaceId: "s1", promptSlug: "tone-reframer", sortIndex: 0, locked: true },
+        { id: "sp2", spaceId: "s1", promptSlug: "brainstorm", sortIndex: 1, locked: false },
       ],
-      space_attachments_list: [],
     },
   });
-  await expect(page.locator('[data-prompt-lock-toggle="tone-reframer"]'))
-    .toHaveAttribute("data-locked", "true");
-  await page.locator('[data-prompt-lock-toggle="tone-reframer"]').click();
+  await page.locator("[data-space-template-add]").click();
+  await page.locator('[data-space-template-option="summarize"]').click();
+  await page.locator('[data-space-template-remove="tone-reframer"]').click();
   await page.locator("[data-space-settings-save]").click();
-  const drafts = await page.evaluate(() => window.__SAVE_DRAFTS);
-  expect(drafts[0].lockedSlugs).toEqual([]);
-  expect(drafts[0].promptSlugs).toEqual(["tone-reframer"]);
+  const d = (await page.evaluate(() => window.__SAVE_DRAFTS))[0];
+  expect(d.promptSlugs.slice().sort()).toEqual(["brainstorm", "summarize"]);
+  // Including the one an older version had left removable.
+  expect(d.lockedSlugs.slice().sort()).toEqual(["brainstorm", "summarize"]);
 });
 
-// ── "+ New prompt for this Space" inline form ────────────────────────────
-
-test("modal: + New prompt button opens an inline form with a defaulted name", async ({ page }) => {
-  // Clicking the affordance reveals name + body fields, with the name
-  // pre-filled to "{Space name} framing" so the user can hit Save
-  // without typing if the default is fine.
-  await mountModal(page);
-  await page.locator("[data-space-new-prompt-open]").click();
-  await expect(page.locator("[data-space-new-prompt-form]")).toBeVisible();
-  await expect(page.locator("[data-space-new-prompt-name]"))
-    .toHaveValue("Novel framing");
+test("templates: with none written yet, the dialog says where to write one", async ({ page }) => {
+  await mountModal(page, { promptsLibrary: [{ id: "x", name: "X", _virtual: true }] });
+  await expect(page.locator("[data-space-settings-templates]")).toContainText("Write one in Settings → Templates");
+  await expect(page.locator("[data-space-template-add]")).toBeDisabled();
 });
-
-test("modal: Cancel closes the inline form without dispatching prompts_save", async ({ page }) => {
-  await mountModal(page);
-  await page.locator("[data-space-new-prompt-open]").click();
-  await page.locator("[data-space-new-prompt-body]").fill("(some body)");
-  await page.locator("[data-space-new-prompt-cancel]").click();
-  await expect(page.locator("[data-space-new-prompt-form]")).toHaveCount(0);
-  // No prompts_save invoke fired.
-  const invokes = await page.evaluate(() => window.__SETTINGS_INVOKES);
-  expect(invokes.some((i) => i.cmd === "prompts_save")).toBe(false);
-});
-
-test("modal: Save & pin invokes prompts_save and auto-locks the new pin", async ({ page }) => {
-  // Mock prompts_save to return a synthetic prompt row. The mock's
-  // recording invoke layer accepts plain values OR functions — plain
-  // values survive the page.evaluate serialisation, functions don't.
-  await mountModal(page, {
-    responses: {
-      space_prompts_list: [],
-      space_attachments_list: [],
-      prompts_save: {
-        id: "novel-framing",
-        name: "Novel framing",
-        body: "You are helping me write a noir novel.",
-        favorite: null,
-      },
-    },
-  });
-  await page.locator("[data-space-new-prompt-open]").click();
-  await page.locator("[data-space-new-prompt-body]").fill("You are helping me write a noir novel.");
-  await page.locator("[data-space-new-prompt-save]").click();
-  // Form closes after the save resolves.
-  await expect(page.locator("[data-space-new-prompt-form]")).toHaveCount(0);
-  // prompts_save was called with the user-supplied name + body.
-  const invokes = await page.evaluate(() => window.__SETTINGS_INVOKES);
-  const save = invokes.find((i) => i.cmd === "prompts_save");
-  expect(save).toBeDefined();
-  expect(save.args.name).toBe("Novel framing");
-  expect(save.args.body).toBe("You are helping me write a noir novel.");
-  // The new slug appears as a pinned row (selected) AND has the lock
-  // toggle in the locked state.
-  await expect(page.locator('[data-prompt-toggle="novel-framing"]'))
-    .toHaveAttribute("data-selected", "true");
-  await expect(page.locator('[data-prompt-lock-toggle="novel-framing"]'))
-    .toHaveAttribute("data-locked", "true");
-  // Saving the modal carries the new slug through as a locked pin.
-  await page.locator("[data-space-settings-save]").click();
-  const drafts = await page.evaluate(() => window.__SAVE_DRAFTS);
-  expect(drafts[0].promptSlugs).toContain("novel-framing");
-  expect(drafts[0].lockedSlugs).toContain("novel-framing");
-});
-
-test("modal: Save & pin is disabled until name + body are both filled", async ({ page }) => {
-  await mountModal(page);
-  await page.locator("[data-space-new-prompt-open]").click();
-  const save = page.locator("[data-space-new-prompt-save]");
-  // Name is pre-filled ("Novel framing") but body is empty.
-  await expect(save).toBeDisabled();
-  await page.locator("[data-space-new-prompt-body]").fill("body");
-  await expect(save).toBeEnabled();
-  // Clear the name → disabled again.
-  await page.locator("[data-space-new-prompt-name]").fill("");
-  await expect(save).toBeDisabled();
-});
-
-// ── Save dispatches the draft ────────────────────────────────────────────
 
 test("modal: Save dispatches onSave with the edited draft", async ({ page }) => {
   await mountModal(page, {
@@ -589,7 +384,8 @@ test("modal: Save dispatches onSave with the edited draft", async ({ page }) => 
   // attachment. (The system-prompt textarea is gone — replaced by
   // locked pinned prompts.)
   await page.locator("[data-space-settings-name]").fill("Novel Draft");
-  await page.locator('[data-prompt-toggle="brainstorm"]').click(); // add brainstorm
+  await page.locator("[data-space-template-add]").click();
+  await page.locator('[data-space-template-option="brainstorm"]').click(); // add brainstorm
   await page.locator('[data-attachment-remove="0"]').click(); // remove /notes
 
   await page.locator("[data-space-settings-save]").click();
@@ -606,9 +402,8 @@ test("modal: Save dispatches onSave with the edited draft", async ({ page }) => 
   expect(d.row.memoryPath).toContain("/novel/memory.md");
   // Prompt set has both tone (kept) and brainstorm (added).
   expect(d.promptSlugs.sort()).toEqual(["brainstorm", "tone-reframer"]);
-  // Neither was locked at mount time and we didn't click any lock
-  // toggles, so the lockedSlugs payload is empty.
-  expect(d.lockedSlugs).toEqual([]);
+  // Everything on the list is always on.
+  expect(d.lockedSlugs.slice().sort()).toEqual(["brainstorm", "tone-reframer"]);
   // Attachments empty after the remove.
   expect(d.attachments).toEqual([]);
 });

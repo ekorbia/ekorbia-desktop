@@ -76,7 +76,7 @@ function useStickToBottomOnResize(ref) {
 }
 
 // ─── Chat Pane ──────────────────────────────────────────────
-function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, onContinue, space, showDetails = false, onStarter, engineCtx = null, documentCount = 0, nameOfModel }) {
+function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, onContinue, space, showDetails = false, templates = [], activeTemplateIds = [], onUseTemplate, onAllTemplates, engineCtx = null, documentCount = 0, nameOfModel }) {
   const scrollerRef = useRef(null);
   const lastContent = chat.messages[chat.messages.length - 1]?.content;
   useEffect(() => {
@@ -497,139 +497,38 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
               starts typing without ever needing to be dismissed. */}
           {chat.messages.length === 0 && !isStreaming && (
             <div
+              data-empty-chat
               style={{
-                margin: "56px auto",
-                maxWidth: 540,
-                padding: "20px 24px",
+                margin: "64px auto 0",
+                maxWidth: 700,
+                padding: "0 8px",
                 textAlign: "center",
                 fontFamily: T.sans,
               }}
             >
-              <div style={{ marginBottom: 14 }}>
-                <BrandMark size={30} />
-              </div>
               <div
                 style={{
                   color: T.fg,
-                  fontSize: 20,
+                  fontSize: 22,
                   fontWeight: 600,
                   letterSpacing: -0.2,
                   marginBottom: 6,
                 }}
               >
-                {greetingForHour(new Date().getHours())}
+                What do you need?
               </div>
-              <div style={{ color: T.fg2, fontSize: 13.5, marginBottom: 20 }}>
-                Everything here runs on your machine. Ask anything — or start
-                with one of these:
+              <div style={{ color: T.fg2, fontSize: 13.5, marginBottom: 22 }}>
+                Ask a question below, or start from a template.
               </div>
-              {/* Starter cards — each pre-fills the composer (you review, then
-                  send). They surface what Ekorbia does beyond plain chat. */}
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-                  gap: 10,
-                  textAlign: "left",
-                }}
-              >
-                {[
-                  {
-                    t: "Brainstorm",
-                    d: "Ideas for anything",
-                    prompt: "Brainstorm",
-                    fallback: "Brainstorm ideas for ",
-                  },
-                  {
-                    t: "Explain simply",
-                    d: "Any topic, in plain language",
-                    prompt: "Explain Simply",
-                    fallback: "Explain this simply: ",
-                  },
-                  {
-                    t: "Draft an email",
-                    d: "A reply or a quick note",
-                    prompt: "Email Draft",
-                    fallback: "Help me draft an email: ",
-                  },
-                  {
-                    t: "Opinionated take",
-                    d: "A strong, honest stance",
-                    prompt: "Opinionated Answers",
-                    fallback: "Give me your honest, opinionated take on ",
-                  },
-                  {
-                    t: "How does it end?",
-                    d: "Book or film ending",
-                    prompt: "How Does It End",
-                    fallback: "Tell me how this ends: ",
-                  },
-                  {
-                    t: "Translate to Spanish",
-                    d: "Any text, into Spanish",
-                    prompt: "Translate → Spanish",
-                    fallback: "Translate the following into Spanish: ",
-                  },
-                ].map((s) => (
-                  <button
-                    key={s.t}
-                    data-empty-starter
-                    onClick={() => onStarter && onStarter(s.prompt, s.fallback)}
-                    style={{
-                      display: "block",
-                      textAlign: "left",
-                      background: T.bg1,
-                      border: `1px solid ${T.border}`,
-                      borderRadius: 10,
-                      padding: "12px 13px",
-                      cursor: "pointer",
-                      fontFamily: T.sans,
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = T.bg2;
-                      e.currentTarget.style.borderColor = T.amber + "66";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = T.bg1;
-                      e.currentTarget.style.borderColor = T.border;
-                    }}
-                  >
-                    <div
-                      style={{
-                        color: T.fg,
-                        fontSize: 12.5,
-                        fontWeight: 600,
-                        marginBottom: 3,
-                      }}
-                    >
-                      {s.t}
-                    </div>
-                    <div style={{ color: T.fg2, fontSize: 11 }}>{s.d}</div>
-                  </button>
-                ))}
-              </div>
-              {/* Quiet discovery hint. Overlay hotkey is macOS/Windows only —
-                  the Linux overlay isn't wired up yet (Phase L2). */}
-              <div
-                style={{
-                  color: T.fg3,
-                  fontSize: 11.5,
-                  marginTop: 18,
-                  lineHeight: 1.6,
-                }}
-              >
-                {!IS_LINUX && (
-                  <>
-                    Press{" "}
-                    <span style={{ color: T.fg2, fontWeight: 600 }}>
-                      {formatHotkey("Super+Shift+Space")}
-                    </span>{" "}
-                    for the quick-query overlay ·{" "}
-                  </>
-                )}
-                <span style={{ color: T.fg2, fontWeight: 600 }}>Attach</span>{" "}
-                files or a folder for grounded answers
-              </div>
+              {/* The starred templates (Settings → Templates). Choosing one
+                  turns it on for this chat: its chip appears above the
+                  message box, which then asks for what the template needs. */}
+              <TemplateCards
+                templates={templates}
+                activeIds={activeTemplateIds}
+                onUse={onUseTemplate}
+                onAll={onAllTemplates}
+              />
             </div>
           )}
           {chat.messages.map((m, i) => {
@@ -1370,18 +1269,8 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
           {m.prompts.map((p) => (
             <span
               key={p.id}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "2px 8px",
-                borderRadius: 99,
-                background: p.color ? p.color + "22" : T.bg2,
-                border: `1px solid ${p.color ? p.color + "55" : T.border}`,
-                fontFamily: T.sans,
-                fontSize: 12,
-                color: p.color || T.fg1,
-              }}
+              data-message-template={p.id}
+              style={{ ...ekChip("plain"), height: 22 }}
             >
               <span>{p.name}</span>
             </span>
@@ -2027,6 +1916,8 @@ function PromptSlashPicker({
   onHighlight,
   onPick,
   emptyMessage,
+  // Opens Settings → Templates. Shown as the last row when given.
+  onManage,
 }) {
   // Track each row's DOM node so we can scroll the highlighted one
   // into view when keyboard nav moves past the visible area. Map keyed
@@ -2055,34 +1946,27 @@ function PromptSlashPicker({
         left: 0,
         right: 0,
         marginBottom: 6,
-        background: T.bg2,
+        background: T.isLight ? T.bg0 : T.bg2,
         border: `1px solid ${T.borderStrong}`,
-        borderRadius: 6,
+        borderRadius: 12,
         boxShadow: T.shadowPop,
-        maxHeight: 260,
+        maxHeight: 300,
         overflowY: "auto",
+        padding: 6,
         zIndex: 30,
       }}
     >
       {prompts.length === 0 && (
-        <div
-          style={{
-            padding: "14px 16px",
-            fontFamily: T.sans,
-            fontSize: 12.5,
-            color: T.fg3,
-            textAlign: "center",
-          }}
-        >
-          {emptyMessage || "No prompts."}
+        <div style={ekHint({ padding: "12px 12px", fontSize: 12.5, textAlign: "center" })}>
+          {emptyMessage || "No templates."}
         </div>
       )}
       {prompts.map((p, i) => {
         const sel = i === highlighted;
-        const fav = p.favorite ? FAVORITE_COLOR_MAP[p.favorite] : null;
         return (
           <button
             key={p.id}
+            data-template-option={p.id}
             // Callback ref → Map by row index. The useEffect above
             // reads this Map to scroll the highlighted row into view
             // on keyboard nav. Setting null on unmount keeps the Map
@@ -2102,41 +1986,66 @@ function PromptSlashPicker({
             onMouseEnter={() => onHighlight(i)}
             style={{
               display: "flex",
-              alignItems: "center",
+              alignItems: "baseline",
               gap: 10,
               width: "100%",
-              padding: "6px 12px",
-              background: sel ? T.bg4 : "transparent",
+              minHeight: 34,
+              padding: "7px 10px",
+              background: sel ? T.bg3 : "transparent",
               border: "none",
+              borderRadius: 8,
               cursor: "pointer",
-              color: sel ? T.fg : T.fg1,
               textAlign: "left",
               fontFamily: T.sans,
-              fontSize: 12.5,
+              fontSize: 13,
             }}
           >
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: 99,
-                background: fav?.color || "transparent",
-                flexShrink: 0,
-              }}
-            />
-            <span
-              style={{
-                flex: 1,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
+            <span style={{ color: T.fg, fontWeight: 500, whiteSpace: "nowrap", flexShrink: 0 }}>
               {p.name}
             </span>
+            {p.description && (
+              <span
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  color: T.fg2,
+                  fontSize: 12,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {p.description}
+              </span>
+            )}
           </button>
         );
       })}
+      {onManage && (
+        <button
+          data-template-manage
+          onMouseDown={(e) => {
+            e.preventDefault();
+            onManage();
+          }}
+          style={{
+            display: "block",
+            width: "100%",
+            marginTop: 4,
+            padding: "8px 10px 6px",
+            background: "transparent",
+            border: "none",
+            borderTop: `1px solid ${T.border}`,
+            cursor: "pointer",
+            textAlign: "left",
+            fontFamily: T.sans,
+            fontSize: 12,
+            color: T.fg2,
+          }}
+        >
+          Manage templates…
+        </button>
+      )}
     </div>
   );
 }
@@ -2221,6 +2130,11 @@ function Composer({
   // Start a screen capture (the ⌘⇧1 flow). Left out of the + menu when
   // the caller has no way to start one.
   onCapture,
+  // Opens Settings → Templates (the last row of the template picker).
+  onManageTemplates,
+  // A counter: when it goes up, open the template picker (the "All
+  // templates" link on a new chat).
+  openPickerSignal,
   // How many documents this chat has attached, for the placeholder.
   documentCount = 0,
 }) {
@@ -2241,7 +2155,12 @@ function Composer({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [plusOpen]);
-  const fromPlus = (fn) => () => { setPlusOpen(false); fn && fn(); };
+  const fromPlus = (fn) => () => { setPlusOpen(false); setPlusTemplatesOpen(false); fn && fn(); };
+  // The list that opens beside "Use a template".
+  const [plusTemplatesOpen, setPlusTemplatesOpen] = useState(false);
+  useEffect(() => {
+    if (!plusOpen) setPlusTemplatesOpen(false);
+  }, [plusOpen]);
   const taRef = useRef(null);
 
   // Auto-grow: the text box fits its content — soft-wrapped lines included,
@@ -2299,14 +2218,12 @@ function Composer({
   // the rest of the prompt UI (PromptLibrary default, overlay picker).
   const attachedPromptIds = attachedPrompts.map((p) => p.id);
   const pickerPrompts = useMemo(() => {
-    const q = slashQuery.toLowerCase();
-    return prompts
-      .filter((p) => !attachedPromptIds.includes(p.id))
-      .filter(
-        (p) => q === "" || p.name.toLowerCase().includes(q),
-      )
-      .slice()
-      .sort((a, b) => a.name.localeCompare(b.name));
+    // Starred first, then by name (the order every template list uses);
+    // typing after the slash searches names and descriptions.
+    return filterTemplates(
+      prompts.filter((p) => !attachedPromptIds.includes(p.id)),
+      slashQuery,
+    );
     // attachedPromptIds is derived from attachedPrompts; depend on that
     // instead so identity is stable across renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2449,6 +2366,14 @@ function Composer({
     }
   }, [focusSignal]);
 
+  // "All templates" on a new chat opens the same picker typing `/` does.
+  useEffect(() => {
+    if (typeof openPickerSignal === "number" && openPickerSignal > 0) {
+      triggerSlashPickerFromButton();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPickerSignal]);
+
   // onSend may resolve `false`, meaning "not sent": main.jsx's context
   // pre-flight refused a message too long for the model's window (and
   // toasted why). Put the text back so nothing typed is lost — unless the
@@ -2536,9 +2461,15 @@ function Composer({
     }
   };
 
-  const placeholder = documentCount > 0
-    ? `Ask about the ${documentsLabel(documentCount)} attached`
-    : "Ask anything";
+  // A template you chose says what it needs ("Dictate or paste your
+  // notes"); otherwise the box says what it can be asked.
+  const placeholder =
+    templateHint(attachedPrompts, lockedPromptSlugs) ||
+    (documentCount > 0
+      ? `Ask about the ${documentsLabel(documentCount)} attached`
+      : "Ask anything");
+  // The + menu's template list: the starred ones.
+  const plusTemplates = starredTemplates(prompts);
 
   return (
     <div
@@ -2571,11 +2502,12 @@ function Composer({
             onPick={pickPrompt}
             emptyMessage={
               prompts.length === 0
-                ? "No prompts in library. Create one in the Prompts panel."
+                ? "No templates yet. Write one in Settings → Templates."
                 : attachedPrompts.length >= prompts.length
-                  ? "All prompts attached."
-                  : "No matches."
+                  ? "Every template is already on."
+                  : "No template matches."
             }
+            onManage={onManageTemplates}
           />
           {(attachedPrompts.length > 0 || attachments.length > 0) && (
             <div
@@ -2707,18 +2639,12 @@ function Composer({
                   </span>
                 );
               })}
-              {/* Chip is tinted by the prompt's Favorite color when it has
-                  one; otherwise it renders as a neutral chip with no dot. */}
+              {/* One chip per template that is on. */}
               {attachedPrompts.map((p) => {
-                const fav = p.favorite
-                  ? FAVORITE_COLOR_MAP[p.favorite]
-                  : null;
-                const favColor = fav?.color || null;
-                // Locked chips originate from a Space's `space_prompts`
-                // row with locked=1. The chip still renders normally
-                // (colored dot, name) but the × is replaced by a small
-                // lock glyph and detach is wired to nothing — the user
-                // must unlock via the Space settings modal. `p.id` is
+                // A template the workspace keeps always on (a
+                // `space_prompts` row with locked=1) shows a lock in
+                // place of the ×: it is changed in workspace settings,
+                // not in one chat. `p.id` is
                 // the prompt slug (filename without `.md`), which is
                 // exactly what `lockedPromptSlugs` is keyed by.
                 const isLocked = lockedPromptSlugs && lockedPromptSlugs.has(p.id);
@@ -2732,23 +2658,10 @@ function Composer({
                       height: 26,
                       gap: 6,
                       padding: "0 8px 0 10px",
-                      background: favColor ? favColor + "22" : T.bg2,
-                      border: `1px solid ${favColor ? favColor + "55" : T.border}`,
                     }}
                     title={isLocked ? "Always used in this workspace — change it in workspace settings" : undefined}
                   >
-                    {favColor && (
-                      <span
-                        style={{
-                          width: 6,
-                          height: 6,
-                          borderRadius: 99,
-                          background: favColor,
-                          display: "inline-block",
-                        }}
-                      />
-                    )}
-                    <span style={{ color: favColor || T.fg }}>{p.name}</span>
+                    <span style={{ color: T.fg }}>{p.name}</span>
                     {isLocked ? (
                       <span
                         data-attached-prompt-lock={p.id}
@@ -2890,15 +2803,82 @@ function Composer({
                       </span>
                     </MenuItem>
                   )}
-                  {/* Opens the inline picker exactly as typing `/` does
-                      (see triggerSlashPickerFromButton). */}
-                  <MenuItem onClick={fromPlus(triggerSlashPickerFromButton)} data-plus-template>
+                  {/* With starred templates this opens a list of them beside
+                      the menu; with none it goes straight to the picker
+                      typing `/` opens (see triggerSlashPickerFromButton). */}
+                  <MenuItem
+                    onClick={
+                      plusTemplates.length
+                        ? () => setPlusTemplatesOpen((o) => !o)
+                        : fromPlus(triggerSlashPickerFromButton)
+                    }
+                    data-plus-template
+                    aria-haspopup={plusTemplates.length ? "menu" : undefined}
+                    aria-expanded={plusTemplates.length ? plusTemplatesOpen : undefined}
+                  >
                     <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
                       <I.Library size={13} />
                       <span style={{ flex: 1 }}>Use a template</span>
-                      <span style={{ color: T.fg3, fontSize: 11.5 }}>/</span>
+                      {plusTemplates.length ? (
+                        <I.ChevronR size={11} />
+                      ) : (
+                        <span style={{ color: T.fg2, fontSize: 12 }}>/</span>
+                      )}
                     </span>
                   </MenuItem>
+                  {plusTemplatesOpen && plusTemplates.length > 0 && (
+                    <div
+                      role="menu"
+                      data-plus-template-list
+                      style={{
+                        position: "absolute",
+                        left: "calc(100% + 6px)",
+                        bottom: 0,
+                        minWidth: 230,
+                        maxWidth: 300,
+                        maxHeight: 320,
+                        overflowY: "auto",
+                        padding: 5,
+                        background: T.bg2,
+                        border: `1px solid ${T.border}`,
+                        borderRadius: 10,
+                        boxShadow: T.shadowPop,
+                        zIndex: 41,
+                        fontFamily: T.sans,
+                        fontSize: 13,
+                      }}
+                    >
+                      {plusTemplates.map((t) => {
+                        const isOn = attachedPromptIds.includes(t.id);
+                        const fixed = isOn && lockedPromptSlugs && lockedPromptSlugs.has(t.id);
+                        return (
+                          <MenuItem
+                            key={t.id}
+                            data-plus-template-item={t.id}
+                            role="menuitemcheckbox"
+                            aria-checked={isOn}
+                            title={fixed ? "Always used in this workspace" : t.description || undefined}
+                            onClick={fromPlus(() => {
+                              // One the workspace keeps always on cannot be
+                              // turned off from here.
+                              if (!fixed && onPickPrompt) onPickPrompt(t);
+                            })}
+                          >
+                            <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {t.name}
+                              </span>
+                              {isOn && <I.Check size={12} />}
+                            </span>
+                          </MenuItem>
+                        );
+                      })}
+                      <MenuDivider />
+                      <MenuItem onClick={fromPlus(triggerSlashPickerFromButton)} data-plus-template-all>
+                        All templates…
+                      </MenuItem>
+                    </div>
+                  )}
                   {onCapture && !ephemeral && (
                     <MenuItem onClick={fromPlus(onCapture)} data-plus-capture>
                       <span style={{ display: "flex", alignItems: "center", gap: 9 }}>

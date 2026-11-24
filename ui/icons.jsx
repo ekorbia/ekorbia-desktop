@@ -10,6 +10,8 @@ const Icon = ({ d, size = 14, stroke = 'currentColor', sw = 1.5, fill = 'none', 
 const I = {
   Search:    (p) => <Icon {...p} d={<><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5l3 3" /></>} />,
   Plus:      (p) => <Icon {...p} d="M8 3v10M3 8h10" />,
+  // Five-point star. Pass fill="currentColor" for the "on" state.
+  Star:      (p) => <Icon {...p} d="M8 1.9l1.83 3.86 4.17.56-3.04 2.93.75 4.15L8 11.38l-3.71 2.02.75-4.15L2 6.32l4.17-.56z" />,
   Shield:    (p) => <Icon {...p} d={<><path d="M8 1.8L3 4v3.4c0 3 2 5.4 5 6.8 3-1.4 5-3.8 5-6.8V4z" /><path d="M5.9 8l1.5 1.5L10.2 6.8" /></>} />,
   ArrowUp:   (p) => <Icon {...p} d="M8 13V3M3.8 7.2L8 3l4.2 4.2" />,
   X:         (p) => <Icon {...p} d="M3.5 3.5l9 9M12.5 3.5l-9 9" />,
