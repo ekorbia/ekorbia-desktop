@@ -45,6 +45,13 @@ const {
   lightenHex,
   isLocalEndpoint,
   greetingForHour,
+  netPurposeWords,
+  netResultWords,
+  netBytesWords,
+  netRowTitle,
+  netWhen,
+  netSentOffWords,
+  netCountsWords,
   isStarred,
   sortTemplates,
   starredTemplates,
@@ -2135,4 +2142,68 @@ test("templateCopyName: a free name for a copy", () => {
   assert.equal(templateCopyName("File note", ["File note", "file note COPY"]), "File note copy 2");
   assert.equal(templateCopyName("File note", ["File note copy", "File note copy 2"]), "File note copy 3");
   assert.equal(templateCopyName("", []), "Template copy");
+});
+
+
+// ── The privacy record ─────────────────────────────────────────────────────
+test("privacyStatus: the offline lock is stated ahead of everything else", () => {
+  assert.deepEqual(privacyStatus("engine", null, true), { kind: "locked", text: "Offline lock on" });
+  assert.deepEqual(privacyStatus("openai", "http://office-mac.local:8080", true), { kind: "locked", text: "Offline lock on" });
+  // Off (or not known yet): as before.
+  assert.equal(privacyStatus("engine", null, false).text, "Chats stay on this Mac");
+  assert.equal(privacyStatus("engine", null).text, "Chats stay on this Mac");
+  assert.equal(privacyStatus("openai", "http://office-mac.local:8080", false).text, "Using server: office-mac.local");
+});
+
+test("netPurposeWords: every purpose reads as words; a download names its model plainly", () => {
+  const name = (id) => ({ name: id === "gemma4-e4b" ? "Fast" : id, detail: "" });
+  assert.equal(netPurposeWords({ purpose: "model_download", detail: "gemma4-e4b" }, name), "Model download: Fast");
+  assert.equal(netPurposeWords({ purpose: "model_download", detail: "my-own" }, name), "Model download: my-own");
+  assert.equal(netPurposeWords({ purpose: "model_download", detail: "my-own" }), "Model download: my-own");
+  assert.equal(netPurposeWords({ purpose: "model_download", detail: "" }), "Model download");
+  assert.equal(netPurposeWords({ purpose: "dictation_model", detail: "base.en" }), "Dictation model: base.en");
+  for (const p of ["model_lookup", "watch_feed", "watch_page", "chat", "documents", "server"]) {
+    const words = netPurposeWords({ purpose: p, detail: "" });
+    assert.ok(words && words !== p && !words.includes("_"), p);
+  }
+  assert.equal(netPurposeWords(null), "Connection");
+});
+
+test("netResultWords / netBytesWords", () => {
+  assert.equal(netResultWords("verified"), "Verified");
+  assert.equal(netResultWords("refused"), "Refused");
+  assert.equal(netResultWords("stopped"), "Stopped");
+  assert.equal(netResultWords("???"), "");
+  assert.equal(netBytesWords(0), "");
+  assert.equal(netBytesWords(900), "900 bytes");
+  assert.equal(netBytesWords(12000), "12 KB");
+  assert.equal(netBytesWords(274000000), "274 MB");
+  assert.equal(netBytesWords(7200000000), "7.2 GB");
+});
+
+test("netRowTitle: what, how big, how often", () => {
+  assert.equal(
+    netRowTitle({ purpose: "model_download", detail: "gemma4-12b", bytes: 7200000000, count: 2 }, () => ({ name: "Balanced" })),
+    "Model download: Balanced, 7.2 GB · 2 connections",
+  );
+  assert.equal(netRowTitle({ purpose: "watch_feed", detail: "", bytes: 0, count: 1 }), "A feed a Watch follows");
+});
+
+test("netWhen: day, month and time in local time", () => {
+  const at = Math.floor(new Date(2026, 10, 23, 9, 5).getTime() / 1000);
+  assert.equal(netWhen(at), "23 Nov, 09:05");
+  assert.equal(netWhen(0), "");
+});
+
+test("netSentOffWords: none, or an honest count", () => {
+  assert.equal(netSentOffWords({ chatsSent: 0, documentsSent: 0 }), "none");
+  assert.equal(netSentOffWords(null), "none");
+  assert.equal(netSentOffWords({ chatsSent: 1, documentsSent: 0 }), "1 chat; no dictation");
+  assert.equal(netSentOffWords({ chatsSent: 42, documentsSent: 3 }), "42 chats, 3 document-search requests; no dictation");
+});
+
+test("netCountsWords", () => {
+  assert.equal(netCountsWords({ made: 0, refused: 0 }), "None yet");
+  assert.equal(netCountsWords({ made: 4, refused: 1 }), "4 made, 1 refused");
+  assert.equal(netCountsWords({ made: 0, refused: 2 }), "0 made, 2 refused");
 });

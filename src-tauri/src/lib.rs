@@ -34,6 +34,7 @@ mod files;
 mod llm;
 mod log;
 mod memory;
+mod net;
 mod overlay;
 mod prompts;
 mod providers;
@@ -329,6 +330,10 @@ pub fn run() {
             prompts::prompts_save,
             prompts::prompts_delete,
             prompts::prompts_meta_set,
+            net::privacy_status,
+            net::privacy_set_lock,
+            net::privacy_log,
+            net::privacy_report_save,
             prompts::prompts_seed_builtins,
             prompts::prompts_restore_builtins,
             watch::commands::watch_list,
@@ -430,6 +435,11 @@ pub fn run() {
             }
 
             app.manage(DbState(Mutex::new(conn)));
+
+            // ── The network gate ────────────────────────────────────────────
+            // Before anything below can connect out: load the offline lock
+            // and give the gate the app (its record lives in the database).
+            net::init(app.handle());
 
             // ── Seed built-in prompts on first launch ───────────────────────
             // Idempotent: only writes files that aren't already present, so

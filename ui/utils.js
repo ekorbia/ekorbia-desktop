@@ -988,8 +988,13 @@ function nextTabInWorkspace(tabs, spaceId, preferId) {
 
 // The one-line privacy position shown on Home and at the foot of the
 // sidebar. Local backends keep chats on this Mac; a custom server on
-// another machine is named, because then they do not.
-function privacyStatus(backendKind, baseUrl) {
+// another machine is named, because then they do not. With the offline
+// lock on (net.rs refuses every connection off this Mac) the line says
+// that instead — it is then the stronger and more useful statement.
+function privacyStatus(backendKind, baseUrl, locked) {
+  if (locked) {
+    return { kind: 'locked', text: 'Offline lock on' };
+  }
   if (isLocalEndpoint(backendKind, baseUrl)) {
     return { kind: 'local', text: 'Chats stay on this Mac' };
   }
@@ -1004,6 +1009,96 @@ function privacyStatus(backendKind, baseUrl) {
     host,
     text: host ? `Using server: ${host}` : 'Using another server',
   };
+}
+
+// ── The privacy record (Settings → Privacy; rows come from net.rs) ────────
+//
+// A row: { day, purpose, detail, host, result, count, bytes, firstAt,
+// lastAt }. `detail` is a model's id for downloads, else empty.
+
+// What a connection was for, in words. `nameOfModel(id)` → { name, detail }
+// (describeModel) lets a download say "Fast" where the record holds an id.
+function netPurposeWords(row, nameOfModel) {
+  const r = row || {};
+  const model = () => {
+    if (!r.detail) return '';
+    const d = typeof nameOfModel === 'function' ? nameOfModel(r.detail) : null;
+    return (d && d.name) || r.detail;
+  };
+  switch (r.purpose) {
+    case 'model_download': return r.detail ? `Model download: ${model()}` : 'Model download';
+    case 'model_lookup': return "Looking up a model's files";
+    case 'dictation_model': return r.detail ? `Dictation model: ${r.detail}` : 'Dictation model';
+    case 'watch_feed': return 'A feed a Watch follows';
+    case 'watch_page': return 'A page a Watch follows';
+    case 'chat': return 'Chat sent to a server';
+    case 'documents': return 'Text sent to a server for document search';
+    case 'server': return 'Checking with a server';
+    default: return String(r.purpose || 'Connection');
+  }
+}
+
+function netResultWords(result) {
+  switch (result) {
+    case 'done': return 'Done';
+    case 'verified': return 'Verified';
+    case 'failed': return 'Failed';
+    case 'refused': return 'Refused';
+    case 'stopped': return 'Stopped';
+    default: return '';
+  }
+}
+
+// "7.2 GB", "274 MB", "12 KB"; empty for nothing (decimal units, as a
+// download page would state them).
+function netBytesWords(bytes) {
+  const b = Number(bytes) || 0;
+  if (b <= 0) return '';
+  if (b >= 1e9) return `${(b / 1e9).toFixed(1)} GB`;
+  if (b >= 1e6) return `${Math.round(b / 1e6)} MB`;
+  if (b >= 1e3) return `${Math.round(b / 1e3)} KB`;
+  return `${b} bytes`;
+}
+
+// A row's title: what it was, how big, and how many connections that day
+// (a model and its image reader are two files, so two; so is a retry).
+function netRowTitle(row, nameOfModel) {
+  let out = netPurposeWords(row, nameOfModel);
+  const size = netBytesWords(row && row.bytes);
+  if (size) out += `, ${size}`;
+  if (row && row.count > 1) out += ` · ${row.count} connections`;
+  return out;
+}
+
+// "23 Nov, 09:12" in local time, from unix seconds.
+function netWhen(unixSeconds) {
+  const n = Number(unixSeconds);
+  if (!n) return '';
+  const d = new Date(n * 1000);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const two = (x) => String(x).padStart(2, '0');
+  return `${d.getDate()} ${months[d.getMonth()]}, ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
+// The headline: what has left this Mac. "none" unless a server on another
+// machine has been sent chats or document text. Dictation never leaves.
+function netSentOffWords(summary) {
+  const s = summary || {};
+  const parts = [];
+  const chats = Number(s.chatsSent) || 0;
+  const docs = Number(s.documentsSent) || 0;
+  if (chats > 0) parts.push(`${chats} chat${chats === 1 ? '' : 's'}`);
+  if (docs > 0) parts.push(`${docs} document-search request${docs === 1 ? '' : 's'}`);
+  return parts.length ? `${parts.join(', ')}; no dictation` : 'none';
+}
+
+// "4 made, 1 refused" / "None yet".
+function netCountsWords(summary) {
+  const s = summary || {};
+  const made = Number(s.made) || 0;
+  const refused = Number(s.refused) || 0;
+  if (!made && !refused) return 'None yet';
+  return `${made} made, ${refused} refused`;
 }
 
 // A short label for where a workspace's documents live: the last two
@@ -1921,6 +2016,13 @@ if (typeof window !== "undefined") {
   window.describeModel = describeModel;
   window.chatDocumentCount = chatDocumentCount;
   window.documentsLabel = documentsLabel;
+  window.netPurposeWords = netPurposeWords;
+  window.netResultWords = netResultWords;
+  window.netBytesWords = netBytesWords;
+  window.netRowTitle = netRowTitle;
+  window.netWhen = netWhen;
+  window.netSentOffWords = netSentOffWords;
+  window.netCountsWords = netCountsWords;
   window.TEMPLATE_STAR = TEMPLATE_STAR;
   window.isStarred = isStarred;
   window.sortTemplates = sortTemplates;
@@ -2177,6 +2279,13 @@ if (typeof module !== "undefined" && module.exports) {
     describeModel,
     chatDocumentCount,
     documentsLabel,
+    netPurposeWords,
+    netResultWords,
+    netBytesWords,
+    netRowTitle,
+    netWhen,
+    netSentOffWords,
+    netCountsWords,
     TEMPLATE_STAR,
     isStarred,
     sortTemplates,

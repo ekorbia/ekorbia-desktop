@@ -2646,7 +2646,7 @@ function RightPanelTabs({ tab, onTab, onClose }) {
 //
 // The privacy text comes from privacyStatus (utils.js): a local backend
 // keeps chats on this Mac; a custom server on another machine is named.
-function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttachments = [] }) {
+function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttachments = [], locked = false, onPrivacyClick }) {
   const [baseUrl, setBaseUrl] = useState(null);
   const [up, setUp] = useState(true);
   const [present, setPresent] = useState(true);
@@ -2683,11 +2683,11 @@ function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttac
     };
   }, [modelId, warming, backendKind]);
 
-  const privacy = privacyStatus(backendKind, baseUrl);
+  const privacy = privacyStatus(backendKind, baseUrl, locked);
   const indexing = indexingAttachments.length;
-  let kind = privacy.kind; // 'local' | 'server'
+  let kind = privacy.kind; // 'local' | 'server' | 'locked'
   let text = privacy.text;
-  let color = privacy.kind === "local" ? T.green : T.blue;
+  let color = privacy.kind === "local" ? T.green : privacy.kind === "locked" ? T.fg : T.blue;
   if (!up) {
     kind = "problem";
     color = T.amber;
@@ -2705,14 +2705,18 @@ function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttac
     color = T.amber;
     text = indexing === 1 ? "Reading 1 attachment…" : `Reading ${indexing} attachments…`;
   }
-  const clickable = kind === "problem" && !!onProblemClick;
+  // A problem opens setup; the privacy position opens the record behind it
+  // (Settings → Privacy), so the claim can be checked.
+  const toSetup = kind === "problem" && !!onProblemClick;
+  const toPrivacy = !toSetup && kind !== "indexing" && !!onPrivacyClick;
+  const clickable = toSetup || toPrivacy;
   return (
     <button
       type="button"
       data-status-line
       data-status-kind={kind}
-      onClick={clickable ? onProblemClick : undefined}
-      title={clickable ? "Open setup" : text}
+      onClick={toSetup ? onProblemClick : toPrivacy ? onPrivacyClick : undefined}
+      title={toSetup ? "Open setup" : toPrivacy ? "See what Ekorbia has connected to" : text}
       style={{
         display: "flex",
         alignItems: "center",
@@ -2728,7 +2732,7 @@ function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttac
         textAlign: "left",
       }}
     >
-      <I.Shield size={14} style={{ color }} />
+      {kind === "locked" ? <I.Lock size={14} style={{ color }} /> : <I.Shield size={14} style={{ color }} />}
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {text}
       </span>

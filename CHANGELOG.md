@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Settings → Privacy.** A record of every connection Ekorbia has made to
+  anything other than this Mac (the day, the purpose, the host, the size
+  and the result, never the content), one line saying what has left this
+  Mac, and "Save report…", which writes the record and the installed
+  models as one page.
+- **Offline lock.** With it on, Ekorbia refuses every connection off this
+  Mac. The built-in engine is unaffected. The line at the foot of the
+  window says when the lock is on and opens the record.
+
 ### Changed
 
 - **The app opens on Home.** Home lists your workspaces (Spaces, under a

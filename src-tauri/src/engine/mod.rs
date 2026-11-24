@@ -673,6 +673,8 @@ impl RealHandle {
     /// OOM, unsupported arch) instead of a mute timeout.
     pub(crate) async fn wait_ready(&mut self) -> Result<(), String> {
         let url = format!("http://127.0.0.1:{}/health", self.port);
+        // net-gate: this Mac only — the engine's own health check on
+        // 127.0.0.1, so there is nothing for the gate (net.rs) to record.
         let client = reqwest::Client::new();
         let deadline = std::time::Instant::now() + HEALTH_TIMEOUT;
         loop {

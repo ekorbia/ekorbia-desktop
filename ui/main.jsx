@@ -1148,6 +1148,25 @@ function App() {
   // on this Mac (privacyStatus in utils.js). Null for the bundled engine
   // and a default Ollama.
   const [backendBaseUrl, setBackendBaseUrl] = useS(null);
+  // The offline lock (net.rs): with it on, Rust refuses every connection
+  // off this Mac. Read at launch and whenever Rust says the record or the
+  // lock changed, so the status line always states the position in force.
+  const [offlineLocked, setOfflineLocked] = useS(false);
+  useE(() => {
+    const read = () => invoke('privacy_status')
+      .then((st) => setOfflineLocked(!!(st && st.locked)))
+      .catch(() => {});
+    read();
+    const eventApi = getEventApi();
+    if (!eventApi) return undefined;
+    let unlisten = null;
+    let gone = false;
+    eventApi
+      .listen('privacy:changed', read)
+      .then((u) => { if (gone) u(); else unlisten = u; })
+      .catch(() => {});
+    return () => { gone = true; unlisten?.(); };
+  }, []);
   useE(() => {
     let alive = true;
     getInvoke()?.('llm_backend_config_get')
@@ -1302,6 +1321,17 @@ function App() {
   // { name, detail, tier } for a model id: "Balanced" / "Gemma 4 12B".
   const nameModel = (id) => describeModel(id, tiers, modelCatalog);
   // "Balanced — Gemma 4 12B": a model as one line in a list of choices.
+  // id → "Balanced · Gemma 4 12B", for the saved privacy report (Rust
+  // prints the names; the plain ones are worked out here).
+  const reportModelLabels = useMemo(() => {
+    const out = {};
+    for (const m of (modelCatalog || [])) {
+      if (!m || !m.id) continue;
+      const d = describeModel(m.id, tiers, modelCatalog);
+      out[m.id] = d.detail ? `${d.name} · ${d.detail}` : d.name;
+    }
+    return out;
+  }, [modelCatalog, tiers]);
   const modelOptionLabel = (id) => {
     const d = nameModel(id);
     return d.detail ? `${d.name} — ${d.detail}` : d.name;
@@ -4801,7 +4831,7 @@ function App() {
 
   // The line under the message box. A local backend answers on this Mac;
   // a custom server on another machine is named, because then it does not.
-  const composerPrivacy = privacyStatus(backendKind, backendBaseUrl);
+  const composerPrivacy = privacyStatus(backendKind, backendBaseUrl, false);
   const composerNote = composerPrivacy.kind === 'local'
     ? 'Answered on this Mac. Check anything important against its source.'
     : `Answered by ${composerPrivacy.host || 'another server'}. Check anything important against its source.`;
@@ -4840,6 +4870,8 @@ function App() {
         model={tabModel}
         backendKind={backendKind}
         onProblemClick={() => setSetupGateOpen(true)}
+        locked={offlineLocked}
+        onPrivacyClick={() => openSettings('privacy')}
         warming={modelWarming}
         // Anything still being read, across every chat, so a long folder
         // index in chat A stays visible while the user works in chat B.
@@ -4955,6 +4987,10 @@ function App() {
         onDeleteTemplate={deleteTemplate}
         onDuplicateTemplate={duplicateTemplate}
         onToggleTemplateStar={toggleTemplateStar}
+        backendKind={backendKind}
+        backendBaseUrl={backendBaseUrl}
+        nameOfModel={nameModel}
+        modelLabels={reportModelLabels}
         chatCount={totalChatCount}
         onClearAllChats={clearAllChats}
         defaultModel={appDefaultModel}

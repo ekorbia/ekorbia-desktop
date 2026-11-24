@@ -70,6 +70,12 @@ pub(crate) struct SystemProfile {
     arch: String,
 }
 
+/// Installed memory in whole gigabytes (binary), for the privacy report's
+/// one-line description of this machine.
+pub(crate) fn total_ram_gb() -> Option<u64> {
+    total_ram_bytes().map(|b| (b + (1 << 29)) >> 30)
+}
+
 #[tauri::command]
 pub(crate) fn system_profile() -> SystemProfile {
     SystemProfile {

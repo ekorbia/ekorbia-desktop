@@ -183,6 +183,10 @@ pub(crate) async fn voice_model_download(
     let token = register_dl(&request_id);
     let cancel = token.flag.clone();
 
+    // Ask the gate (net.rs) before connecting: refused while the offline
+    // lock is on.
+    let pass = crate::net::allow(crate::net::Purpose::DictationModel, &name, &hf_url(&name))?;
+
     let client = reqwest::Client::builder()
         .build()
         .map_err(|e| format!("http client: {e}"))?;
@@ -208,6 +212,7 @@ pub(crate) async fn voice_model_download(
         if cancel.load(Ordering::Relaxed) {
             drop(file);
             let _ = std::fs::remove_file(&partial);
+            pass.stopped(completed);
             return Ok(());
         }
         let next = resp
@@ -228,6 +233,7 @@ pub(crate) async fn voice_model_download(
         {
             drop(file);
             let _ = std::fs::remove_file(&partial);
+            pass.stopped(completed);
             return Ok(());
         }
     }
@@ -235,6 +241,7 @@ pub(crate) async fn voice_model_download(
     file.flush().map_err(|e| format!("flush failed: {e}"))?;
     drop(file);
     std::fs::rename(&partial, &dest).map_err(|e| format!("finalize failed: {e}"))?;
+    pass.done(completed);
     let _ = on_progress.send(
         serde_json::json!({ "completed": completed.max(total), "total": total, "done": true }),
     );

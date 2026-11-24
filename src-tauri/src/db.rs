@@ -269,6 +269,23 @@ CREATE TABLE IF NOT EXISTS prompt_meta (
     last_used INTEGER
 );
 
+-- Every connection Ekorbia makes to anything other than this Mac (net.rs).
+-- One row per (day, purpose, detail, host, result), counted — never what
+-- was sent or received. `day` is the local date; `detail` is a model's id
+-- for downloads and empty for anything that would describe someone's work.
+CREATE TABLE IF NOT EXISTS net_log (
+    day TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    host TEXT NOT NULL,
+    result TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 1,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    first_at INTEGER NOT NULL,
+    last_at INTEGER NOT NULL,
+    PRIMARY KEY (day, purpose, detail, host, result)
+);
+
 -- Simple key/value store for app-wide settings that don't deserve their own
 -- table. First user: `prompts_dir` (the directory the file-system prompt
 -- store reads from) and `builtins_seeded_v1` (one-shot stamp so we don't

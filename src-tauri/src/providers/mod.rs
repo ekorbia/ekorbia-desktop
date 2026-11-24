@@ -96,6 +96,8 @@ pub(crate) fn stream_client() -> &'static reqwest::Client {
     STREAM_CLIENT.get_or_init(|| build_stream_client(STREAM_READ_TIMEOUT))
 }
 
+// net-gate: gated by callers — this only builds the client; every request
+// made with it (ollama.rs, openai_compat.rs) asks the gate (net.rs) first.
 fn build_stream_client(read_timeout: std::time::Duration) -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(STREAM_CONNECT_TIMEOUT)

@@ -39,6 +39,9 @@ const OLLAMA_ADDR: &str = "127.0.0.1:11434";
 /// Use `ollama_url(path)` to build endpoint URLs.
 const OLLAMA_BASE: &str = "http://127.0.0.1:11434";
 
+/// Where a pull sends Ollama, as the privacy record names it.
+const OLLAMA_REGISTRY_HOST: &str = "ollama.com (through Ollama)";
+
 /// Optional base-URL override, loaded from the settings key `llm_base_url`
 /// at startup (lib.rs `setup()`; Phase 0 of the no-Ollama plan). `None` =
 /// use the `OLLAMA_BASE` default. Empty/whitespace values normalize to
@@ -59,6 +62,12 @@ pub(crate) fn set_base_url_override(url: Option<String>) {
         *w = cleaned;
     }
 }
+
+// Every request below asks the gate (net.rs) first. Ollama is normally on
+// this Mac (the gate passes it and records nothing); when its address is
+// pointed at another machine the gate records each connection, or refuses
+// it while the offline lock is on.
+use crate::net::Purpose;
 
 fn ollama_url(path: &str) -> String {
     if let Ok(r) = base_url_override().read() {
@@ -133,12 +142,14 @@ fn thinking_cache() -> &'static std::sync::Mutex<std::collections::HashMap<Strin
 /// uses lowercase canonical names like "vision", "tools").
 async fn probe_capability(model: &str, needle: &str) -> Result<bool, String> {
     let body = serde_json::json!({ "model": model });
+    let pass = crate::net::allow(Purpose::Server, "", &ollama_url(""))?;
     let resp = ollama_client()
         .post(ollama_url("/api/show"))
         .json(&body)
         .send()
         .await
         .map_err(|e| e.to_string())?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!("Ollama /api/show returned {}", resp.status()));
     }
@@ -222,12 +233,14 @@ pub(crate) async fn chat(model: &str, system: &str, user: &str) -> Result<String
     if model_has_thinking(model).await.unwrap_or(false) {
         body["think"] = serde_json::Value::Bool(false);
     }
+    let pass = crate::net::allow(Purpose::Chat, "", &ollama_url(""))?;
     let resp = ollama_client()
         .post(ollama_url("/api/chat"))
         .json(&body)
         .send()
         .await
         .map_err(|e| format!("Ollama request failed: {e}"))?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!("Ollama returned HTTP {}", resp.status()));
     }
@@ -252,12 +265,14 @@ pub(crate) async fn embed(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>
     let client = ollama_client();
     // Try the newer batched endpoint first.
     let body = serde_json::json!({ "model": model, "input": texts });
+    let pass = crate::net::allow(Purpose::Documents, "", &ollama_url(""))?;
     let resp = client
         .post(ollama_url("/api/embed"))
         .json(&body)
         .send()
         .await
         .map_err(|e| format!("Ollama embed request failed: {e}"))?;
+    pass.done(0);
     if resp.status().is_success() {
         let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
         let arr = json["embeddings"]
@@ -280,12 +295,14 @@ pub(crate) async fn embed(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>
         let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
         for t in texts {
             let body = serde_json::json!({ "model": model, "prompt": t });
+            let pass = crate::net::allow(Purpose::Documents, "", &ollama_url(""))?;
             let r = client
                 .post(ollama_url("/api/embeddings"))
                 .json(&body)
                 .send()
                 .await
                 .map_err(|e| e.to_string())?;
+            pass.done(0);
             if !r.status().is_success() {
                 return Err(format!(
                     "Ollama /api/embeddings returned {} (model `{model}` may not be pulled)",
@@ -322,12 +339,18 @@ pub(crate) async fn embed_model_installed(model: &str) -> bool {
     // 3s. reqwest applies min(client_timeout, request_timeout), so this
     // short-circuits when Ollama isn't responding instead of stalling the
     // settings panel for 2 minutes.
+    let Ok(pass) = crate::net::allow(Purpose::Server, "", &ollama_url("")) else {
+        return false;
+    };
     let r = ollama_client()
         .post(ollama_url("/api/show"))
         .timeout(Duration::from_secs(3))
         .json(&body)
         .send()
         .await;
+    if r.is_ok() {
+        pass.done(0);
+    }
     matches!(r, Ok(ref resp) if resp.status().is_success())
 }
 
@@ -358,12 +381,14 @@ pub(crate) async fn embed_model_installed(model: &str) -> bool {
 /// timeout matches the previous `AbortSignal.timeout(3000)`.
 /// Adapter impl behind the neutral `llm_list_models` command (llm.rs).
 pub(crate) async fn list_models() -> Result<serde_json::Value, String> {
+    let pass = crate::net::allow(Purpose::Server, "", &ollama_url(""))?;
     let resp = ollama_client()
         .get(ollama_url("/api/tags"))
         .timeout(Duration::from_secs(3))
         .send()
         .await
         .map_err(|e| format!("Ollama /api/tags request failed: {e}"))?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!("Ollama /api/tags returned {}", resp.status()));
     }
@@ -378,12 +403,14 @@ pub(crate) async fn list_models() -> Result<serde_json::Value, String> {
 /// Ollama is unreachable.
 /// Adapter impl behind the neutral `llm_loaded_models` command (llm.rs).
 pub(crate) async fn loaded_models() -> Result<serde_json::Value, String> {
+    let pass = crate::net::allow(Purpose::Server, "", &ollama_url(""))?;
     let resp = ollama_client()
         .get(ollama_url("/api/ps"))
         .timeout(Duration::from_secs(2))
         .send()
         .await
         .map_err(|e| format!("Ollama /api/ps request failed: {e}"))?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!("Ollama /api/ps returned {}", resp.status()));
     }
@@ -400,12 +427,14 @@ pub(crate) async fn loaded_models() -> Result<serde_json::Value, String> {
 /// (which forces the model into RAM as a side effect).
 /// Adapter impl behind the neutral `llm_warmup` command (llm.rs).
 pub(crate) async fn warmup(body: serde_json::Value) -> Result<(), String> {
+    let pass = crate::net::allow(Purpose::Server, "", &ollama_url(""))?;
     let resp = ollama_client()
         .post(ollama_url("/api/generate"))
         .json(&body)
         .send()
         .await
         .map_err(|e| format!("Ollama /api/generate request failed: {e}"))?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!("Ollama /api/generate returned {}", resp.status()));
     }
@@ -568,12 +597,14 @@ pub(crate) async fn chat_stream(
     // stream_client, NOT ollama_client(): the latter's 120 s TOTAL timeout
     // spans the response body and cut long replies off mid-stream (see
     // crate::providers::stream_client).
+    let pass = crate::net::allow(Purpose::Chat, "", &ollama_url(""))?;
     let mut resp = crate::providers::stream_client()
         .post(ollama_url("/api/chat"))
         .json(&body)
         .send()
         .await
         .map_err(|e| format!("Ollama /api/chat request failed: {e}"))?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!("Ollama /api/chat returned {}", resp.status()));
     }
@@ -690,6 +721,12 @@ pub(crate) async fn ollama_pull(
     let token = crate::providers::register_cancel(&request_id);
     let cancel = token.flag.clone();
 
+    // A pull makes Ollama download the model from its own registry: that is
+    // a connection off this Mac even when Ollama runs here, so it goes in
+    // the record — and the offline lock refuses it. (What Ollama fetches on
+    // its own, outside a pull Ekorbia asked for, the gate cannot see.)
+    let download = crate::net::allow_host(Purpose::ModelDownload, &model, OLLAMA_REGISTRY_HOST)?;
+    let pass = crate::net::allow(Purpose::Server, "", &ollama_url(""))?;
     let mut resp = ollama_client()
         .post(ollama_url("/api/pull"))
         // Total-request timeout override — see module comment above.
@@ -698,6 +735,7 @@ pub(crate) async fn ollama_pull(
         .send()
         .await
         .map_err(|e| format!("Ollama /api/pull request failed: {e}"))?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!("Ollama /api/pull returned {}", resp.status()));
     }
@@ -716,6 +754,7 @@ pub(crate) async fn ollama_pull(
         // while Ollama kept downloading in the background. The mocked tests
         // never caught it because they don't stream a real HTTP body.
         if cancel.load(Ordering::Relaxed) {
+            download.stopped(0);
             return Ok(());
         }
         let next = resp
@@ -745,11 +784,13 @@ pub(crate) async fn ollama_pull(
                 // Channel send failure = JS handle dropped. Graceful cancel,
                 // same contract as the chat stream.
                 if on_progress.send(obj).is_err() {
+                    download.stopped(0);
                     return Ok(());
                 }
             }
         }
     }
+    download.done(0);
 
     // Flush a final partial line, mirroring ollama_chat_stream.
     if !buf.is_empty() {
@@ -778,12 +819,14 @@ pub(crate) fn ollama_pull_cancel(request_id: String) {
 /// Same dual-key body hedge as `pull_request_body`.
 #[tauri::command]
 pub(crate) async fn ollama_delete(model: String) -> Result<(), String> {
+    let pass = crate::net::allow(Purpose::Server, "", &ollama_url(""))?;
     let resp = ollama_client()
         .delete(ollama_url("/api/delete"))
         .json(&serde_json::json!({ "model": &model, "name": &model }))
         .send()
         .await
         .map_err(|e| format!("Ollama /api/delete request failed: {e}"))?;
+    pass.done(0);
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Err(format!("Model `{model}` is not pulled, nothing to delete"));
     }

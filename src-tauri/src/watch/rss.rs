@@ -23,6 +23,8 @@ const RSS_FOLLOW_LINK_THRESHOLD: usize = 200;
 /// header that nudges servers toward feed content types — most feed hosts
 /// honour it; ones that don't still return XML at the URL.
 pub(crate) async fn fetch_rss_feed(url: &str) -> Result<feed_rs::model::Feed, String> {
+    // Ask the gate (net.rs): refused while the offline lock is on.
+    let pass = crate::net::allow(crate::net::Purpose::WatchFeed, "", url)?;
     let resp = http_client()
         .get(url)
         .header(
@@ -39,6 +41,7 @@ pub(crate) async fn fetch_rss_feed(url: &str) -> Result<feed_rs::model::Feed, St
         .bytes()
         .await
         .map_err(|e| format!("Read feed body from {url}: {e}"))?;
+    pass.done(bytes.len() as u64);
     if bytes.len() > RSS_MAX_BODY_BYTES {
         return Err(format!(
             "Feed too large ({} bytes; cap is {RSS_MAX_BODY_BYTES} bytes)",

@@ -220,6 +220,18 @@ async fn download_file(
     }
     let partial = dir.join(format!("{dest}.partial"));
 
+    // Ask the gate (net.rs) before connecting: with the offline lock on this
+    // returns Err and nothing is fetched. The model's id is the detail, so
+    // a model and its image reader count as one download in the record.
+    let model_id = dest
+        .trim_end_matches(".gguf")
+        .trim_end_matches(".mmproj")
+        .to_string();
+    let pass = crate::net::allow(crate::net::Purpose::ModelDownload, &model_id, url)?;
+    // Bytes fetched by THIS attempt (a resumed download fetches less than
+    // the file's size).
+    let mut fetched: u64 = 0;
+
     // Resume bookkeeping: hash whatever is already on disk so the
     // running sha256 stays truthful, then ask for the remainder.
     let mut hasher = sha2::Sha256::new();
@@ -277,6 +289,7 @@ async fn download_file(
         if cancel.load(Ordering::Relaxed) {
             // Keep .partial — that's what makes resume work.
             let _ = file.flush();
+            pass.stopped(fetched);
             return Ok(FileOutcome::Cancelled);
         }
         let next = resp
@@ -291,6 +304,7 @@ async fn download_file(
             .map_err(|e| format!("write failed: {e}"))?;
         hasher.update(&bytes);
         completed += bytes.len() as u64;
+        fetched += bytes.len() as u64;
         if !send_progress(
             on_progress,
             dest,
@@ -299,6 +313,7 @@ async fn download_file(
             completed,
         ) {
             let _ = file.flush();
+            pass.stopped(fetched);
             return Ok(FileOutcome::Cancelled);
         }
     }
@@ -317,6 +332,13 @@ async fn download_file(
         }
     }
     std::fs::rename(&partial, &final_path).map_err(|e| format!("finalize failed: {e}"))?;
+    // "Verified" = it matched a published checksum; a model added from a
+    // bare link has none to match, so it is only "done".
+    if expected_sha.is_empty() {
+        pass.done(fetched);
+    } else {
+        pass.verified(fetched);
+    }
     Ok(FileOutcome::Done)
 }
 
@@ -535,6 +557,7 @@ fn parse_hf_tree(entries: Vec<HfTreeEntry>) -> Result<HfListing, String> {
 
 async fn fetch_hf_gguf(repo: &str) -> Result<HfListing, String> {
     let url = format!("https://huggingface.co/api/models/{repo}/tree/main?recursive=true");
+    let pass = crate::net::allow(crate::net::Purpose::ModelLookup, "", &url)?;
     let resp = dl_client()
         .get(&url)
         .header("User-Agent", "Ekorbia")
@@ -556,6 +579,7 @@ async fn fetch_hf_gguf(repo: &str) -> Result<HfListing, String> {
         .json()
         .await
         .map_err(|e| format!("Couldn't read the repo file list: {e}"))?;
+    pass.done(0);
     parse_hf_tree(entries)
 }
 

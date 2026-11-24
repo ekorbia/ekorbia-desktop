@@ -759,7 +759,7 @@ function ModelsSettings({ defaultModel = "", onDefaultModel, spaces = [], onOpen
 //
 //   defaultModel / onDefaultModel — the app-wide model (main.jsx owns it)
 //   spaces                        — to say which workspaces use a model
-function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onClearAllChats, defaultModel = "", onDefaultModel, spaces = [], templates = [], onSaveTemplate, onDeleteTemplate, onDuplicateTemplate, onToggleTemplateStar }) {
+function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onClearAllChats, defaultModel = "", onDefaultModel, spaces = [], templates = [], onSaveTemplate, onDeleteTemplate, onDuplicateTemplate, onToggleTemplateStar, backendKind = "engine", backendBaseUrl = null, nameOfModel, modelLabels = {} }) {
   const [open, setOpen] = useState(false);
   // Danger-zone state. Confirm modal sits above the settings modal at
   // zIndex 9999 (settings is 9998), so opening it while settings is up
@@ -1077,6 +1077,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
             // Shortcuts: Quick Query is macOS+Windows; dictation + screenshot
             // are macOS-only — nothing to show on Linux.
             ...(!IS_LINUX ? [{ id: "hotkeys", label: "Shortcuts" }] : []),
+            { id: "privacy", label: "Privacy" },
             { id: "advanced", label: "Advanced" },
           ].map(({ id, label }) => (
             <button
@@ -1443,6 +1444,15 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               onToggleStar={onToggleTemplateStar}
               onChanged={onPromptsChanged}
               openRequest={templateRequest}
+            />
+          )}
+
+          {activeTab === "privacy" && (
+            <PrivacySettings
+              backendKind={backendKind}
+              baseUrl={backendBaseUrl}
+              nameOfModel={nameOfModel}
+              modelLabels={modelLabels}
             />
           )}
 

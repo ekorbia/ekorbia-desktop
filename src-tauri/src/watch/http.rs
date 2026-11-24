@@ -78,6 +78,9 @@ pub(crate) async fn fetch_url_html_with_timeout(
 }
 
 async fn fetch_url_html_inner(url: &str, timeout_secs: Option<u64>) -> Result<String, String> {
+    // Ask the gate (net.rs): refused while the offline lock is on. No detail
+    // is recorded — which page a Watch follows is the person's business.
+    let pass = crate::net::allow(crate::net::Purpose::WatchPage, "", url)?;
     let mut req = http_client().get(url);
     if let Some(secs) = timeout_secs {
         req = req.timeout(Duration::from_secs(secs));
@@ -93,6 +96,7 @@ async fn fetch_url_html_inner(url: &str, timeout_secs: Option<u64>) -> Result<St
         .bytes()
         .await
         .map_err(|e| format!("Read body from {url}: {e}"))?;
+    pass.done(bytes.len() as u64);
     if bytes.len() > PAGE_MAX_BODY_BYTES {
         return Err(format!(
             "Page too large ({} bytes; cap is {PAGE_MAX_BODY_BYTES} bytes)",

@@ -64,6 +64,12 @@ fn url(cfg: &EndpointCfg, path: &str) -> String {
     format!("{}{}", cfg.base_url, path)
 }
 
+// Every request below asks the gate (net.rs) first. This adapter serves both
+// the built-in engine (on this Mac — the gate passes it and records nothing)
+// and a custom server, which may be another machine: then the gate records
+// the connection, or refuses it while the offline lock is on.
+use crate::net::Purpose;
+
 fn with_auth(rb: reqwest::RequestBuilder, cfg: &EndpointCfg) -> reqwest::RequestBuilder {
     match &cfg.api_key {
         Some(k) if !k.is_empty() => rb.bearer_auth(k),
@@ -472,11 +478,13 @@ fn normalize_complete_call(c: &Value) -> Option<Value> {
 /// GET /v1/models, shape-mapped to Ollama's `{ models: [{name, model}] }`
 /// so every UI consumer of `llm_list_models` stays payload-stable.
 pub(crate) async fn list_models(cfg: &EndpointCfg) -> Result<Value, String> {
+    let pass = crate::net::allow(Purpose::Server, "", &cfg.base_url)?;
     let resp = with_auth(client().get(url(cfg, "/v1/models")), cfg)
         .timeout(Duration::from_secs(3))
         .send()
         .await
         .map_err(|e| format!("Endpoint /v1/models request failed: {e}"))?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!("Endpoint /v1/models returned {}", resp.status()));
     }
@@ -519,11 +527,13 @@ pub(crate) async fn warmup(cfg: &EndpointCfg, body: Value) -> Result<(), String>
         "max_tokens": 1,
         "stream": false,
     });
+    let pass = crate::net::allow(Purpose::Server, "", &cfg.base_url)?;
     let resp = with_auth(client().post(url(cfg, "/v1/chat/completions")), cfg)
         .json(&req)
         .send()
         .await
         .map_err(|e| format!("Endpoint warm-up request failed: {e}"))?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!("Endpoint warm-up returned {}", resp.status()));
     }
@@ -565,11 +575,13 @@ pub(crate) async fn chat(
         ],
         "stream": false,
     });
+    let pass = crate::net::allow(Purpose::Chat, "", &cfg.base_url)?;
     let resp = with_auth(client().post(url(cfg, "/v1/chat/completions")), cfg)
         .json(&req)
         .send()
         .await
         .map_err(|e| format!("Endpoint request failed: {e}"))?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!("Endpoint returned HTTP {}", resp.status()));
     }
@@ -594,11 +606,13 @@ pub(crate) async fn embed(
         return Ok(Vec::new());
     }
     let req = json!({ "model": model, "input": texts });
+    let pass = crate::net::allow(Purpose::Documents, "", &cfg.base_url)?;
     let resp = with_auth(client().post(url(cfg, "/v1/embeddings")), cfg)
         .json(&req)
         .send()
         .await
         .map_err(|e| format!("Endpoint embed request failed: {e}"))?;
+    pass.done(0);
     if !resp.status().is_success() {
         return Err(format!(
             "Endpoint /v1/embeddings returned {} (model `{model}` may not be available)",
@@ -644,6 +658,7 @@ pub(crate) async fn chat_stream(
     let translated = translate_chat_body(&body);
     // stream_client, NOT client(): the latter's 120 s TOTAL timeout cut long
     // replies off mid-stream (see crate::providers::stream_client).
+    let pass = crate::net::allow(Purpose::Chat, "", &cfg.base_url)?;
     let resp = with_auth(
         crate::providers::stream_client().post(url(cfg, "/v1/chat/completions")),
         cfg,
@@ -652,6 +667,9 @@ pub(crate) async fn chat_stream(
     .send()
     .await
     .map_err(|e| format!("Endpoint /v1/chat/completions request failed: {e}"))?;
+    // The chat has left this Mac once the request is accepted, however the
+    // reply then goes.
+    pass.done(0);
     if !resp.status().is_success() {
         let status = resp.status();
         // Error bodies usually carry a useful message — surface it.
@@ -789,6 +807,7 @@ pub(crate) async fn llama_server_count_prompt_tokens(
     // Short timeout: this runs while the user waits on Enter, and failure
     // is harmless (the UI just sends without the check).
     let timeout = Duration::from_secs(10);
+    let pass = crate::net::allow(Purpose::Server, "", &cfg.base_url)?;
     let tpl: Value = with_auth(client().post(url(cfg, "/apply-template")), cfg)
         .timeout(timeout)
         .json(&tpl_req)
@@ -800,10 +819,12 @@ pub(crate) async fn llama_server_count_prompt_tokens(
         .json()
         .await
         .map_err(|e| format!("apply-template: bad JSON: {e}"))?;
+    pass.done(0);
     let prompt = tpl
         .get("prompt")
         .and_then(|p| p.as_str())
         .ok_or("apply-template: no prompt in response")?;
+    let pass = crate::net::allow(Purpose::Server, "", &cfg.base_url)?;
     let tok: Value = with_auth(client().post(url(cfg, "/tokenize")), cfg)
         .timeout(timeout)
         .json(&json!({ "content": prompt, "add_special": true }))
@@ -815,6 +836,7 @@ pub(crate) async fn llama_server_count_prompt_tokens(
         .json()
         .await
         .map_err(|e| format!("tokenize: bad JSON: {e}"))?;
+    pass.done(0);
     let n = tok
         .get("tokens")
         .and_then(|t| t.as_array())
