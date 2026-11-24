@@ -43,6 +43,13 @@ function HomeScreen({
   pinsBySpace = {},
   // The app-wide model id, so a card can say when a workspace uses another.
   defaultModelId = "",
+  // (id) → the model's plain name, for that tag. Omitted, the id is shown.
+  modelName,
+  // For the settings dialog's model list (see SpaceSettingsModal).
+  nameOfModel,
+  appDefaultName = "",
+  // { [spaceId]: { documents, capped } } — pinned documents, counted by Rust.
+  docCounts = {},
   query = "",
   onQuery,
   messageHits = [],
@@ -200,7 +207,7 @@ function HomeScreen({
               title="This workspace uses its own model"
               style={{ flexShrink: 0, maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, fontWeight: 500, color: T.amber, background: T.amber + "1f", borderRadius: 999, padding: "2px 8px" }}
             >
-              {otherModel}
+              {modelName ? modelName(otherModel) : otherModel}
             </span>
           )}
           {!general && (
@@ -232,6 +239,13 @@ function HomeScreen({
               : "No documents yet"}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 16, paddingTop: 11, borderTop: `1px solid ${T.border}`, fontSize: 12, color: T.fg1 }}>
+          {!general && docCounts[id] && docCounts[id].documents > 0 && (
+            <span data-workspace-card-doc-count>
+              {docCounts[id].capped
+                ? `${docCounts[id].documents}+ documents`
+                : documentsLabel(docCounts[id].documents)}
+            </span>
+          )}
           <span data-workspace-card-chats>{sum.chats === 1 ? "1 chat" : `${sum.chats} chats`}</span>
           <span style={{ flex: 1 }} />
           <span style={{ color: T.fg3 }}>{homeWhenLabel(sum.lastActive)}</span>
@@ -482,6 +496,10 @@ function HomeScreen({
         <SpaceSettingsModal
           space={editModal.space}
           promptsLibrary={promptsLibrary}
+          nameOfModel={nameOfModel}
+          appDefaultName={appDefaultName}
+          documentCount={docCounts[editModal.space.id] || null}
+          onDelete={() => { const sp = editModal.space; setEditModal(null); setConfirmDelete({ space: sp }); }}
           onCancel={() => setEditModal(null)}
           onSave={async (draft) => {
             const s = editModal.space;

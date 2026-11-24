@@ -37,6 +37,16 @@ async function mountModal(page, opts = {}) {
     // Wire __TAURI__.core.invoke to a recording mock keyed by command.
     window.__SETTINGS_INVOKES = [];
     const responses = opts.responses || {};
+    // What Rust answers when the notes are saved. A function cannot be
+    // passed into the page, so the behaviour is named: "echo" answers with
+    // the path it was given, "fail" throws, anything else is the path Rust
+    // chose.
+    if (opts.notesWrite) {
+      responses.space_memory_write = (a) => {
+        if (opts.notesWrite === "fail") throw new Error("disk full");
+        return opts.notesWrite === "echo" ? a.path : opts.notesWrite;
+      };
+    }
     const invokeFn = async (cmd, args) => {
       window.__SETTINGS_INVOKES.push({ cmd, args });
       if (typeof responses[cmd] === "function") return responses[cmd](args);
@@ -80,6 +90,8 @@ async function mountModal(page, opts = {}) {
         ],
         onCancel: () => { window.__CANCELLED++; },
         onSave: (draft) => { window.__SAVE_DRAFTS.push(draft); },
+        documentCount: opts.documentCount || null,
+        ...(opts.withDelete ? { onDelete: () => { window.__DELETE_ASKED = (window.__DELETE_ASKED || 0) + 1; } } : {}),
       })
     );
     window.__TEST_ROOT = root;
@@ -110,12 +122,9 @@ test("modal: pre-fills name + default model + memory path from space", async ({ 
     .toContainText("/novel/memory.md");
 });
 
-test("modal: pre-selects the current color swatch", async ({ page }) => {
+test("modal: a workspace has no colour picker", async ({ page }) => {
   await mountModal(page);
-  await expect(page.locator('[data-space-settings-modal] [data-color-swatch="amber"]'))
-    .toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator('[data-space-settings-modal] [data-color-swatch="blue"]'))
-    .toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator("[data-space-settings-modal] [data-color-swatch]")).toHaveCount(0);
 });
 
 test("modal: fetches pinned prompts + pinned attachments on mount", async ({ page }) => {
@@ -146,7 +155,7 @@ test("modal: fetches pinned prompts + pinned attachments on mount", async ({ pag
 
 test("modal: default-model dropdown is populated from llm_list_models", async ({ page }) => {
   // Replaces the old free-text input — installed Ollama models surface
-  // as <option>s. The list is alphabetised; "Inherit global default"
+  // as <option>s. The list is alphabetised; "App default"
   // (value="") is always present at the top.
   await mountModal(page, {
     responses: {
@@ -172,8 +181,8 @@ test("modal: default-model dropdown is populated from llm_list_models", async ({
   });
 
   const select = page.locator("[data-space-settings-default-model]");
-  // "Inherit global default" option exists with empty value.
-  await expect(select.locator('option[value=""]')).toHaveText(/Inherit global default/);
+  // "App default" option exists with empty value.
+  await expect(select.locator('option[value=""]')).toHaveText(/App default/);
   // Every installed model gets its own option.
   await expect(select.locator('option[value="llama3:70b"]')).toHaveCount(1);
   await expect(select.locator('option[value="gemma4:latest"]')).toHaveCount(1);
@@ -225,7 +234,7 @@ test("modal: saved defaultModel that isn't installed renders as '(not installed)
   await expect(notInstalled).toContainText("not installed");
 });
 
-test("modal: selecting 'Inherit global default' clears the saved value on Save", async ({ page }) => {
+test("modal: selecting 'App default' clears the saved value on Save", async ({ page }) => {
   // The empty-value option round-trips as null on Save (defaultModel
   // is `.trim() || null` in the modal's handleSave) so the row's
   // memory_path-style stale value isn't held forever.
@@ -580,7 +589,6 @@ test("modal: Save dispatches onSave with the edited draft", async ({ page }) => 
   // attachment. (The system-prompt textarea is gone — replaced by
   // locked pinned prompts.)
   await page.locator("[data-space-settings-name]").fill("Novel Draft");
-  await page.locator('[data-space-settings-modal] [data-color-swatch="green"]').click();
   await page.locator('[data-prompt-toggle="brainstorm"]').click(); // add brainstorm
   await page.locator('[data-attachment-remove="0"]').click(); // remove /notes
 
@@ -590,7 +598,8 @@ test("modal: Save dispatches onSave with the edited draft", async ({ page }) => 
   expect(drafts).toHaveLength(1);
   const d = drafts[0];
   expect(d.row.name).toBe("Novel Draft");
-  expect(d.row.color).toBe("green");
+  // A colour set before workspaces lost their picker stays on the row.
+  expect(d.row.color).toBe("amber");
   // The row payload no longer carries systemPrompt — the field is gone.
   expect(d.row.systemPrompt).toBeUndefined();
   // Memory path round-trips untouched (we didn't edit it).
@@ -635,24 +644,101 @@ test("modal: Esc dismisses", async ({ page }) => {
 
 // ── Memory clear ─────────────────────────────────────────────────────────
 
-test("modal: Clear blanks the memory path display", async ({ page }) => {
-  await mountModal(page);
-  await page.locator("[data-space-memory-clear]").click();
-  // Path display falls back to the "(no memory file set)" placeholder.
-  await expect(page.locator("[data-space-settings-memory-path]"))
-    .toContainText("(no memory file set)");
-  // Reveal + Clear get disabled when there's no path.
-  await expect(page.locator("[data-space-memory-reveal]")).toBeDisabled();
-  await expect(page.locator("[data-space-memory-clear]")).toBeDisabled();
+test("notes: the workspace's notes file is loaded into the box", async ({ page }) => {
+  await mountModal(page, {
+    responses: { space_memory_read: "We act for the buyer.\nUse British spelling." },
+  });
+  await expect(page.locator("[data-space-settings-notes]")).toHaveValue("We act for the buyer.\nUse British spelling.");
+  // The old path-and-buttons controls are gone.
+  await expect(page.locator("[data-space-memory-browse], [data-space-memory-edit], [data-space-memory-clear]")).toHaveCount(0);
+  const reads = await page.evaluate(() => window.__SETTINGS_INVOKES.filter((i) => i.cmd === "space_memory_read"));
+  expect(reads).toHaveLength(1);
+  expect(reads[0].args.path).toContain("/novel/memory.md");
 });
 
-test("modal: Cleared memory path round-trips as null on Save", async ({ page }) => {
-  await mountModal(page);
-  await page.locator("[data-space-memory-clear]").click();
+test("notes: edited notes are written before the workspace is saved", async ({ page }) => {
+  await mountModal(page, {
+    responses: { space_memory_read: "Old notes." },
+    notesWrite: "echo",
+  });
+  await page.locator("[data-space-settings-notes]").fill("New notes.");
   await page.locator("[data-space-settings-save]").click();
+  await expect.poll(() => page.evaluate(() => window.__SAVE_DRAFTS.length)).toBe(1);
+  const writes = await page.evaluate(() => window.__SETTINGS_INVOKES.filter((i) => i.cmd === "space_memory_write").map((i) => i.args));
+  expect(writes).toHaveLength(1);
+  expect(writes[0].contents).toBe("New notes.");
+  expect(writes[0].slug).toBe("novel");
+  expect(writes[0].path).toContain("/novel/memory.md");
   const drafts = await page.evaluate(() => window.__SAVE_DRAFTS);
-  expect(drafts).toHaveLength(1);
-  // `null` rather than empty string so the Rust side knows to drop the
-  // memory_path column (memoryPath: "" → null via .trim() || null).
-  expect(drafts[0].row.memoryPath).toBeNull();
+  expect(drafts[0].row.memoryPath).toContain("/novel/memory.md");
+});
+
+test("notes: untouched notes are not rewritten", async ({ page }) => {
+  await mountModal(page, { responses: { space_memory_read: "Old notes." } });
+  await page.locator("[data-space-settings-name]").fill("Renamed");
+  await page.locator("[data-space-settings-save]").click();
+  await expect.poll(() => page.evaluate(() => window.__SAVE_DRAFTS.length)).toBe(1);
+  const writes = await page.evaluate(() => window.__SETTINGS_INVOKES.filter((i) => i.cmd === "space_memory_write"));
+  expect(writes).toEqual([]);
+});
+
+test("notes: a workspace with no notes file gets one the first time notes are saved", async ({ page }) => {
+  await mountModal(page, {
+    space: { id: "s9", name: "Fresh", slug: "fresh", color: null, defaultModel: null, memoryPath: null, sortIndex: 0, createdAt: 1, updatedAt: 1 },
+    // Rust picks the place and answers with it.
+    notesWrite: "/Users/me/Documents/Ekorbia/Spaces/fresh/memory.md",
+  });
+  // Nothing to read, and no "kept in" line yet.
+  await expect(page.locator("[data-space-settings-memory-path]")).toHaveCount(0);
+  await page.locator("[data-space-settings-notes]").fill("We act for the seller.");
+  await page.locator("[data-space-settings-save]").click();
+  await expect.poll(() => page.evaluate(() => window.__SAVE_DRAFTS.length)).toBe(1);
+  const invokes = await page.evaluate(() => window.__SETTINGS_INVOKES.map((i) => [i.cmd, i.args && i.args.path, i.args && i.args.slug]));
+  expect(invokes.filter((i) => i[0] === "space_memory_read")).toEqual([]);
+  expect(invokes.filter((i) => i[0] === "space_memory_write")).toEqual([["space_memory_write", "", "fresh"]]);
+  const drafts = await page.evaluate(() => window.__SAVE_DRAFTS);
+  expect(drafts[0].row.memoryPath).toBe("/Users/me/Documents/Ekorbia/Spaces/fresh/memory.md");
+});
+
+test("notes: leaving them empty on a workspace with no file writes nothing", async ({ page }) => {
+  await mountModal(page, {
+    space: { id: "s9", name: "Fresh", slug: "fresh", color: null, defaultModel: null, memoryPath: null, sortIndex: 0, createdAt: 1, updatedAt: 1 },
+  });
+  await page.locator("[data-space-settings-notes]").fill("typed then removed");
+  await page.locator("[data-space-settings-notes]").fill("");
+  await page.locator("[data-space-settings-save]").click();
+  await expect.poll(() => page.evaluate(() => window.__SAVE_DRAFTS.length)).toBe(1);
+  const writes = await page.evaluate(() => window.__SETTINGS_INVOKES.filter((i) => i.cmd === "space_memory_write"));
+  expect(writes).toEqual([]);
+  expect((await page.evaluate(() => window.__SAVE_DRAFTS))[0].row.memoryPath).toBeNull();
+});
+
+test("notes: if they cannot be written, the dialog stays open and nothing is saved", async ({ page }) => {
+  await mountModal(page, {
+    responses: { space_memory_read: "Old notes." },
+    notesWrite: "fail",
+  });
+  await page.locator("[data-space-settings-notes]").fill("New notes.");
+  await page.locator("[data-space-settings-save]").click();
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.__SAVE_DRAFTS)).toEqual([]);
+  await expect(page.locator("[data-space-settings-modal]")).toBeVisible();
+  await expect(page.locator("[data-space-settings-notes]")).toHaveValue("New notes.");
+});
+
+test("documents: the dialog says how many documents the pins hold", async ({ page }) => {
+  await mountModal(page, { documentCount: { documents: 212, capped: false } });
+  await expect(page.locator("[data-space-settings-doc-count]")).toHaveText("212 documents found.");
+  await mountModal(page, { documentCount: { documents: 5000, capped: true } });
+  await expect(page.locator("[data-space-settings-doc-count]")).toHaveText("More than 5000 documents found.");
+  await mountModal(page);
+  await expect(page.locator("[data-space-settings-doc-count]")).toHaveCount(0);
+});
+
+test("Delete workspace asks the host, and is only offered when the host can delete", async ({ page }) => {
+  await mountModal(page);
+  await expect(page.locator("[data-space-settings-delete]")).toHaveCount(0);
+  await mountModal(page, { withDelete: true });
+  await page.locator("[data-space-settings-delete]").click();
+  expect(await page.evaluate(() => window.__DELETE_ASKED)).toBe(1);
 });

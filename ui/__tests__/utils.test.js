@@ -68,6 +68,11 @@ const {
   nextTabInWorkspace,
   privacyStatus,
   workspaceDocsLabel,
+  MODEL_TIER_INFO,
+  modelTiers,
+  describeModel,
+  chatDocumentCount,
+  documentsLabel,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -1990,5 +1995,75 @@ test("workspaceDocsLabel: the folder's last two segments, else a file count", ()
   assert.equal(workspaceDocsLabel([{ kind: "file", path: "/a" }, { kind: "file", path: "/b" }]), "2 files");
   assert.equal(workspaceDocsLabel([]), "");
   assert.equal(workspaceDocsLabel(null), "");
+});
+
+// ── Plain model names ───────────────────────────────────────────────────────
+
+const GIB = 1024 * 1024 * 1024;
+const tierIds = (t) => [t.fast && t.fast.id, t.balanced && t.balanced.id, t.capable && t.capable.id];
+
+test("modelTiers: the three largest suggestable models that fit, over the REAL catalog", () => {
+  assert.deepEqual(tierIds(modelTiers(REAL_CATALOG, 36 * GIB)), ["gemma4-e4b", "gemma4-12b", "gemma4-26b-a4b"]);
+  assert.deepEqual(tierIds(modelTiers(REAL_CATALOG, 64 * GIB)), ["gemma4-e4b", "gemma4-12b", "gemma4-26b-a4b"]);
+  assert.deepEqual(tierIds(modelTiers(REAL_CATALOG, 16 * GIB)), ["gemma4-e2b", "gemma4-e4b", "gemma4-12b"]);
+  // Two fit: there is no middle to call Balanced.
+  assert.deepEqual(tierIds(modelTiers(REAL_CATALOG, 8 * GIB)), ["gemma4-e2b", null, "gemma4-e4b"]);
+  // Nothing fits: the smallest is offered anyway, as first run does.
+  assert.deepEqual(tierIds(modelTiers(REAL_CATALOG, 4 * GIB)), [null, "gemma4-e2b", null]);
+});
+
+test("modelTiers: the largest tier is the model first run would install", () => {
+  for (const gb of [8, 16, 24, 32, 36, 48, 64, 128]) {
+    const t = modelTiers(REAL_CATALOG, gb * GIB);
+    const top = t.capable || t.balanced;
+    assert.equal(top.id, recommendEngineModel(REAL_CATALOG, gb * GIB).id, `${gb} GB`);
+  }
+});
+
+test("modelTiers: models outside the suggestable ladder are never a tier", () => {
+  for (const gb of [8, 16, 32, 36, 64]) {
+    for (const id of tierIds(modelTiers(REAL_CATALOG, gb * GIB))) {
+      if (!id) continue;
+      const entry = REAL_CATALOG.find((m) => m.id === id);
+      assert.notEqual(entry.suggest, false, `${id} at ${gb} GB`);
+      assert.equal(entry.purpose, "chat");
+    }
+  }
+});
+
+test("modelTiers: unknown memory stops at the catalog's recommended model; junk input is empty", () => {
+  assert.deepEqual(tierIds(modelTiers(REAL_CATALOG, 0)), ["gemma4-e2b", "gemma4-e4b", "gemma4-12b"]);
+  assert.deepEqual(tierIds(modelTiers([], 16 * GIB)), [null, null, null]);
+  assert.deepEqual(tierIds(modelTiers(null, 16 * GIB)), [null, null, null]);
+});
+
+test("describeModel: a tier gets its plain name, with the catalog name as detail", () => {
+  const tiers = modelTiers(REAL_CATALOG, 36 * GIB);
+  assert.deepEqual(describeModel("gemma4-12b", tiers, REAL_CATALOG), {
+    id: "gemma4-12b", tier: "balanced", name: "Balanced", detail: "Gemma 4 12B",
+  });
+  assert.equal(describeModel("gemma4-26b-a4b", tiers, REAL_CATALOG).name, MODEL_TIER_INFO.capable.name);
+  // In the catalog but not a tier on this Mac: its catalog name.
+  assert.deepEqual(describeModel("gemma4-31b", tiers, REAL_CATALOG), {
+    id: "gemma4-31b", tier: null, name: "Gemma 4 31B", detail: "",
+  });
+  // Not in the catalog (an Ollama tag, a model from a link): shown as it is.
+  assert.equal(describeModel("llama3.3:70b", tiers, REAL_CATALOG).name, "llama3.3:70b");
+  assert.equal(describeModel("gemma4-12b", null, null).name, "gemma4-12b");
+  assert.equal(describeModel(null, tiers, REAL_CATALOG).name, "");
+});
+
+test("chatDocumentCount: every file in a folder, plus each single file", () => {
+  assert.equal(chatDocumentCount([
+    { kind: "folder", fileCount: 14 },
+    { kind: "text" },
+    { kind: "image" },
+    { kind: "folder" },           // still being walked: no count yet
+  ]), 16);
+  assert.equal(chatDocumentCount([]), 0);
+  assert.equal(chatDocumentCount(null), 0);
+  assert.equal(documentsLabel(1), "1 document");
+  assert.equal(documentsLabel(14), "14 documents");
+  assert.equal(documentsLabel(0), "0 documents");
 });
 

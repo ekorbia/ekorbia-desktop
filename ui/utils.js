@@ -684,6 +684,93 @@ function recommendEngineModel(catalog, ramBytes) {
   });
 }
 
+// ── Plain model names (main.jsx, settings.jsx, shell.jsx, compare-chat.jsx) ─
+//
+// The interface names models by what they are for, not by their ids: Fast,
+// Balanced, Most capable. The three are the top of the catalog's
+// suggestable ladder (the same `suggest !== false` chat models first run
+// chooses from) that fit this Mac's memory, by the same "minRamGb fits"
+// rule as recommendEngineModel — so the largest tier is always the model
+// first run would install. Catalog-driven on purpose: no second table of
+// ids to keep in step with catalog.json.
+//
+//   3 or more fit → fast, balanced, capable = the three largest
+//   2 fit         → fast, capable
+//   1 fits        → balanced
+//   memory unknown → the ladder up to the catalog's `recommended` entry
+//
+// Returns { fast, balanced, capable }, each a catalog entry or null.
+const MODEL_TIER_INFO = {
+  fast: { name: 'Fast', blurb: 'Quick replies for emails and short summaries.' },
+  balanced: { name: 'Balanced', blurb: 'Good answers at a comfortable speed.' },
+  capable: { name: 'Most capable', blurb: 'Best on long, difficult documents. Slower.' },
+};
+const MODEL_TIER_ORDER = ['fast', 'balanced', 'capable'];
+
+function modelTiers(catalog, ramBytes) {
+  const out = { fast: null, balanced: null, capable: null };
+  const ladder = (Array.isArray(catalog) ? catalog : [])
+    .filter((m) => m && m.purpose === 'chat' && m.suggest !== false)
+    .slice()
+    .sort((a, b) => a.minRamGb - b.minRamGb || (a.totalBytes || 0) - (b.totalBytes || 0));
+  if (!ladder.length) return out;
+  let fits;
+  if (!ramBytes || ramBytes <= 0) {
+    const at = ladder.findIndex((m) => m.recommended);
+    fits = at >= 0 ? ladder.slice(0, at + 1) : ladder.slice(0, Math.ceil(ladder.length / 2));
+  } else {
+    const gib = ramBytes / (1024 * 1024 * 1024);
+    fits = ladder.filter((m) => m.minRamGb <= gib);
+    // Even the smallest wants more than there is: offer it anyway, as
+    // first run does.
+    if (!fits.length) fits = [ladder[0]];
+  }
+  const top = fits.slice(-3);
+  if (top.length >= 3) {
+    out.fast = top[0];
+    out.balanced = top[1];
+    out.capable = top[2];
+  } else if (top.length === 2) {
+    out.fast = top[0];
+    out.capable = top[1];
+  } else {
+    out.balanced = top[0];
+  }
+  return out;
+}
+
+// How to name a model id on screen. A tier model gets its plain name, with
+// the catalog's own name as the detail ("Balanced", "Gemma 4 12B"); any
+// other catalog model gets its catalog name; anything else (an Ollama tag,
+// a model added from a link) is shown as it is.
+function describeModel(id, tiers, catalog) {
+  const key = id ? String(id) : '';
+  for (const tier of MODEL_TIER_ORDER) {
+    const m = tiers && tiers[tier];
+    if (m && m.id === key) {
+      return { id: key, tier, name: MODEL_TIER_INFO[tier].name, detail: m.label || m.id };
+    }
+  }
+  const entry = (Array.isArray(catalog) ? catalog : []).find((m) => m && m.id === key);
+  return { id: key, tier: null, name: (entry && entry.label) || key, detail: '' };
+}
+
+// How many documents a chat has attached: every file in an indexed
+// folder, plus each single file. Images count as documents too.
+function chatDocumentCount(attachments) {
+  let n = 0;
+  for (const a of Array.isArray(attachments) ? attachments : []) {
+    if (!a) continue;
+    n += a.kind === 'folder' ? Math.max(0, Number(a.fileCount) || 0) : 1;
+  }
+  return n;
+}
+
+// "1 document" / "14 documents".
+function documentsLabel(n) {
+  return n === 1 ? '1 document' : `${n} documents`;
+}
+
 // ── Private chats end with the window (main.jsx) ───────────────────────────
 //
 // On macOS the main window's close button hides it (lib.rs) instead of
@@ -1753,6 +1840,12 @@ if (typeof window !== "undefined") {
   window.extractMathSegments = extractMathSegments;
   window.restoreMathSegments = restoreMathSegments;
   window.replyImageIsInline = replyImageIsInline;
+  window.MODEL_TIER_INFO = MODEL_TIER_INFO;
+  window.MODEL_TIER_ORDER = MODEL_TIER_ORDER;
+  window.modelTiers = modelTiers;
+  window.describeModel = describeModel;
+  window.chatDocumentCount = chatDocumentCount;
+  window.documentsLabel = documentsLabel;
   window.chatsInWorkspace = chatsInWorkspace;
   window.workspaceSummaries = workspaceSummaries;
   window.recentChatItems = recentChatItems;
@@ -1996,6 +2089,12 @@ if (typeof module !== "undefined" && module.exports) {
     restoreMathSegments,
     replyImageIsInline,
     externalLinkTarget,
+    MODEL_TIER_INFO,
+    MODEL_TIER_ORDER,
+    modelTiers,
+    describeModel,
+    chatDocumentCount,
+    documentsLabel,
     chatsInWorkspace,
     workspaceSummaries,
     recentChatItems,

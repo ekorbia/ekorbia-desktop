@@ -25,6 +25,13 @@ function seedWorkspaces() {
   R.space_get = (a) => R.space_list().find((s) => s.id === a.id);
   R.space_attachments_list = (a) =>
     a.spaceId === "s1" ? [{ id: "p1", spaceId: "s1", kind: "folder", path: "/Users/x/Matters/Hartwell" }] : [];
+  // What Rust counts in the pinned folder.
+  R.space_document_counts = () => [{ spaceId: "s1", documents: 14, capped: false }];
+  R.space_delete = (a) => {
+    window.__DELETED = (window.__DELETED || []).concat(a.id);
+    const rest = R.space_list().filter((sp) => sp.id !== a.id);
+    R.space_list = () => rest;
+  };
   window.__ROWS = [
     { id: "c1", title: "Notice periods", model: "gemma4-12b", spaceId: "s1", createdAt: now - 500, updatedAt: now - 100 },
     { id: "c2", title: "Chronology", model: "gemma4-12b", spaceId: "s1", createdAt: now - 900, updatedAt: now - 400 },
@@ -77,7 +84,8 @@ test("opening a workspace shows only its chats, with an unsent chat in front", a
   await openWorkspace(page, "s1");
   await expect(page.locator("[data-home]")).toHaveCount(0);
   await expect(page.locator("[data-workspace-name]")).toHaveText("Hartwell");
-  await expect(page.locator("[data-workspace-meta]")).toHaveText("Matters/Hartwell");
+  // How many documents it holds, then the model its chats use.
+  await expect(page.locator("[data-workspace-meta]")).toContainText("14 documents");
   await expect(chatRows(page)).toHaveCount(2);
   expect(await rowIds(page)).toEqual(["c1", "c2"]);
   // The unsent chat is listed above them and is the one in front.
@@ -287,3 +295,34 @@ test("the settings menu reaches Settings and the three panels", async ({ page })
   // The panel opens beside Home, on the tab asked for.
   await expect(page.getByTitle("Close panel")).toBeVisible();
 });
+
+test("a workspace's document count is shown on its card and in its sidebar", async ({ page }) => {
+  await openApp(page, seedWorkspaces);
+  const card = page.locator('[data-workspace-card][data-space-id="s1"]');
+  await expect(card.locator("[data-workspace-card-doc-count]")).toHaveText("14 documents");
+  // Nothing pinned, nothing counted.
+  await expect(page.locator('[data-space-id="s2"] [data-workspace-card-doc-count]')).toHaveCount(0);
+  await openWorkspace(page, "s1");
+  await expect(page.locator("[data-workspace-meta]")).toContainText("14 documents");
+});
+
+test("the + menu starts a screen capture", async ({ page }) => {
+  await openApp(page, seedWorkspaces);
+  await openWorkspace(page, "s1");
+  await page.locator("[data-composer-plus]").click();
+  await page.locator("[data-plus-capture]").click();
+  expect(await invoked(page, "screenshot_capture")).toHaveLength(1);
+});
+
+test("deleting a workspace from its settings goes back to Home", async ({ page }) => {
+  await openApp(page, seedWorkspaces);
+  await openWorkspace(page, "s2");
+  await page.locator("[data-workspace-settings]").click();
+  await page.locator("[data-space-settings-delete]").click();
+  await expect(page.getByText("Delete workspace?")).toBeVisible();
+  await page.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator("[data-home]")).toBeVisible();
+  expect(await page.evaluate(() => window.__DELETED)).toEqual(["s2"]);
+  await expect(page.locator('[data-workspace-card][data-space-id="s2"]')).toHaveCount(0);
+});
+

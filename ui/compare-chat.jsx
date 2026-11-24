@@ -41,6 +41,12 @@ function CompareChatPane({
   // Bundled engine's context window, so each column's per-message footer
   // can show input as a budget against it. Null on Ollama/BYO.
   engineCtx = null,
+  // (id) → { name, detail } — a model's plain name ("Balanced") and the
+  // catalog's ("Gemma 4 12B"). Omitted, columns are headed by the id.
+  nameOfModel,
+  // Token and speed figures under each column: only with "technical
+  // details" on. The column's head always shows the time taken.
+  showDetails = false,
 }) {
   const messages = chat?.messages || [];
   const models = chat?.models || [];
@@ -197,12 +203,15 @@ function CompareChatPane({
               onStop={() => message?.id && onStopColumn?.(message.id)}
               onKeep={() => message?.id && onKeep?.(message.id)}
               engineCtx={engineCtx}
+              label={nameOfModel ? nameOfModel(model) : null}
+              showDetails={showDetails}
             />
           ))}
         </div>
       )}
 
       <CompareComposer
+
         modelCount={models.length}
         // Compare-mode v1 = one user message per chat. Once it's sent,
         // the composer is locked until the user picks a winner (which
@@ -307,18 +316,22 @@ function CompareHeader({ chat, modelCount, isStreaming, onStopAll, onCancel }) {
       }}
     >
       <span
+        data-compare-badge
         style={{
-          fontFamily: T.mono,
-          fontSize: 10,
-          color: T.amber,
-          textTransform: "uppercase",
-          letterSpacing: 0.8,
-          padding: "2px 6px",
-          border: `1px solid ${T.amber}66`,
-          borderRadius: 4,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          fontFamily: T.sans,
+          fontSize: 12,
+          color: T.fg2,
+          padding: "2px 9px",
+          border: `1px solid ${T.border}`,
+          borderRadius: 999,
+          whiteSpace: "nowrap",
         }}
       >
-        Compare {modelCount}
+        <I.Columns size={12} />
+        Comparing {modelCount} models
       </span>
       <span
         style={{
@@ -449,7 +462,15 @@ function CompareEmptyState({ models }) {
   );
 }
 
-function CompareColumn({ model, message, onStop, onKeep, engineCtx = null }) {
+function CompareColumn({ model, message, onStop, onKeep, engineCtx = null, label = null, showDetails = false }) {
+  // The head names the model plainly and says how long it took — the one
+  // figure worth comparing at a glance.
+  const plainName = (label && label.name) || model;
+  const plainDetail = (label && label.detail) || "";
+  const tookMs = message && message.tokens && message.tokens.ms;
+  const took = tookMs > 0
+    ? (tookMs < 1500 ? "1 second" : `${Math.round(tookMs / 1000)} seconds`)
+    : "";
   // A column is "in flight" while its stream is still going. The
   // streaming flag rides on the in-memory message; the persisted row
   // never carries it (handleSendMultiModel clears it on finalize).
@@ -503,19 +524,31 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null }) {
         />
         <span
           style={{
-            fontFamily: T.mono,
-            fontSize: 11.5,
-            color: T.fg,
             flex: 1,
             minWidth: 0,
+            display: "flex",
+            alignItems: "baseline",
+            gap: 8,
             overflow: "hidden",
-            textOverflow: "ellipsis",
             whiteSpace: "nowrap",
+            fontFamily: T.sans,
           }}
           title={model}
         >
-          {model}
+          <span data-compare-model-name style={{ fontSize: 13, fontWeight: 600, color: T.fg }}>
+            {plainName}
+          </span>
+          {plainDetail && (
+            <span data-compare-model-detail style={{ fontSize: 12, color: T.fg2, overflow: "hidden", textOverflow: "ellipsis" }}>
+              {plainDetail}
+            </span>
+          )}
         </span>
+        {!streaming && took && (
+          <span data-compare-took style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, flexShrink: 0 }}>
+            {took}
+          </span>
+        )}
         {streaming && (
           <button
             onClick={onStop}
@@ -652,7 +685,7 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null }) {
             background: T.bg1,
           }}
         >
-          {message.tokens ? (
+          {message.tokens && showDetails ? (
             <span style={{ fontFamily: T.mono, fontSize: 10, flex: 1 }}>
               <TokenFooter tokens={message.tokens} engineCtx={engineCtx} />
             </span>
@@ -818,12 +851,11 @@ function CompareComposer({
         </div>
       )}
       <div
+        data-compare-hint
         style={{
-          fontFamily: T.mono,
-          fontSize: 10,
-          color: T.fg3,
-          textTransform: "uppercase",
-          letterSpacing: 0.6,
+          fontFamily: T.sans,
+          fontSize: 12,
+          color: T.fg2,
         }}
       >
         {hint}
@@ -838,7 +870,11 @@ function CompareComposer({
           placeholder={
             disabled
               ? "Composer locked — pick a column above"
-              : "Type your prompt…"
+              : modelCount === 2
+                ? "Ask both models"
+                : modelCount > 2
+                  ? `Ask all ${modelCount} models`
+                  : "Ask the models"
           }
           rows={2}
           style={{

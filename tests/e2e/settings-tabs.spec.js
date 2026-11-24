@@ -19,7 +19,7 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => window.__JSX_READY === true);
 });
 
-test("settings modal: new 6-tab layout renders", async ({ page }) => {
+test("settings: panes are listed down the left, technical settings under Advanced", async ({ page }) => {
   await page.evaluate(() => {
     // THEMES lives in main.jsx, which the component fixture doesn't load
     // (it mounts individual components, not the whole app). The theme
@@ -29,8 +29,14 @@ test("settings modal: new 6-tab layout renders", async ({ page }) => {
       one_dark: { label: "Midnight" },
       one_light: { label: "Daylight" },
     };
+    // The Advanced pane mounts the attachment settings, which ask Rust
+    // which search model is installed.
+    window.__INVOKE_RESPONSES.llm_embed_model_check = () => ({
+      model: "nomic-embed-text",
+      installed: true,
+    });
     window.__TEST_MOUNT("SettingsModal", {
-      tweaks: { theme: "one_dark", showStatusBar: true, showDetails: false },
+      tweaks: { theme: "one_dark", showDetails: false },
       setTweak: () => {},
       chatCount: 0,
     });
@@ -46,30 +52,96 @@ test("settings modal: new 6-tab layout renders", async ({ page }) => {
   });
 
   const root = page.locator("#test-root");
+  const nav = root.locator("[data-settings-nav]");
 
-  // Platform-invariant tabs are always present, in this order.
-  for (const label of ["General", "Backend", "Models", "Files"]) {
-    await expect(
-      root.getByRole("button", { name: label, exact: true }),
-    ).toBeVisible();
+  // Platform-invariant panes are always present, in this order.
+  for (const label of ["General", "Models", "Advanced"]) {
+    await expect(nav.getByRole("button", { name: label, exact: true })).toBeVisible();
+  }
+  // The tabs that named how the app is built are gone from the list.
+  for (const label of ["Backend", "Files", "Prompts", "Memory", "Attachments", "Voice", "Hotkeys"]) {
+    await expect(nav.getByRole("button", { name: label, exact: true })).toHaveCount(0);
   }
 
-  // The old standalone tabs are gone — their settings live under Files now.
-  for (const label of ["Prompts", "Memory", "Attachments"]) {
-    await expect(
-      root.getByRole("button", { name: label, exact: true }),
-    ).toHaveCount(0);
+  // General no longer carries layout switches.
+  await expect(root.getByText("Show status bar")).toHaveCount(0);
+  await expect(root.getByText("Show technical details")).toHaveCount(0);
+
+  // Advanced holds what used to be Backend, Models and Files.
+  await nav.getByRole("button", { name: "Advanced", exact: true }).click();
+  const body = root.locator("[data-settings-body]");
+  for (const label of ["Engine and servers", "Every model", "Prompts folder", "Memory file", "Attachments", "Show technical details"]) {
+    await expect(body.getByText(label, { exact: true })).toBeVisible();
   }
 
-  // Hotkeys is macOS+Windows (Quick Query); hidden on Linux. Where present,
-  // opening it shows the reset affordance moved in from General.
+  // Models opens the plain-names pane, which links on to Advanced.
+  await nav.getByRole("button", { name: "Models", exact: true }).click();
+  await expect(root.locator("[data-models-settings]")).toBeVisible();
+
+  // Shortcuts is macOS+Windows (Quick Query); hidden on Linux. Where present,
+  // opening it shows the reset affordance. Dictation is macOS only.
   const isLinux = await page.evaluate(() => !!window.IS_LINUX);
   if (!isLinux) {
-    const hotkeys = root.getByRole("button", { name: "Hotkeys", exact: true });
-    await expect(hotkeys).toBeVisible();
-    await hotkeys.click();
-    await expect(
-      root.getByRole("button", { name: "Reset to defaults" }),
-    ).toBeVisible();
+    const shortcuts = nav.getByRole("button", { name: "Shortcuts", exact: true });
+    await expect(shortcuts).toBeVisible();
+    await shortcuts.click();
+    await expect(root.getByRole("button", { name: "Reset to defaults" })).toBeVisible();
+  }
+  const isMac = await page.evaluate(() => !!window.IS_MAC);
+  if (isMac) {
+    await expect(nav.getByRole("button", { name: "Dictation", exact: true })).toBeVisible();
+  }
+});
+
+// REGRESSION: the pane's box has a fixed height. As a flex column it
+// squeezed the model manager (which allows it), and the manager's rows
+// spilled over "Prompts folder", "Memory file" and "Attachments".
+test("settings: Advanced with a long model list — no section is squeezed or overlapped", async ({ page }) => {
+  await page.evaluate(() => {
+    window.THEMES = { one_dark: { label: "Midnight" }, one_light: { label: "Daylight" } };
+    const R = window.__INVOKE_RESPONSES;
+    R.llm_embed_model_check = () => ({ model: "nomic-embed-text", installed: true });
+    R.llm_backend_config_get = () => ({ backend: "engine", baseUrl: null, apiKey: null });
+    R.system_profile = () => ({ totalRamBytes: 36 * 1024 * 1024 * 1024, platform: "macos", arch: "aarch64" });
+    const ids = ["gemma4-e2b", "gemma4-e4b", "gemma4-12b", "gemma4-26b-a4b", "qwen3.5-9b", "qwen3.8-27b"];
+    R.engine_catalog = () => ({
+      version: 1,
+      models: ids.map((id, i) => ({
+        id, label: id.toUpperCase(), purpose: "chat", minRamGb: 8 + i * 4, totalBytes: (4 + i * 3) * 1e9,
+        suggest: true, recommended: id === "gemma4-12b", caps: { vision: true, tools: true },
+        description: "A sentence describing what this model is good at, long enough to wrap onto a second line.",
+      })),
+    });
+    R.llm_list_models = () => ({
+      models: ids.slice(0, 4).concat("nomic-embed-text").map((name) => ({ name, model: name, size: 5e9 })),
+    });
+    window.__TEST_MOUNT("SettingsModal", {
+      tweaks: { theme: "one_dark", showDetails: false },
+      setTweak: () => {},
+      chatCount: 0,
+    });
+  });
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "__activate_edit_mode" } }));
+  });
+  const root = page.locator("#test-root");
+  await root.locator('[data-settings-tab="advanced"]').click();
+  const body = root.locator("[data-settings-body]");
+  await expect(body.locator("[data-model-manager]")).toBeVisible();
+  await expect(body.getByText("gemma4-26b-a4b").first()).toBeVisible();
+
+  const layout = await body.evaluate((el) => {
+    const kids = [...el.children].map((k) => {
+      const r = k.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, squeezed: k.scrollHeight - k.clientHeight };
+    });
+    return { kids, scrolls: el.scrollHeight > el.clientHeight };
+  });
+  // The pane itself scrolls; nothing inside it is cut short…
+  expect(layout.scrolls).toBe(true);
+  for (const k of layout.kids) expect(k.squeezed).toBeLessThanOrEqual(1);
+  // …and each block starts at or below the end of the one before it.
+  for (let i = 1; i < layout.kids.length; i++) {
+    expect(layout.kids[i].top).toBeGreaterThanOrEqual(layout.kids[i - 1].bottom - 0.5);
   }
 });

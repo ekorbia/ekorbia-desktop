@@ -125,6 +125,14 @@ fn capture_to_temp_sync() -> Result<Option<String>, String> {
 /// the chat's attachment storage, so the /tmp file is redundant once
 /// attached. Errors are swallowed — the file is in /tmp and will be
 /// reclaimed on reboot if nothing else.
+/// Start a capture from the interface (the message box's + menu). The same
+/// flow as the ⌘⇧1 shortcut: the user drags a region, and the result
+/// arrives as a `screenshot:captured` event.
+#[tauri::command]
+pub(crate) fn screenshot_capture(app: tauri::AppHandle) {
+    dispatch_capture(app);
+}
+
 #[tauri::command]
 pub(crate) fn screenshot_consumed(path: String) -> Result<(), String> {
     // Defensive: only delete files that look like ours, in case JS gets

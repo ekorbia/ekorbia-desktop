@@ -78,6 +78,20 @@ fn should_index_file(name: &str, ext: &str, bytes: u64, exts: &[String]) -> bool
 /// `(absolute path, byte size, mtime-as-unix-seconds)`.
 type WalkEntry = (String, u64, i64);
 
+/// How many files under `root` the folder indexer would read, and whether
+/// the walk stopped at its cap. Lets a workspace show "14 documents" before
+/// any chat has indexed its folder. It is the same walk, with the same
+/// filters and cap, that indexing uses, so the figure is what a chat in
+/// that workspace actually gets.
+pub(crate) fn count_folder_documents(
+    root: &Path,
+    exts: &[String],
+    ignore: &[String],
+) -> (usize, bool) {
+    let (entries, hit_cap) = walk_folder(root, exts, ignore);
+    (entries.len(), hit_cap)
+}
+
 fn walk_folder(root: &Path, exts: &[String], ignore: &[String]) -> (Vec<WalkEntry>, bool) {
     let mut out: Vec<WalkEntry> = Vec::new();
     let mut hit_cap = false;

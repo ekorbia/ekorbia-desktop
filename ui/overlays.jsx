@@ -308,7 +308,9 @@ function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasV
 // ids; on Cancel/backdrop click it calls `onClose()`. The compose-mode
 // column-count cap (2 or 3) is enforced inside this component: a Done
 // click outside that range is disabled.
-function CompareModelPickerModal({ open, onClose, onConfirm }) {
+// `nameOfModel(id)` → { name, detail } gives rows their plain names;
+// without it they show the id.
+function CompareModelPickerModal({ open, onClose, onConfirm, nameOfModel }) {
   const [models, setModels] = useState(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(() => new Set());
@@ -325,9 +327,10 @@ function CompareModelPickerModal({ open, onClose, onConfirm }) {
     invoke('llm_list_models')
       .then((data) => {
         // Same alphabetical sort as the single-model ModelPicker so
-        // both pickers feel consistent. Embed models (nomic-embed-text
-        // etc.) stay in the list — caller may want to compare them too.
-        const sorted = (data.models || []).slice().sort((a, b) =>
+        // both pickers feel consistent. The model that reads documents
+        // for search cannot answer a question, so it is not offered
+        // (same rule as the workspace settings model list).
+        const sorted = (data.models || []).filter((m) => !/embed/i.test((m && m.name) || "")).sort((a, b) =>
           (a.name || "").localeCompare(b.name || "", undefined, {
             sensitivity: "base",
           }),
@@ -499,7 +502,18 @@ function CompareModelPickerModal({ open, onClose, onConfirm }) {
                       fontWeight: 500,
                     }}
                   >
-                    {m.name}
+                    {nameOfModel ? (
+                      <>
+                        <span data-compare-pick-name style={{ fontFamily: T.sans, fontWeight: 600 }}>
+                          {nameOfModel(m.name).name}
+                        </span>
+                        {nameOfModel(m.name).detail && (
+                          <span style={{ fontFamily: T.sans, color: T.fg2, marginLeft: 8 }}>
+                            {nameOfModel(m.name).detail}
+                          </span>
+                        )}
+                      </>
+                    ) : m.name}
                   </span>
                   {size && (
                     <span

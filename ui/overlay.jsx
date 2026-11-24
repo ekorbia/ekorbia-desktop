@@ -117,6 +117,25 @@ function QuickQuery() {
       .catch(() => {});
   }, []);
 
+  // Plain model names (Fast / Balanced / Most capable): the same rule the
+  // main window uses (utils.js modelTiers / describeModel), worked out from
+  // the catalog and this Mac's memory. An id the catalog does not know (an
+  // Ollama tag, a model added from a link) is shown as it is.
+  const [modelCatalog, setModelCatalog] = qS([]);
+  const [ramBytes, setRamBytes] = qS(0);
+  qE(() => {
+    const inv = getInvoke();
+    if (!inv) return;
+    inv("engine_catalog")
+      .then((c) => setModelCatalog((c && c.models) || []))
+      .catch(() => {});
+    inv("system_profile")
+      .then((sp) => setRamBytes((sp && sp.totalRamBytes) || 0))
+      .catch(() => {});
+  }, []);
+  const modelTierMap = modelTiers(modelCatalog, ramBytes);
+  const plainModel = (id) => describeModel(id, modelTierMap, modelCatalog);
+
   // ── Available models (queried from Ollama, like the Composer picker) ───────
   // `null` = haven't fetched yet (or fetching). Empty array = fetched but
   // nothing is pulled. `error` non-null = the fetch failed (Ollama down).
@@ -772,7 +791,6 @@ function QuickQuery() {
   const C_BG4 = "rgba(255,255,255,0.12)";
   const C_AMBER = "#f0934a";
   const FONT_SANS = '"Inter", system-ui, sans-serif';
-  const FONT_MONO = '"JetBrains Mono", monospace';
 
   // Verb-chip styling; `active` marks the one whose result is on screen. A
   // plain style helper, not a component — components defined during render
@@ -871,6 +889,18 @@ function QuickQuery() {
             textOverflow: "ellipsis",
           }}
         />
+        {streaming && (
+          <span
+            data-overlay-working
+            style={{ fontFamily: FONT_SANS, fontSize: 12, color: C_FG1, flexShrink: 0 }}
+          >
+            Thinking…
+          </span>
+        )}
+        {/* The microphone is the LAST thing in this row in every state, so
+            it sits at the same place on the right edge whether or not a
+            hint or a status is showing (the key hint lives in the bar
+            below). */}
         {/* Voice dictation — inserts the local Whisper transcript into the
             overlay input. macOS only — the Whisper backend is macOS-gated
             (see voice.jsx / Cargo.toml). No model yet → toast. */}
@@ -919,31 +949,6 @@ function QuickQuery() {
           }}
         />
         )}
-        {streaming && (
-          <span
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 10,
-              color: C_FG2,
-              letterSpacing: 0.5,
-              textTransform: "uppercase",
-            }}
-          >
-            thinking…
-          </span>
-        )}
-        {!streaming && !hasContent && !picker && (
-          <span
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 10,
-              color: C_FG3,
-              letterSpacing: 0.4,
-            }}
-          >
-            {selection ? "⏎ run · ⎋ close" : "⏎ ask · ⎋ close"}
-          </span>
-        )}
       </div>
 
       {/* ── Context bar ──────────────────────────────────────────────────── */}
@@ -961,6 +966,8 @@ function QuickQuery() {
       >
         {/* Model picker trigger */}
         <button
+          data-overlay-model
+          title={plainModel(modelId).detail || modelId}
           onClick={() =>
             setPicker((p) => (p === "model" ? null : "model"))
           }
@@ -974,8 +981,8 @@ function QuickQuery() {
             padding: "3px 8px",
             cursor: "pointer",
             color: C_FG1,
-            fontFamily: FONT_MONO,
-            fontSize: 10.5,
+            fontFamily: FONT_SANS,
+            fontSize: 11.5,
           }}
         >
           <span
@@ -987,11 +994,11 @@ function QuickQuery() {
               boxShadow: `0 0 4px ${modelDot}88`,
             }}
           />
-          <span>{modelId}</span>
-          <span style={{ fontSize: 8, color: C_FG3 }}>▾</span>
+          <span data-overlay-model-name>{plainModel(modelId).name}</span>
+          <span style={{ fontSize: 8, color: C_FG2 }}>▾</span>
         </button>
 
-        <span style={{ color: C_FG3, fontFamily: FONT_MONO, fontSize: 10 }}>
+        <span style={{ color: C_FG3, fontFamily: FONT_SANS, fontSize: 11.5 }}>
           ·
         </span>
 
@@ -1012,8 +1019,8 @@ function QuickQuery() {
                 background: favColor ? favColor + "22" : C_BG2,
                 border: `1px solid ${favColor ? favColor + "55" : C_BORDER_STRONG}`,
                 borderRadius: 4,
-                fontFamily: FONT_MONO,
-                fontSize: 10,
+                fontFamily: FONT_SANS,
+                fontSize: 11.5,
                 color: favColor || C_FG1,
                 maxWidth: 220,
               }}
@@ -1029,8 +1036,8 @@ function QuickQuery() {
                   padding: 0,
                   cursor: "pointer",
                   color: "inherit",
-                  fontFamily: FONT_MONO,
-                  fontSize: 10,
+                  fontFamily: FONT_SANS,
+                  fontSize: 11.5,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
@@ -1074,8 +1081,8 @@ function QuickQuery() {
               padding: "3px 7px",
               cursor: "pointer",
               color: C_FG2,
-              fontFamily: FONT_MONO,
-              fontSize: 10.5,
+              fontFamily: FONT_SANS,
+              fontSize: 11.5,
             }}
           >
             + prompt
@@ -1083,6 +1090,14 @@ function QuickQuery() {
         )}
 
         <span style={{ flex: 1 }} />
+        {!streaming && !hasContent && !picker && (
+          <span
+            data-overlay-hint
+            style={{ fontFamily: FONT_SANS, fontSize: 11.5, color: C_FG1, whiteSpace: "nowrap" }}
+          >
+            {selection ? "Return to run · Esc to close" : "Return to ask · Esc to close"}
+          </span>
+        )}
       </div>
 
       {/* ── Selection panel ──────────────────────────────────────────────── */}
@@ -1107,15 +1122,14 @@ function QuickQuery() {
               alignItems: "center",
               justifyContent: "space-between",
               gap: 8,
-              fontFamily: FONT_MONO,
-              fontSize: 10,
-              letterSpacing: 0.4,
+              fontFamily: FONT_SANS,
+              fontSize: 11.5,
             }}
           >
-            <span style={{ color: C_FG2, textTransform: "uppercase" }}>
+            <span style={{ color: C_FG1 }}>
               Copied text
             </span>
-            <span style={{ color: C_FG3 }}>
+            <span style={{ color: C_FG2 }}>
               {selection.chars.toLocaleString()} characters
               {selection.truncated ? " · trimmed to fit" : ""}
             </span>
@@ -1181,7 +1195,7 @@ function QuickQuery() {
         >
           Nothing to act on — the clipboard has no text in it. Copy something
           in any app, then press{" "}
-          <span style={{ color: C_AMBER, fontFamily: FONT_MONO, fontSize: 11 }}>
+          <span style={{ color: C_AMBER, fontFamily: FONT_SANS, fontSize: 12 }}>
             {selectionHotkeyLabel}
           </span>
           .
@@ -1203,26 +1217,24 @@ function QuickQuery() {
           <div
             style={{
               padding: "4px 14px 6px",
-              fontFamily: FONT_MONO,
+              fontFamily: FONT_SANS,
               // 10.5 (up from 9.5) + brighter color than the standard
               // section-label dim. Uppercase mono with letter-spacing
               // amplifies any contrast problem, so this label needs a
               // step or two more legibility than secondary text.
-              fontSize: 10.5,
+              fontSize: 11.5,
               color: C_FG1,
-              textTransform: "uppercase",
-              letterSpacing: 0.6,
             }}
           >
-            {local ? "Local models" : "Models"}
+            {local ? "Models on this Mac" : "Models"}
           </div>
 
           {availableModels === null && (
             <div
               style={{
                 padding: "12px 14px",
-                fontFamily: FONT_MONO,
-                fontSize: 11,
+                fontFamily: FONT_SANS,
+                fontSize: 12,
                 color: C_FG3,
               }}
             >
@@ -1236,8 +1248,8 @@ function QuickQuery() {
             <div
               style={{
                 padding: "10px 14px",
-                fontFamily: FONT_MONO,
-                fontSize: 11,
+                fontFamily: FONT_SANS,
+                fontSize: 12,
                 color: C_FG3,
               }}
             >
@@ -1251,8 +1263,8 @@ function QuickQuery() {
               <div
                 style={{
                   padding: "10px 14px",
-                  fontFamily: FONT_MONO,
-                  fontSize: 11,
+                  fontFamily: FONT_SANS,
+                  fontSize: 12,
                   color: C_FG3,
                 }}
               >
@@ -1264,15 +1276,19 @@ function QuickQuery() {
               </div>
             )}
 
-          {(availableModels || []).map((m) => {
+          {/* The model that reads documents for search cannot answer a
+              question, so it is not offered. */}
+          {(availableModels || []).filter((m) => !/embed/i.test((m && m.name) || "")).map((m) => {
             const sel = m.name === modelId;
             const color = modelColor(m.name);
+            const plain = plainModel(m.name);
             const size = m.details?.parameter_size || "";
             const quant = m.details?.quantization_level || "";
             const sizeOnDisk = formatBytes(m.size);
             return (
               <div
                 key={m.name}
+                data-overlay-model-row={m.name}
                 onClick={() => {
                   setModelId(m.name);
                   setPicker(null);
@@ -1316,18 +1332,23 @@ function QuickQuery() {
                     <span
                       style={{
                         fontFamily: FONT_SANS,
-                        fontSize: 12.5,
+                        fontSize: 13,
                         color: C_FG,
-                        fontWeight: 500,
+                        fontWeight: 600,
                       }}
                     >
-                      {m.name}
+                      {plain.name}
                     </span>
+                    {plain.detail && (
+                      <span style={{ fontFamily: FONT_SANS, fontSize: 12, color: C_FG1 }}>
+                        {plain.detail}
+                      </span>
+                    )}
                     {size && (
                       <span
                         style={{
-                          fontFamily: FONT_MONO,
-                          fontSize: 10,
+                          fontFamily: FONT_SANS,
+                          fontSize: 11.5,
                           // Bumped from C_FG2 → C_FG1: secondary metadata
                           // needs more contrast against vibrancy+tint than
                           // it does against the main app's opaque bg.
@@ -1340,8 +1361,8 @@ function QuickQuery() {
                     {quant && (
                       <span
                         style={{
-                          fontFamily: FONT_MONO,
-                          fontSize: 9.5,
+                          fontFamily: FONT_SANS,
+                          fontSize: 11,
                           color: C_FG2,
                         }}
                       >
@@ -1352,8 +1373,8 @@ function QuickQuery() {
                   {sizeOnDisk && (
                     <div
                       style={{
-                        fontFamily: FONT_MONO,
-                        fontSize: 10,
+                        fontFamily: FONT_SANS,
+                        fontSize: 11.5,
                         color: C_FG1,
                         marginTop: 1,
                       }}
@@ -1393,8 +1414,8 @@ function QuickQuery() {
                 border: `1px solid ${C_BORDER}`,
                 borderRadius: 4,
                 color: C_FG,
-                fontFamily: FONT_MONO,
-                fontSize: 11,
+                fontFamily: FONT_SANS,
+                fontSize: 12,
                 padding: "4px 8px",
                 outline: "none",
                 boxSizing: "border-box",
@@ -1414,8 +1435,8 @@ function QuickQuery() {
                 style={{
                   padding: "16px 14px",
                   color: C_FG3,
-                  fontFamily: FONT_MONO,
-                  fontSize: 11,
+                  fontFamily: FONT_SANS,
+                  fontSize: 12,
                   textAlign: "center",
                 }}
               >
@@ -1526,9 +1547,8 @@ function QuickQuery() {
               data-ran-action
               style={{
                 marginBottom: 6,
-                fontFamily: FONT_MONO,
-                fontSize: 10,
-                letterSpacing: 0.4,
+                fontFamily: FONT_SANS,
+                fontSize: 11.5,
                 color: C_AMBER,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
@@ -1578,8 +1598,8 @@ function QuickQuery() {
                 padding: "5px 10px",
                 cursor: "pointer",
                 color: copied ? C_FG : "#2a1505",
-                fontFamily: FONT_MONO,
-                fontSize: 11,
+                fontFamily: FONT_SANS,
+                fontSize: 12,
                 fontWeight: 500,
               }}
             >
@@ -1599,8 +1619,8 @@ function QuickQuery() {
               padding: "5px 10px",
               cursor: "pointer",
               color: C_FG,
-              fontFamily: FONT_MONO,
-              fontSize: 11,
+              fontFamily: FONT_SANS,
+              fontSize: 12,
               fontWeight: 500,
             }}
             onMouseEnter={(e) =>

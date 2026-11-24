@@ -21,6 +21,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and saved files are in the settings menu beside it for now.
 - Moving a chat to another workspace is in its right-click menu. Dragging
   it onto a Space is gone.
+- **Models have plain names.** Settings → Models offers Fast, Balanced and
+  Most capable, chosen from the catalog to fit your Mac's memory, and sets
+  the app's default. A workspace can use a different one, set in its
+  settings. The model picker beside the message box is gone; a chat uses
+  its workspace's model.
+- **One + button in the message box** adds files, a folder, a template or
+  a screen capture, and holds a "Take more time to think" switch.
+- **Workspace settings** edit the workspace's notes in place, show how many
+  documents its folder holds, and can delete the workspace. The colour
+  picker is gone from the dialog.
+- **Settings is grouped by task**: General, Models, Dictation, Shortcuts,
+  and Advanced for servers, the full model catalog, folders and attachment
+  tuning.
+- A comparison heads each column with the model's plain name and how long
+  it took. The model that reads documents for search is no longer offered
+  as one to compare.
+- The quick-question panel names models the same plain way, keeps the
+  microphone at the right edge, and spells out its key hint.
 
 ### Fixed
 

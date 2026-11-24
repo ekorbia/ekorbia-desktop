@@ -458,6 +458,8 @@ test.describe("CompareChatPane (Phase 4)", () => {
         },
         isStreaming: false,
         engineCtx: 8192,
+        // The token footer is a technical detail: shown only when asked for.
+        showDetails: true,
       });
     });
 
@@ -661,4 +663,76 @@ test.describe("CompareModelPickerModal", () => {
     );
     expect(pageErrors).toEqual([]);
   });
+
+  test("the model that reads documents for search is not offered", async ({ page }) => {
+    await page.evaluate(() => {
+      window.__INVOKE_RESPONSES.llm_list_models = () => ({
+        models: [{ name: "gemma4-12b" }, { name: "nomic-embed-text" }, { name: "gemma4-26b-a4b" }],
+      });
+      window.__TEST_MOUNT("CompareModelPickerModal", { open: true });
+    });
+    const rows = page.locator('[data-compare-picker] input[type="checkbox"]');
+    await expect(rows).toHaveCount(2);
+    await expect(page.locator("[data-compare-picker]")).not.toContainText("nomic");
+  });
 });
+
+// Plain names and the time taken: what a column's head shows, whatever the
+// technical-details setting.
+test.describe("CompareChatPane: plain names", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/tests/e2e/fixtures/playwright.html");
+    await page.waitForFunction(() => window.__JSX_READY === true);
+  });
+
+  const mount = (page, extra = {}) =>
+    page.evaluate((extra) => {
+      const names = {
+        "gemma4-12b": { name: "Balanced", detail: "Gemma 4 12B" },
+        "gemma4-26b-a4b": { name: "Most capable", detail: "Gemma 4 26B (A4B)" },
+      };
+      window.__TEST_MOUNT("CompareChatPane", {
+        chat: {
+          id: "c1",
+          title: "Indemnity or warranty?",
+          tabType: "multi-pending",
+          models: ["gemma4-12b", "gemma4-26b-a4b"],
+          messages: [
+            { id: "u1", role: "user", content: "Explain the difference." },
+            { id: "a1", role: "assistant", model: "gemma4-12b", content: "Short answer.", variantGroupId: "g1", tokens: { in: 40, out: 60, ms: 9200 } },
+            { id: "a2", role: "assistant", model: "gemma4-26b-a4b", content: "Longer answer.", variantGroupId: "g1", tokens: { in: 40, out: 140, ms: 31400 } },
+          ],
+        },
+        isStreaming: false,
+        ...(extra.noNames ? {} : { nameOfModel: (id) => names[id] || { name: id, detail: "" } }),
+        showDetails: !!extra.showDetails,
+      });
+    }, extra);
+
+  test("each column is headed by the model's plain name, its catalog name and the time it took", async ({ page }) => {
+    await mount(page);
+    const a = page.locator('[data-compare-column][data-model="gemma4-12b"]');
+    const b = page.locator('[data-compare-column][data-model="gemma4-26b-a4b"]');
+    await expect(a.locator("[data-compare-model-name]")).toHaveText("Balanced");
+    await expect(a.locator("[data-compare-model-detail]")).toHaveText("Gemma 4 12B");
+    await expect(a.locator("[data-compare-took]")).toHaveText("9 seconds");
+    await expect(b.locator("[data-compare-model-name]")).toHaveText("Most capable");
+    await expect(b.locator("[data-compare-took]")).toHaveText("31 seconds");
+  });
+
+  test("token counts stay out of sight unless technical details are on", async ({ page }) => {
+    await mount(page);
+    await expect(page.locator("[data-message-tokens]")).toHaveCount(0);
+    await mount(page, { showDetails: true });
+    await expect(page.locator("[data-message-tokens]")).toHaveCount(2);
+  });
+
+  test("without names to hand, a column falls back to the model's id", async ({ page }) => {
+    await mount(page, { noNames: true });
+    await expect(
+      page.locator('[data-model="gemma4-12b"] [data-compare-model-name]'),
+    ).toHaveText("gemma4-12b");
+    await expect(page.locator("[data-compare-model-detail]")).toHaveCount(0);
+  });
+});
+

@@ -282,6 +282,7 @@ pub fn run() {
             overlay::register_voice_hotkey,
             overlay::register_selection_hotkey,
             screenshot::screenshot_consumed,
+            screenshot::screenshot_capture,
             chat::db_load_chats,
             chat::db_load_messages,
             chat::db_upsert_chat,
@@ -305,6 +306,7 @@ pub fn run() {
             spaces::space_prompt_set_locked,
             spaces::space_prompt_remove,
             spaces::space_prompt_reorder,
+            spaces::space_document_counts,
             search::search_chats,
             attachments::commands::attachment_list,
             attachments::commands::attachment_add_files,
@@ -357,6 +359,7 @@ pub fn run() {
             memory::memory_open,
             memory::space_memory_read,
             memory::space_memory_open,
+            memory::space_memory_write,
         ])
         .setup(|app| {
             let win = app

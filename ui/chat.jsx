@@ -76,7 +76,7 @@ function useStickToBottomOnResize(ref) {
 }
 
 // ─── Chat Pane ──────────────────────────────────────────────
-function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, onContinue, space, showDetails = false, onStarter, engineCtx = null }) {
+function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, onContinue, space, showDetails = false, onStarter, engineCtx = null, documentCount = 0 }) {
   const scrollerRef = useRef(null);
   const lastContent = chat.messages[chat.messages.length - 1]?.content;
   useEffect(() => {
@@ -268,48 +268,9 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
             marginBottom: 4,
           }}
         >
-          {/* Space badge — small color dot + name, renders only when the
-              chat lives inside a Space. Reads as "this chat is part of
-              {space} workspace" alongside the title. Resolved at the
-              parent (main.jsx) so ChatPane stays presentation-only and
-              the spaces array doesn't need to plumb through here. */}
-          {space && (
-            <div
-              data-chat-space-badge
-              data-space-id={space.id}
-              title={`Space: ${space.name}`}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 5,
-                padding: "2px 8px 2px 6px",
-                background: T.bg2,
-                border: `1px solid ${(window.spaceColorHex ? window.spaceColorHex(space.color) : T.fg2) + "4d"}`,
-                borderRadius: 999,
-                fontFamily: T.mono,
-                fontSize: 10.5,
-                color: T.fg1,
-                flexShrink: 0,
-              }}
-            >
-              <span
-                aria-hidden="true"
-                style={{
-                  display: "inline-block",
-                  width: 7,
-                  height: 7,
-                  borderRadius: "50%",
-                  background: window.spaceColorHex
-                    ? window.spaceColorHex(space.color)
-                    : space.color
-                      ? T[space.color] || T.fg2
-                      : T.fg2,
-                  flexShrink: 0,
-                }}
-              />
-              {space.name}
-            </div>
-          )}
+          {/* The workspace's name is in the sidebar head, so the header
+              no longer repeats it as a badge. `space` still tints the
+              pane (see the ambient glow above). */}
           {editingTitle ? (
             <input
               ref={titleInputRef}
@@ -391,6 +352,30 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                 />
               )}
             </div>
+          )}
+          {/* How many documents this chat can read: every file in an
+              attached folder plus each single file. */}
+          {documentCount > 0 && (
+            <span
+              data-chat-documents
+              title="Documents attached to this chat"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "2px 9px",
+                border: `1px solid ${T.border}`,
+                borderRadius: 999,
+                fontFamily: T.sans,
+                fontSize: 12,
+                color: T.fg2,
+                flexShrink: 0,
+                whiteSpace: "nowrap",
+              }}
+            >
+              <I.Folder size={12} />
+              {documentsLabel(documentCount)}
+            </span>
           )}
           {/* Spacer pushes the export menu to the far right of the header. */}
           <div style={{ flex: 1 }} />
@@ -503,7 +488,7 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
           padding: "20px 0",
         }}
       >
-        <div style={{ maxWidth: "100%", margin: "0", padding: "0 16px" }}>
+        <div data-chat-column style={{ maxWidth: 792, margin: "0 auto", padding: "0 16px" }}>
           {/* Empty-chat hint: surfaces only when there are no messages
               yet, so newly-opened chats (including the welcome tab) feel
               less like a blank-page-staring-back-at-you. We deliberately
@@ -2159,7 +2144,6 @@ function PromptSlashPicker({
 // ─── Composer ───────────────────────────────────────────────
 function Composer({
   model,
-  onModelChange,
   onSend,
   isStreaming,
   onStop,
@@ -2226,9 +2210,38 @@ function Composer({
   // touching its text — used by the empty-state starter cards on the attach
   // path (the seed/fallback path already focuses via seedKey).
   focusSignal,
+  // One line under the box saying where the answer comes from (main.jsx
+  // builds it from the backend in use). Omitted, no line is shown.
+  note = "",
+  // "Take more time to think": the engine's thinking switch, shown in the
+  // + menu. `thinking` is null when there is nothing to switch (not the
+  // bundled engine), and the row is then left out.
+  thinking = null,
+  onToggleThinking,
+  // Start a screen capture (the ⌘⇧1 flow). Left out of the + menu when
+  // the caller has no way to start one.
+  onCapture,
+  // How many documents this chat has attached, for the placeholder.
+  documentCount = 0,
 }) {
   const [text, setText] = useState("");
-  const [pickerOpen, setPickerOpen] = useState(false);
+  // The + menu: everything that can be added to a message.
+  const [plusOpen, setPlusOpen] = useState(false);
+  const plusRef = useRef(null);
+  useEffect(() => {
+    if (!plusOpen) return undefined;
+    const onDown = (e) => {
+      if (plusRef.current && !plusRef.current.contains(e.target)) setPlusOpen(false);
+    };
+    const onKeyDown = (e) => { if (e.key === "Escape") setPlusOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [plusOpen]);
+  const fromPlus = (fn) => () => { setPlusOpen(false); fn && fn(); };
   const taRef = useRef(null);
 
   // Auto-grow: the text box fits its content — soft-wrapped lines included,
@@ -2523,27 +2536,27 @@ function Composer({
     }
   };
 
-  const placeholder = attachedPrompts.length
-    ? `Continue with ${attachedPrompts.length} prompt${attachedPrompts.length > 1 ? "s" : ""} attached…`
-    : `Send a message  —  ${MOD_GLYPH}${ENTER_GLYPH} to send, / for prompts`;
+  const placeholder = documentCount > 0
+    ? `Ask about the ${documentsLabel(documentCount)} attached`
+    : "Ask anything";
 
   return (
     <div
+      data-composer
       style={{
         flexShrink: 0,
-        padding: 4,
-        borderTop: `1px solid ${T.border}`,
+        padding: "4px 16px 14px",
         background: T.bg0,
       }}
     >
-      <div style={{ maxWidth: "100%", margin: "0" }}>
+      <div style={{ maxWidth: 760, margin: "0 auto" }}>
         <div
           style={{
-            background: panelGrad(),
-            border: `1px solid ${T.borderStrong}`,
-            borderRadius: 8,
-            padding: 8,
-            boxShadow: `${T.shadowSm}, ${T.insetHi}`,
+            background: T.isLight ? T.bg0 : T.bg1,
+            border: `1px solid ${T.border}`,
+            borderRadius: 18,
+            padding: "12px 12px 10px 16px",
+            boxShadow: T.isLight ? "0 2px 10px rgba(0,0,0,0.06)" : "none",
             // position: relative anchors the absolutely-positioned
             // PromptSlashPicker below — its bottom: 100% rises from
             // the top edge of this card.
@@ -2883,41 +2896,132 @@ function Composer({
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 6,
-              paddingTop: 8,
-              borderTop: `1px solid ${T.border}`,
-              marginTop: 8,
+              gap: 8,
+              paddingTop: 6,
               position: "relative",
             }}
           >
-            {!ephemeral && (
-              <>
-                <IconButton
-                  icon={I.Attach}
-                  onClick={() => onAttachFile && onAttachFile()}
-                  title="Attach file (.txt, .md, .pdf, image)"
-                  size={24}
-                />
-                <IconButton
-                  icon={I.Folder}
-                  onClick={() => onAttachFolder && onAttachFolder()}
-                  title="Attach folder (indexed for retrieval)"
-                  size={24}
-                />
-              </>
-            )}
-            <IconButton
-              icon={I.Library}
-              // Trigger the inline slash picker. Synthesises a `/` at
-              // the caret position (see triggerSlashPickerFromButton)
-              // so the picker path is identical to typing `/` directly.
-              // Manage prompts (create, edit, delete) still lives in
-              // the right-side Prompts panel — opened from the tab bar
-              // on the right edge of the chat window.
-              onClick={triggerSlashPickerFromButton}
-              title="Insert prompt (/)"
-              size={24}
-            />
+            {/* The + menu: files, a folder, a template, a screen capture,
+                and the thinking switch. One button with words behind it
+                in place of a row of icons. A private chat takes no
+                attachments (nothing of it is kept), so those rows are
+                left out there. */}
+            <div ref={plusRef} style={{ position: "relative", marginLeft: -4 }}>
+              <button
+                type="button"
+                data-composer-plus
+                aria-label="Add to this message"
+                aria-haspopup="menu"
+                aria-expanded={plusOpen}
+                title="Add files, a template and more"
+                onClick={() => setPlusOpen((o) => !o)}
+                style={{
+                  width: 32,
+                  height: 32,
+                  display: "grid",
+                  placeItems: "center",
+                  borderRadius: "50%",
+                  border: `1px solid ${plusOpen ? T.fg : T.border}`,
+                  background: plusOpen ? T.fg : "transparent",
+                  color: plusOpen ? T.bg0 : T.fg1,
+                  cursor: "pointer",
+                }}
+              >
+                <I.Plus size={14} />
+              </button>
+              {plusOpen && (
+                <div
+                  role="menu"
+                  data-composer-plus-menu
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    bottom: "calc(100% + 8px)",
+                    minWidth: 250,
+                    padding: 5,
+                    background: T.bg2,
+                    border: `1px solid ${T.border}`,
+                    borderRadius: 10,
+                    boxShadow: T.shadowPop,
+                    zIndex: 40,
+                    fontFamily: T.sans,
+                    fontSize: 13,
+                  }}
+                >
+                  {!ephemeral && (
+                    <MenuItem onClick={fromPlus(onAttachFile)} data-plus-files>
+                      <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                        <I.Attach size={13} />
+                        <span>Add files…</span>
+                      </span>
+                    </MenuItem>
+                  )}
+                  {!ephemeral && (
+                    <MenuItem onClick={fromPlus(onAttachFolder)} data-plus-folder>
+                      <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                        <I.Folder size={13} />
+                        <span>Add a folder…</span>
+                      </span>
+                    </MenuItem>
+                  )}
+                  {/* Opens the inline picker exactly as typing `/` does
+                      (see triggerSlashPickerFromButton). */}
+                  <MenuItem onClick={fromPlus(triggerSlashPickerFromButton)} data-plus-template>
+                    <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                      <I.Library size={13} />
+                      <span style={{ flex: 1 }}>Use a template</span>
+                      <span style={{ color: T.fg3, fontSize: 11.5 }}>/</span>
+                    </span>
+                  </MenuItem>
+                  {onCapture && !ephemeral && (
+                    <MenuItem onClick={fromPlus(onCapture)} data-plus-capture>
+                      <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                        <I.Eye size={13} />
+                        <span>Capture part of the screen</span>
+                      </span>
+                    </MenuItem>
+                  )}
+                  {thinking !== null && onToggleThinking && <MenuDivider />}
+                  {thinking !== null && onToggleThinking && (
+                    <MenuItem
+                      onClick={() => onToggleThinking(!thinking)}
+                      data-plus-thinking
+                      role="menuitemcheckbox"
+                      aria-checked={!!thinking}
+                    >
+                      <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                        <span style={{ flex: 1 }}>Take more time to think</span>
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            position: "relative",
+                            width: 30,
+                            height: 18,
+                            borderRadius: 9,
+                            background: thinking ? T.fg : T.bg4,
+                            flexShrink: 0,
+                          }}
+                        >
+                          <span
+                            style={{
+                              position: "absolute",
+                              top: 2,
+                              left: thinking ? 14 : 2,
+                              width: 14,
+                              height: 14,
+                              borderRadius: "50%",
+                              background: T.bg0,
+                              transition: "left 0.12s ease",
+                            }}
+                          />
+                        </span>
+                      </span>
+                    </MenuItem>
+                  )}
+                </div>
+              )}
+            </div>
+            <span style={{ flex: 1 }} />
             {/* Voice dictation — records mic audio and inserts the local
                 Whisper transcript at the caret. macOS only — the Whisper
                 backend is macOS-gated (see voice.jsx / Cargo.toml). */}
@@ -2957,140 +3061,68 @@ function Composer({
               }}
             />
             )}
-            <span style={{ flex: 1 }} />
-            {/* Model selector */}
-            <button
-              onClick={() => setPickerOpen((o) => !o)}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 5,
-                padding: "3px 10px",
-                height: 24,
-                borderRadius: 999,
-                background: pickerOpen ? T.bg3 : T.bg2,
-                border: `1px solid ${pickerOpen ? T.borderStrong : T.border}`,
-                color: T.fg2,
-                cursor: "pointer",
-                fontFamily: T.mono,
-                fontSize: 11,
-              }}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.borderColor = T.borderStrong)
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.borderColor = pickerOpen
-                  ? T.borderStrong
-                  : T.border)
-              }
-            >
-              <ModelDot color={modelColor(model.id)} size={6} glow={true} />
-              {model.id}
-              <I.Chevron
-                size={9}
-                style={{
-                  opacity: 0.5,
-                  transform: pickerOpen ? "rotate(180deg)" : "none",
-                }}
-              />
-            </button>
-            {pickerOpen && (
-              <ModelPicker
-                active={model.id}
-                onPick={(id) => {
-                  onModelChange(id);
-                  setPickerOpen(false);
-                }}
-                onClose={() => setPickerOpen(false)}
-                // Surfaces "Supports: …" on the active model's row.
-                modelHasTools={modelHasTools}
-                modelHasVision={modelHasVision}
-              />
-            )}
-            {/* Capability indicator next to the model picker. In the resting
-                view capabilities live on the model row inside the picker
-                ("Supports: Tool use • Vision" — see ModelPicker). With "Show
-                technical details" ON, the explicit green TOOL chip also
-                renders here (marks models whose write_file tool calls get
-                wired into this chat — see the tool loop in ollama.rs). The
-                capability probe + tool injection are unchanged either way.
-                Placed outside the picker button so it reads as a state
-                indicator, not an action. */}
-            {showDetails && modelHasTools && (
-              <span
-                title="Model supports tool use — can save files via write_file"
-                style={{
-                  marginLeft: 4,
-                  padding: "0 6px",
-                  height: 16,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  borderRadius: 4,
-                  background: T.green + "1f",
-                  border: `1px solid ${T.green}4d`,
-                  color: T.green,
-                  fontFamily: T.mono,
-                  fontSize: 8,
-                  fontWeight: 700,
-                  letterSpacing: 0.6,
-                }}
-              >
-                TOOL
-              </span>
-            )}
-
             {isStreaming ? (
               <button
-                className="ek-btn-primary"
+                type="button"
+                data-composer-stop
+                aria-label="Stop"
+                title="Stop"
                 onClick={onStop}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 5,
-                  padding: "0 10px",
-                  height: 24,
+                  width: 32,
+                  height: 32,
+                  display: "grid",
+                  placeItems: "center",
                   background: T.red,
                   border: "none",
-                  borderRadius: 5,
+                  borderRadius: "50%",
                   color: T.bg0,
                   cursor: "pointer",
-                  fontFamily: T.mono,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  boxShadow: `0 5px 16px -6px ${T.red}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                  flexShrink: 0,
                 }}
               >
-                <I.Stop size={9} /> Stop
+                <I.Stop size={11} />
               </button>
             ) : (
               <button
-                className="ek-btn-primary"
+                type="button"
+                data-composer-send
+                aria-label="Send"
+                title={`Send (${MOD_GLYPH}${ENTER_GLYPH})`}
                 onClick={handleSend}
                 disabled={!text.trim()}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 5,
-                  padding: "0 10px",
-                  height: 24,
-                  background: text.trim() ? T.amber : T.bg2,
+                  width: 32,
+                  height: 32,
+                  display: "grid",
+                  placeItems: "center",
+                  background: text.trim() ? T.fg : T.bg3,
                   border: "none",
-                  borderRadius: 5,
+                  borderRadius: "50%",
                   color: text.trim() ? T.bg0 : T.fg3,
                   cursor: text.trim() ? "pointer" : "default",
-                  fontFamily: T.mono,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  boxShadow: text.trim()
-                    ? `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`
-                    : "none",
+                  flexShrink: 0,
                 }}
               >
-                Send <span style={{ opacity: 0.6 }}>{MOD_GLYPH}{ENTER_GLYPH}</span>
+                <I.ArrowUp size={14} />
               </button>
             )}
           </div>
         </div>
+        {note && (
+          <div
+            data-composer-note
+            style={{
+              marginTop: 8,
+              textAlign: "center",
+              fontFamily: T.sans,
+              fontSize: 12,
+              color: T.fg2,
+            }}
+          >
+            {note}
+          </div>
+        )}
       </div>
     </div>
   );

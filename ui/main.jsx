@@ -1109,7 +1109,26 @@ function App() {
     [activeTab]: typeof updater === 'function' ? updater(cs[activeTab] ?? { id: activeTab, title: 'New chat', messages: [] }) : updater,
   }));
 
+  // The model the chat in front uses. It is not chosen per chat any more:
+  // an effect below (see `chatModelId`) keeps it at the chat's workspace
+  // model, or the app default. Everything that sends, probes or warms
+  // reads this.
   const [modelId, setModelId] = useS(readPersistedComposerModel);
+  // The app-wide default model (Settings → Models), remembered across
+  // launches. General and every workspace without a model of its own use
+  // it.
+  const [appDefaultModel, setAppDefaultModelState] = useS(readPersistedComposerModel);
+  const setAppDefaultModel = (id) => {
+    if (!id) return;
+    persistComposerModel(id);
+    setAppDefaultModelState(id);
+  };
+  // The engine's catalog and this Mac's memory: what plain model names
+  // (Fast / Balanced / Most capable — modelTiers in utils.js) are worked
+  // out from. Empty on Ollama and custom backends, whose models are then
+  // shown under their own names.
+  const [modelCatalog, setModelCatalog] = useS([]);
+  const [ramBytes, setRamBytes] = useS(0);
   // Build a display object — fall back to a minimal stub for models not in the static list
   const model = MODELS_BY_ID[modelId] || { id: modelId, name: modelId, color: T.green };
   // Active inference backend ('ollama' | 'openai' | 'engine'). Declared HIGH
@@ -1122,6 +1141,17 @@ function App() {
   // engine default back to ollama). Settings → Backend applies changes live
   // in Rust; this UI-side copy updates on the next relaunch.
   const [backendKind, setBackendKind] = useS('ollama');
+  // Where the backend lives, for saying truthfully whether answers stay
+  // on this Mac (privacyStatus in utils.js). Null for the bundled engine
+  // and a default Ollama.
+  const [backendBaseUrl, setBackendBaseUrl] = useS(null);
+  useE(() => {
+    let alive = true;
+    getInvoke()?.('llm_backend_config_get')
+      .then((c) => { if (alive) setBackendBaseUrl((c && c.baseUrl) || null); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [backendKind]);
   // Bundled engine's chat context window (tokens). Threaded to the chat
   // panes so a message's Details footer can show its input against this
   // ceiling ("1,731 / 32,768 ctx"), and so the send pre-flight can skip
@@ -1131,14 +1161,39 @@ function App() {
   // call fails we stay null (footer shows "in", pre-flight just counts
   // every send) rather than guess a number that can go stale.
   const [engineCtx, setEngineCtx] = useS(null);
+  // Whether the engine thinks before answering (the "Take more time to
+  // think" switch in the message box's + menu; also in Settings →
+  // Advanced). Rust owns the value; null means there is nothing to switch
+  // (not the bundled engine, or its status could not be read).
+  const [engineThinking, setEngineThinking] = useS(null);
   useE(() => {
     let alive = true;
-    if (backendKind !== 'engine') { setEngineCtx(null); return undefined; }
+    if (backendKind !== 'engine') {
+      setEngineCtx(null);
+      setEngineThinking(null);
+      setModelCatalog([]);
+      return undefined;
+    }
     (async () => {
       try {
         const st = await getInvoke()('engine_status');
-        if (alive) setEngineCtx((st && st.chatCtx) || null);
-      } catch { if (alive) setEngineCtx(null); }
+        if (alive) {
+          setEngineCtx((st && st.chatCtx) || null);
+          setEngineThinking(st ? !!st.thinking : null);
+        }
+      } catch { if (alive) { setEngineCtx(null); setEngineThinking(null); } }
+    })();
+    (async () => {
+      try {
+        const [cat, prof] = await Promise.all([
+          getInvoke()('engine_catalog'),
+          getInvoke()('system_profile'),
+        ]);
+        if (!alive) return;
+        // engine_catalog returns { version, models } — never a bare array.
+        setModelCatalog((cat && cat.models) || []);
+        setRamBytes((prof && prof.totalRamBytes) || 0);
+      } catch { if (alive) setModelCatalog([]); }
     })();
     // The window is a user setting since 0.8.0 (Settings → Backend).
     // BackendSettings announces every change with the status Rust applied,
@@ -1146,6 +1201,9 @@ function App() {
     const onTuning = (e) => {
       const next = e && e.detail && e.detail.chatCtx;
       if (alive && next) setEngineCtx(next);
+      if (alive && e && e.detail && typeof e.detail.thinking === 'boolean') {
+        setEngineThinking(e.detail.thinking);
+      }
     };
     window.addEventListener('ekorbia:engine-tuning', onTuning);
     return () => {
@@ -1212,6 +1270,10 @@ function App() {
   // { [spaceId]: [{ kind, path }] } — each workspace's pinned documents,
   // for the "where its documents live" line on Home and in the sidebar.
   const [pinsBySpace, setPinsBySpace] = useS({});
+  // { [spaceId]: { documents, capped } } — how many documents each
+  // workspace's pins hold. Rust walks the pinned folders with the same
+  // filters indexing uses (space_document_counts).
+  const [docCountsBySpace, setDocCountsBySpace] = useS({});
   // A question typed into Home's quick-question row, waiting for its new
   // General chat to be in front: { chatId, text }. Sent by an effect, so
   // handleSend runs with that chat's state in its closure.
@@ -1219,6 +1281,28 @@ function App() {
   // The chat last in front in each workspace this session ('' = General),
   // so opening a workspace returns to it.
   const lastTabByWorkspaceRef = useR({});
+
+  // ── Which model the chat in front uses ──
+  // Its workspace's model if that workspace names one, else the app
+  // default. A private chat and anything in General use the default. The
+  // one exception is `modelOverride`, set on a chat made from a screen
+  // capture when the default cannot read images.
+  const activeTabRow = tabs.find(t => t.id === activeTab) || null;
+  const activeChatSpace = activeTabRow && activeTabRow.spaceId
+    ? (spaces || []).find(s => s.id === activeTabRow.spaceId) || null
+    : null;
+  const chatModelId = (activeTabRow && activeTabRow.modelOverride)
+    || (activeChatSpace && activeChatSpace.defaultModel)
+    || appDefaultModel;
+  useE(() => { setModelId(chatModelId); }, [chatModelId]);
+  const tiers = useMemo(() => modelTiers(modelCatalog, ramBytes), [modelCatalog, ramBytes]);
+  // { name, detail, tier } for a model id: "Balanced" / "Gemma 4 12B".
+  const nameModel = (id) => describeModel(id, tiers, modelCatalog);
+  // "Balanced — Gemma 4 12B": a model as one line in a list of choices.
+  const modelOptionLabel = (id) => {
+    const d = nameModel(id);
+    return d.detail ? `${d.name} — ${d.detail}` : d.name;
+  };
 
   // ── Backend load on mount ───────────────────────────────────────────────────
   // Prompts now live as Markdown files in the configured prompts directory.
@@ -1474,7 +1558,9 @@ function App() {
         if (pulled.length === 0) return;
         // Use the setState callback form so this works regardless of when
         // the effect resolves relative to other state updates at mount.
-        setModelId((curr) => (pulled.includes(curr) ? curr : pulled[0]));
+        // Not persisted: the stored preference stays what the user chose,
+        // in case the model comes back.
+        setAppDefaultModelState((curr) => (pulled.includes(curr) ? curr : pulled[0]));
         // Sync the welcome tab so its composer-displayed model matches.
         // We deliberately don't touch other tabs — their `model` is a
         // historical fact about the conversation, not a preference.
@@ -2935,7 +3021,8 @@ function App() {
     // one so the ChatPane header + future Composer sends use it.
     setTabs(ts => ts.map(t =>
       t.id === activeTab
-        ? { ...t, tabType: 'single-from-multi', model: pickedModel }
+        // The chat goes on with the model whose answer was kept.
+        ? { ...t, tabType: 'single-from-multi', model: pickedModel, modelOverride: pickedModel }
         : t,
     ));
     setModelId(pickedModel);
@@ -3115,7 +3202,7 @@ function App() {
     await invoke('db_clear_all_chats');
     ephemeralChatIdsRef.current.clear();
     const freshId = genId();
-    const freshModel = readPersistedComposerModel();
+    const freshModel = appDefaultModel;
     setHistory(EMPTY_HISTORY);
     setAllChatRows([]);
     // Groups themselves survive a "clear chats" — db_clear_all_chats only
@@ -3190,6 +3277,17 @@ function App() {
       }
     }));
     setPinsBySpace(Object.fromEntries(entries));
+    // Their sizes too. A slow or failed count just leaves the folder's
+    // name showing where the figure would be.
+    invoke('space_document_counts')
+      .then((rows) => {
+        const map = {};
+        for (const r of (Array.isArray(rows) ? rows : [])) {
+          if (r && r.spaceId) map[r.spaceId] = { documents: r.documents || 0, capped: !!r.capped };
+        }
+        setDocCountsBySpace(map);
+      })
+      .catch(() => {});
   };
 
   const refreshLockedSlugsForAllSpaces = async (spaceRows) => {
@@ -3300,6 +3398,34 @@ function App() {
       // the reload — otherwise the in-flight reload would see the stale
       // activeSpaceId and filter to an empty set for one tick.
       if (id === activeSpaceId) setActiveSpaceId(null);
+      // Its chats are in General now. Chats of that workspace that are
+      // still open must say so too, or bringing one to the front would
+      // send the sidebar looking for a workspace that no longer exists.
+      setTabs(ts => ts.map(t => {
+        if (t.spaceId !== id && t.homeSpaceId !== id) return t;
+        // (A copy and two deletes, not `{ spaceId, ...rest }`: object-rest
+        // destructuring makes Babel emit a top-level `_excluded` helper,
+        // and two files with one collide in the shared global scope.)
+        const copy = { ...t };
+        delete copy.spaceId;
+        delete copy.homeSpaceId;
+        return copy;
+      }));
+      setChats(cs => {
+        let changed = false;
+        const next = {};
+        for (const k of Object.keys(cs)) {
+          if (cs[k] && cs[k].spaceId === id) {
+            const copy = { ...cs[k] };
+            delete copy.spaceId;
+            next[k] = copy;
+            changed = true;
+          } else {
+            next[k] = cs[k];
+          }
+        }
+        return changed ? next : cs;
+      });
       await reloadHistory();
     } catch (e) {
       console.error('space_delete failed:', e);
@@ -3498,13 +3624,13 @@ function App() {
     }
     if (!space) {
       return {
-        preferredModel: readPersistedComposerModel(),
+        preferredModel: appDefaultModel,
         spaceId: null,
         promptSlugs: [],
         pinnedAttachments: [],
       };
     }
-    const preferred = space.defaultModel || readPersistedComposerModel();
+    const preferred = space.defaultModel || appDefaultModel;
     let promptSlugs = [];
     let pinnedAttachments = [];
     // Run both list queries concurrently — they hit different SQLite
@@ -3584,8 +3710,14 @@ function App() {
     (history.dateSections || []).reduce((n, s) => n + (s.items?.length || 0), 0),
   );
 
-  const activeTabModelId = tabs.find(t => t.id === activeTab)?.model || modelId;
-  const tabModel = MODELS_BY_ID[activeTabModelId] || { id: activeTabModelId, name: activeTabModelId, color: T.green };
+  // The chat in front's model, with its plain name for display.
+  const tabModelName = nameModel(modelId);
+  const tabModel = {
+    ...(MODELS_BY_ID[modelId] || { color: T.green }),
+    id: modelId,
+    name: tabModelName.name || modelId,
+    detail: tabModelName.detail,
+  };
 
   // Put a chat from workspace `ws` in front, choosing among `openTabs`:
   // the one last in front there if it is still open, else any open one,
@@ -3696,6 +3828,8 @@ function App() {
     if (!tabs.find(t => t.id === c.id)) {
       const baseTab = { id: c.id, title: c.title, model: c.model || modelId };
       if (tabType) baseTab.tabType = tabType;
+      // A comparison whose answer was kept goes on with that model.
+      if (tabType === 'single-from-multi' && c.model) baseTab.modelOverride = c.model;
       if (models) baseTab.models = models;
       if (spaceId) baseTab.spaceId = spaceId;
       setTabs(ts => [...ts, baseTab]);
@@ -3820,8 +3954,6 @@ function App() {
       }
     }
     setActiveTab(c.id);
-    const m = MODELS_BY_ID[c.model];
-    if (m) setModelId(m.id);
   };
 
   // ── Overlay "Send to main" handoff ──────────────────────────────────────────
@@ -3967,7 +4099,7 @@ function App() {
   const newPrivateTab = () => {
     const id = genId();
     ephemeralChatIdsRef.current.add(id);
-    const preferred = readPersistedComposerModel();
+    const preferred = appDefaultModel;
     // A private chat joins no Space and inherits nothing from one, but it
     // is listed in the sidebar of the workspace it was started from
     // (`homeSpaceId`, read by tabWorkspaceId) so starting one does not
@@ -4196,7 +4328,12 @@ function App() {
     // The new tab inherits chosenModel; the active model selector also
     // switches so the composer + status bar follow. We don't touch other
     // open tabs — their model is a historical fact about that chat.
-    setTabs(ts => [...ts, { id, title: 'Screenshot', model: chosenModel }]);
+    // `modelOverride` keeps the chat on the vision model if the default
+    // cannot read images (see `chatModelId`).
+    setTabs(ts => [...ts, {
+      id, title: 'Screenshot', model: chosenModel,
+      ...(chosenModel !== appDefaultModel ? { modelOverride: chosenModel } : {}),
+    }]);
     setChats(cs => ({
       ...cs,
       [id]: { id, title: 'Screenshot', messages: [], loaded: true },
@@ -4595,7 +4732,7 @@ function App() {
   // `id` (not the stale fallback model.id) so the first send is hot.
   const handleGuidedModelInstalled = (id) => {
     setModelId(id);
-    persistComposerModel(id);
+    setAppDefaultModel(id);
     setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, model: id } : t));
     setSetupGateOpen(false);
     warmModel(id);
@@ -4670,6 +4807,27 @@ function App() {
     setPaletteOpen(false);
     const run = paletteRunners[id];
     if (run) run();
+  };
+
+  // The line under the message box. A local backend answers on this Mac;
+  // a custom server on another machine is named, because then it does not.
+  const composerPrivacy = privacyStatus(backendKind, backendBaseUrl);
+  const composerNote = composerPrivacy.kind === 'local'
+    ? 'Answered on this Mac. Check anything important against its source.'
+    : `Answered by ${composerPrivacy.host || 'another server'}. Check anything important against its source.`;
+  // "Take more time to think": Rust owns the setting (engine_tuning_set
+  // persists and applies it, with no model reload) and answers with the
+  // status now in force, which Settings → Advanced is told about too.
+  const setThinking = async (on) => {
+    try {
+      const st = await invoke('engine_tuning_set', { chatCtx: null, thinking: !!on });
+      if (st) {
+        setEngineThinking(!!st.thinking);
+        window.dispatchEvent(new CustomEvent('ekorbia:engine-tuning', { detail: st }));
+      }
+    } catch (e) {
+      window.ekToast?.({ kind: 'error', title: 'Could not change that setting', body: String(e) });
+    }
   };
 
   // ── Shell pieces shared by Home and the workspace sidebar ──
@@ -4803,6 +4961,9 @@ function App() {
         onPromptsChanged={refreshPrompts}
         chatCount={totalChatCount}
         onClearAllChats={clearAllChats}
+        defaultModel={appDefaultModel}
+        onDefaultModel={setAppDefaultModel}
+        spaces={spaces}
       />
       <WatchModal
         open={watchModalOpen}
@@ -4842,6 +5003,7 @@ function App() {
         open={compareModalOpen}
         onClose={() => setCompareModalOpen(false)}
         onConfirm={confirmCompareModels}
+        nameOfModel={nameModel}
       />
 
       <div style={{
@@ -4857,7 +5019,11 @@ function App() {
             spaces={spaces}
             chatRows={allChatRows}
             pinsBySpace={pinsBySpace}
-            defaultModelId={readPersistedComposerModel()}
+            defaultModelId={appDefaultModel}
+            modelName={(id) => nameModel(id).name}
+            nameOfModel={modelOptionLabel}
+            appDefaultName={nameModel(appDefaultModel).name}
+            docCounts={docCountsBySpace}
             query={query}
             onQuery={setQuery}
             messageHits={messageHits}
@@ -4912,6 +5078,14 @@ function App() {
             promptsLibrary={prompts}
             onEditSpaceSave={saveSpaceSettings}
             docsLabel={workspaceDocsLabel(pinsBySpace[activeSpaceId])}
+            // The model this workspace's chats use, by its plain name.
+            modelName={nameModel((activeSpace && activeSpace.defaultModel) || appDefaultModel).name}
+            nameOfModel={modelOptionLabel}
+            appDefaultName={nameModel(appDefaultModel).name}
+            documentCount={activeSpaceId ? (docCountsBySpace[activeSpaceId] || null) : null}
+            // Deleting the workspace on show leaves nowhere to stand: its
+            // chats move to General and the app goes back to Home.
+            onDeleteSpace={async (id) => { await deleteSpace(id); goHome(); }}
             // Open chats the saved list cannot show: private chats, and
             // the unsent chat in front.
             openTabs={workspaceOpenTabs}
@@ -4950,6 +5124,8 @@ function App() {
                 // re-routes future renders through the branch below.
                 <CompareChatPane
                   chat={chat}
+                  nameOfModel={nameModel}
+                  showDetails={tweaks.showDetails}
                   isStreaming={streaming}
                   onSend={handleSendMultiModel}
                   onStopAll={() => handleStopMultiModel()}
@@ -5028,19 +5204,10 @@ function App() {
                     // Empty-state starter cards attach a matching library
                     // prompt (falling back to seeding example text).
                     onStarter={handleStarterPrompt}
+                    documentCount={chatDocumentCount(attachments)}
                   />
                   <Composer
                     model={tabModel}
-                    onModelChange={(id) => {
-                      setModelId(id);
-                      setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, model: id } : t));
-                      // User explicitly picked a model — persist as the
-                      // stable default for future new chats. This is the
-                      // ONLY place we write to COMPOSER_MODEL_LS_KEY (no
-                      // auto-persist on modelId change), so opening an
-                      // old chat doesn't drift the default.
-                      persistComposerModel(id);
-                    }}
                     onSend={handleSend}
                     isStreaming={streaming}
                     onStop={handleStop}
@@ -5076,9 +5243,14 @@ function App() {
                     focusSignal={composerFocusKey}
                     // Hide attach buttons in private mode — see Composer notes.
                     ephemeral={!!chat.ephemeral}
-                    // When off (default), the capability chip collapses to a
-                    // quiet ⓘ tooltip beside the model picker.
-                    showDetails={tweaks.showDetails}
+                    documentCount={chatDocumentCount(attachments)}
+                    // Where the answer comes from, from the backend in use.
+                    note={composerNote}
+                    // The engine's thinking switch (null = nothing to switch).
+                    thinking={engineThinking}
+                    onToggleThinking={setThinking}
+                    // Same flow as the ⌘⇧1 shortcut; macOS only.
+                    onCapture={IS_MAC ? () => { invoke('screenshot_capture').catch(console.error); } : undefined}
                   />
                 </>
               )}

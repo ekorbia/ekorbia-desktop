@@ -97,6 +97,18 @@ function Sidebar({
   // Where this workspace's documents live, e.g. "Matters/Hartwell"
   // (workspaceDocsLabel in utils.js). Empty when nothing is pinned.
   docsLabel = "",
+  // The model this workspace's chats use, by its plain name ("Balanced").
+  modelName = "",
+  // For the settings dialog's model list: (id) → plain name, and the app
+  // default's name.
+  nameOfModel,
+  appDefaultName = "",
+  // { documents, capped } for this workspace's pinned documents, counted
+  // by Rust; null until known or when nothing is pinned.
+  documentCount = null,
+  // Delete this workspace (its chats move to General). Called after the
+  // user confirms; the caller then goes back to Home.
+  onDeleteSpace,
   // Unsaved open chats to list above the saved ones: [{id, title,
   // ephemeral}]. onPickOpen(id) brings one to the front; onCloseOpen(id)
   // ends a private chat.
@@ -157,6 +169,7 @@ function Sidebar({
   // `editSpaceModal.space` is the workspace being edited; the dialog owns
   // its own draft state so cancel reverts cleanly.
   const [editSpaceModal, setEditSpaceModal] = useState(null);
+  const [confirmDeleteSpace, setConfirmDeleteSpace] = useState(null);
 
   // ── The New chat menu (the arrow beside the button) ──
   const [newMenuOpen, setNewMenuOpen] = useState(false);
@@ -228,8 +241,13 @@ function Sidebar({
     ? window.spaceAmbientTint(activeSpaceRow, window.SPACE_COLORS, T.isLight)
     : null;
   const workspaceName = activeSpaceRow ? (activeSpaceRow.name || "Unnamed") : "General";
+  const countLabel = documentCount && documentCount.documents > 0
+    ? (documentCount.capped
+        ? `${documentCount.documents}+ documents`
+        : documentsLabel(documentCount.documents))
+    : "";
   const metaLine = activeSpaceRow
-    ? (docsLabel || "No documents yet")
+    ? [countLabel || docsLabel || "No documents yet", modelName].filter(Boolean).join(" · ")
     : "Chats that belong to no workspace";
 
   const sectionLabelStyle = {
@@ -678,11 +696,41 @@ function Sidebar({
         <SpaceSettingsModal
           space={editSpaceModal.space}
           promptsLibrary={promptsLibrary}
+          nameOfModel={nameOfModel}
+          appDefaultName={appDefaultName}
+          documentCount={documentCount}
+          onDelete={onDeleteSpace ? () => {
+            const s = editSpaceModal.space;
+            setEditSpaceModal(null);
+            setConfirmDeleteSpace({ space: s });
+          } : undefined}
           onCancel={() => setEditSpaceModal(null)}
           onSave={async (draft) => {
             const s = editSpaceModal.space;
             setEditSpaceModal(null);
             if (onEditSpaceSave) await onEditSpaceSave(s.id, draft);
+          }}
+        />
+      )}
+      {confirmDeleteSpace && (
+        <ConfirmModal
+          title="Delete workspace?"
+          body={
+            <span>
+              The workspace{" "}
+              <strong>{confirmDeleteSpace.space.name || "Unnamed"}</strong>{" "}
+              will be removed. Its chats are kept and move to{" "}
+              <strong>General</strong>. This can't be undone.
+            </span>
+          }
+          cancelLabel="Cancel"
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setConfirmDeleteSpace(null)}
+          onConfirm={() => {
+            const sp = confirmDeleteSpace.space;
+            setConfirmDeleteSpace(null);
+            onDeleteSpace && onDeleteSpace(sp.id);
           }}
         />
       )}
@@ -1142,7 +1190,14 @@ function SpaceColorPickerPopover({ anchorRect, current, onPick, onClose }) {
 // Memory file actions (Browse / Edit / Reveal) talk to the backend
 // directly via `space_memory_open` / `getDialogApi`. These are leaf
 // actions that don't need to round-trip through the parent.
-function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
+// `nameOfModel(id)` gives a model's plain name ("Balanced — Gemma 4 12B")
+// and `appDefaultName` the app default's, so the model list reads the way
+// Settings → Models does. Both optional: without them ids are shown.
+//
+// `documentCount` ({ documents, capped } or null) is how many documents the
+// saved pins hold, counted by Rust. `onDelete` puts a "Delete workspace…"
+// button in the footer; the host asks for confirmation.
+function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, nameOfModel, appDefaultName = "", documentCount = null, onDelete }) {
   // ── Draft state for the row-level fields ──
   // Color and slug are loaded from the live row; slug is read-only
   // (display only) because `space_update`'s SET clause excludes it
@@ -1151,6 +1206,27 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
   const [color, setColor] = useState(space.color || null);
   const [defaultModel, setDefaultModel] = useState(space.defaultModel || "");
   const [memoryPath, setMemoryPath] = useState(space.memoryPath || "");
+  // Notes: the text of the Space's memory file, edited here in place. Read
+  // once when the dialog opens; written by Rust on Save, and only if it
+  // was touched, so opening and saving the dialog never rewrites the file.
+  const [notes, setNotes] = useState("");
+  const [notesLoaded, setNotesLoaded] = useState(!space.memoryPath);
+  const [notesDirty, setNotesDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    const invoke = getInvoke();
+    if (!invoke || !space.memoryPath) {
+      setNotesLoaded(true);
+      return undefined;
+    }
+    let alive = true;
+    invoke("space_memory_read", { path: space.memoryPath })
+      .then((text) => { if (alive) setNotes(typeof text === "string" ? text : ""); })
+      .catch((e) => console.error("space_memory_read failed:", e))
+      .finally(() => { if (alive) setNotesLoaded(true); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per open
+  }, []);
   // Search filter for the pinned-prompts picker. Empty string means
   // "show everything" — the picker still splits into Pinned + All.
   const [promptSearch, setPromptSearch] = useState("");
@@ -1247,42 +1323,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  // ── Memory file actions (leaf — talk directly to Tauri) ──
-  const browseMemoryPath = async () => {
-    const dialogApi = window.getDialogApi && window.getDialogApi();
-    if (!dialogApi) return;
-    try {
-      const picked = await dialogApi.save({
-        title: `Memory file for ${space.name || "Space"}`,
-        // Suggest the canonical default — parent dir is created by
-        // space_memory_open on first Edit. The user can override.
-        defaultPath: `Ekorbia/Spaces/${space.slug}/memory.md`,
-        filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
-      });
-      if (picked) setMemoryPath(picked);
-    } catch (e) {
-      console.error("space memory browse failed:", e);
-    }
-  };
-  const editMemory = async () => {
-    const invoke = window.getInvoke && window.getInvoke();
-    if (!invoke) return;
-    // If no path is set yet, derive the canonical default so the user
-    // can hit Edit on a fresh Space without going through Browse first.
-    const path = memoryPath
-      || `${space.slug ? "~/Documents/Ekorbia/Spaces/" + space.slug + "/memory.md" : ""}`;
-    if (!path) return;
-    try {
-      await invoke("space_memory_open", { path, reveal: false });
-      // If we just created the file via the canonical default, pin the
-      // path so Save persists it on the row. Without this, hitting
-      // Edit-then-Cancel would leave the row's memoryPath unset.
-      if (!memoryPath) setMemoryPath(path);
-    } catch (e) {
-      console.error("space_memory_open failed:", e);
-      window.ekToast?.({ kind: "error", title: "Open memory failed", body: String(e) });
-    }
-  };
+  // ── Notes file (leaf — talks directly to Tauri) ──
   const revealMemory = async () => {
     const invoke = window.getInvoke && window.getInvoke();
     if (!invoke || !memoryPath) return;
@@ -1293,7 +1334,6 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
       window.ekToast?.({ kind: "error", title: "Reveal failed", body: String(e) });
     }
   };
-  const clearMemory = () => setMemoryPath("");
 
   // ── Pinned attachment actions ──
   const addPinnedFile = async () => {
@@ -1350,16 +1390,39 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
     );
 
   // ── Save ──
-  const handleSave = () => {
+  const handleSave = async () => {
     const trimmedName = name.trim();
-    if (!trimmedName) return; // disabled below; defence in depth
+    if (!trimmedName || saving) return; // disabled below; defence in depth
+    // Notes first: Rust writes the file (creating the Space's own notes
+    // file the first time) and answers with where it is, which is then
+    // stored on the Space. Nothing to write when the notes were never
+    // touched, or were left empty with no file to empty.
+    let notesPath = memoryPath.trim();
+    if (notesDirty && (notesPath || notes.trim())) {
+      const invoke = getInvoke();
+      setSaving(true);
+      try {
+        const written = await invoke("space_memory_write", {
+          path: notesPath,
+          slug: space.slug || "",
+          contents: notes,
+        });
+        if (written) notesPath = written;
+      } catch (e) {
+        setSaving(false);
+        console.error("space_memory_write failed:", e);
+        window.ekToast?.({ kind: "error", title: "Could not save the notes", body: String(e) });
+        return;
+      }
+      setSaving(false);
+    }
     const draft = {
       row: {
         ...space,
         name: trimmedName,
         color: color || null,
         defaultModel: defaultModel.trim() || null,
-        memoryPath: memoryPath.trim() || null,
+        memoryPath: notesPath || null,
       },
       promptSlugs,
       // Only include slugs that are ALSO in promptSlugs — a lock flag
@@ -1371,9 +1434,6 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
     };
     onSave(draft);
   };
-
-  const palette = window.SPACE_COLORS || {};
-  const paletteKeys = Object.keys(palette);
 
   return (
     <Fragment>
@@ -1445,70 +1505,17 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
             gap: 18,
           }}
         >
-          {/* ── 1. Name + Color ── */}
+          {/* ── 1. Name ── (a workspace has no colour any more; one set
+              before this stays on the row and is simply not shown here) */}
           <div>
             <SectionLabel>Name</SectionLabel>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Space name"
+              placeholder="Workspace name"
               data-space-settings-name
-              style={modalInputStyle}
+              style={modalInputStyle()}
             />
-            <div style={{ height: 12 }} />
-            <SectionLabel>Color</SectionLabel>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {paletteKeys.map((k) => {
-                const selected = color === k;
-                return (
-                  <button
-                    key={k}
-                    onClick={() => setColor(k)}
-                    title={k}
-                    data-color-swatch={k}
-                    aria-pressed={selected}
-                    style={{
-                      width: 22,
-                      height: 22,
-                      borderRadius: "50%",
-                      background: palette[k],
-                      border: selected
-                        ? `2px solid ${T.fg}`
-                        : `2px solid transparent`,
-                      cursor: "pointer",
-                      padding: 0,
-                      flexShrink: 0,
-                    }}
-                  />
-                );
-              })}
-              <button
-                onClick={() => setColor(null)}
-                title="No color"
-                data-color-swatch="none"
-                aria-pressed={!color}
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: "50%",
-                  background: "transparent",
-                  border: !color
-                    ? `2px solid ${T.fg}`
-                    : `2px dashed ${T.border}`,
-                  cursor: "pointer",
-                  padding: 0,
-                  flexShrink: 0,
-                  color: T.fg3,
-                  fontFamily: T.mono,
-                  fontSize: 9,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                ∅
-              </button>
-            </div>
           </div>
 
           {/* ── 2. Default model ──
@@ -1520,9 +1527,9 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
               silently dropped on save. */}
           <div>
             <SectionLabel>
-              Default model
+              Model
               <SectionHint>
-                Preselected for new chats in this Space. Pick "Inherit global default" to use your composer's default model instead.
+                The model this workspace's chats use. "App default" follows Settings → Models.
               </SectionHint>
             </SectionLabel>
             <select
@@ -1530,27 +1537,29 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
               onChange={(e) => setDefaultModel(e.target.value)}
               data-space-settings-default-model
               style={{
-                ...modalInputStyle,
-                fontFamily: T.mono,
+                ...modalInputStyle(),
+                fontFamily: T.sans,
                 // The native select's appearance varies per platform —
                 // leave it unstyled rather than fighting the OS dropdown.
                 appearance: "auto",
                 cursor: "pointer",
               }}
             >
-              <option value="">Inherit global default</option>
+              <option value="">{appDefaultName ? `App default (${appDefaultName})` : "App default"}</option>
               {/* If the saved defaultModel isn't in the installed list
                   (model was uninstalled OR Ollama is down), surface it
                   as a separate option marked "(not installed)" so the
                   value isn't silently lost on save. */}
               {defaultModel && !availableModels.includes(defaultModel) && (
                 <option value={defaultModel} data-model-not-installed>
-                  {defaultModel} (not installed)
+                  {nameOfModel ? nameOfModel(defaultModel) : defaultModel} (not installed)
                 </option>
               )}
-              {availableModels.map((m) => (
+              {/* The model that reads documents for search is not one a
+                  chat can use. */}
+              {availableModels.filter((m) => !/embed/i.test(m)).map((m) => (
                 <option key={m} value={m}>
-                  {m}
+                  {nameOfModel ? nameOfModel(m) : m}
                 </option>
               ))}
             </select>
@@ -1573,53 +1582,65 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
             )}
           </div>
 
-          {/* ── 3. Memory file ── */}
+          {/* ── 3. Notes ──
+              What every chat in this workspace should know. Kept as a
+              Markdown file (the Space's memory file), edited here in place
+              and saved with the rest of the dialog. */}
           <div>
             <SectionLabel>
-              Memory file
+              Notes for this workspace
               <SectionHint>
-                Injected as a system message every send, after your global memory file.
+                Standing facts every chat here should know. They are added to each question.
               </SectionHint>
             </SectionLabel>
-            <div
-              data-space-settings-memory-path
+            <textarea
+              data-space-settings-notes
+              value={notes}
+              onChange={(e) => { setNotes(e.target.value); setNotesDirty(true); }}
+              disabled={!notesLoaded}
+              placeholder={notesLoaded
+                ? "For example: We act for the buyer. Use British spelling. Cite clause numbers."
+                : "Loading…"}
+              rows={4}
               style={{
-                padding: "6px 8px",
-                background: T.bg2,
-                border: `1px solid ${T.border}`,
-                borderRadius: 4,
-                fontFamily: T.mono,
-                fontSize: 11,
-                color: memoryPath ? T.fg1 : T.fg3,
-                wordBreak: "break-all",
-                minHeight: 24,
+                ...modalInputStyle(),
+                fontFamily: T.sans,
+                lineHeight: 1.5,
+                minHeight: 76,
+                resize: "vertical",
               }}
-            >
-              {memoryPath || "(no memory file set)"}
-            </div>
-            <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <SmallButton onClick={browseMemoryPath} data-space-memory-browse>
-                Browse…
-              </SmallButton>
-              <SmallButton onClick={editMemory} data-space-memory-edit>
-                Edit
-              </SmallButton>
-              <SmallButton
-                onClick={revealMemory}
-                disabled={!memoryPath}
-                data-space-memory-reveal
+            />
+            {memoryPath && (
+              <div
+                data-space-settings-memory-path
+                style={{
+                  marginTop: 6,
+                  fontFamily: T.sans,
+                  fontSize: 11,
+                  color: T.fg3,
+                  wordBreak: "break-all",
+                }}
               >
-                Reveal
-              </SmallButton>
-              <SmallButton
-                onClick={clearMemory}
-                disabled={!memoryPath}
-                danger
-                data-space-memory-clear
-              >
-                Clear
-              </SmallButton>
-            </div>
+                Kept in {memoryPath}.{" "}
+                <button
+                  type="button"
+                  onClick={revealMemory}
+                  data-space-memory-reveal
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    padding: 0,
+                    cursor: "pointer",
+                    color: T.fg1,
+                    fontFamily: T.sans,
+                    fontSize: 11,
+                    textDecoration: "underline",
+                  }}
+                >
+                  Show in Finder
+                </button>
+              </div>
+            )}
           </div>
 
           {/* ── 4. Pinned prompts ──
@@ -1855,7 +1876,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
                       onChange={(e) => setPromptSearch(e.target.value)}
                       data-space-settings-prompts-search
                       style={{
-                        ...modalInputStyle,
+                        ...modalInputStyle(),
                         marginBottom: 6,
                         fontFamily: T.sans,
                       }}
@@ -1952,7 +1973,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
                   }
                   placeholder="Prompt name"
                   data-space-new-prompt-name
-                  style={{ ...modalInputStyle, marginBottom: 8 }}
+                  style={{ ...modalInputStyle(), marginBottom: 8 }}
                 />
                 <SectionLabel>Body</SectionLabel>
                 <textarea
@@ -1964,7 +1985,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
                   data-space-new-prompt-body
                   rows={4}
                   style={{
-                    ...modalInputStyle,
+                    ...modalInputStyle(),
                     resize: "vertical",
                     minHeight: 80,
                   }}
@@ -2045,9 +2066,9 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
           {/* ── 5. Pinned attachments ── */}
           <div>
             <SectionLabel>
-              Pinned attachments
+              Documents
               <SectionHint>
-                Auto-attached to every new chat in this Space.
+                Every new chat in this workspace can read these.
               </SectionHint>
             </SectionLabel>
             <div style={{ marginBottom: 8, display: "flex", gap: 6 }}>
@@ -2117,6 +2138,16 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
                 ))}
               </div>
             )}
+            {documentCount && documentCount.documents > 0 && (
+              <div
+                data-space-settings-doc-count
+                style={{ marginTop: 8, fontFamily: T.sans, fontSize: 11.5, color: T.fg2 }}
+              >
+                {documentCount.capped
+                  ? `More than ${documentCount.documents} documents found.`
+                  : `${documentsLabel(documentCount.documents)} found.`}
+              </div>
+            )}
           </div>
         </div>
 
@@ -2126,10 +2157,30 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
             padding: "12px 20px",
             borderTop: `1px solid ${T.border}`,
             display: "flex",
+            alignItems: "center",
             justifyContent: "flex-end",
             gap: 8,
           }}
         >
+          {onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              data-space-settings-delete
+              style={{
+                padding: "7px 2px",
+                background: "transparent",
+                border: "none",
+                color: T.red,
+                fontFamily: T.sans,
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              Delete workspace…
+            </button>
+          )}
+          <span style={{ flex: 1 }} />
           <button
             onClick={onCancel}
             data-space-settings-cancel
@@ -2148,7 +2199,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
           </button>
           <button
             onClick={handleSave}
-            disabled={!name.trim()}
+            disabled={!name.trim() || saving}
             data-space-settings-save
             style={{
               padding: "7px 14px",
@@ -2229,18 +2280,24 @@ function SmallButton({ children, onClick, disabled, danger, ...rest }) {
   );
 }
 
-const modalInputStyle = {
-  width: "100%",
-  boxSizing: "border-box",
-  padding: "7px 10px",
-  background: T.bg2,
-  border: `1px solid ${T.border}`,
-  borderRadius: 4,
-  color: T.fg,
-  fontFamily: T.sans,
-  fontSize: 12.5,
-  outline: "none",
-};
+// A function, not a constant: it reads `T` when called, so the fields
+// follow the theme in force. As a module-level object it was built once,
+// from the dark defaults, and every dialog field stayed dark in a light
+// theme.
+function modalInputStyle() {
+  return {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "7px 10px",
+    background: T.bg2,
+    border: `1px solid ${T.border}`,
+    borderRadius: 4,
+    color: T.fg,
+    fontFamily: T.sans,
+    fontSize: 12.5,
+    outline: "none",
+  };
+}
 
 
 // ─── ChatContextMenu ────────────────────────────────────────

@@ -389,6 +389,92 @@ pub(crate) fn space_attachments_list(
         .map_err(|e| e.to_string())
 }
 
+/// How many documents a Space's chats can read: every file the folder
+/// indexer would take from each pinned folder, plus each pinned file that
+/// exists. `capped` is true when a folder walk hit the indexer's cap, so
+/// the figure is a floor.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SpaceDocumentCount {
+    space_id: String,
+    documents: usize,
+    capped: bool,
+}
+
+/// Count the documents behind one Space's pins (`(kind, path)` pairs).
+/// Pure apart from the file system, so it is testable without a database
+/// or an app handle. A pin whose path is gone counts for nothing.
+pub(crate) fn count_pinned_documents(
+    pins: &[(String, String)],
+    exts: &[String],
+    ignore: &[String],
+) -> (usize, bool) {
+    let mut total = 0usize;
+    let mut capped = false;
+    for (kind, path) in pins {
+        let p = std::path::Path::new(path);
+        if kind == "folder" {
+            if p.is_dir() {
+                let (n, hit) = crate::attachments::folder::count_folder_documents(p, exts, ignore);
+                total += n;
+                capped |= hit;
+            }
+        } else if p.is_file() {
+            total += 1;
+        }
+    }
+    (total, capped)
+}
+
+/// Document counts for every Space that has something pinned, for the
+/// Home cards and the workspace sidebar. Walking a large folder takes a
+/// moment, so the walk runs off the main thread and the pins are read out
+/// of the database first — the lock is never held across it.
+#[tauri::command]
+pub(crate) async fn space_document_counts(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
+) -> Result<Vec<SpaceDocumentCount>, String> {
+    let pins: Vec<(String, String, String)> = {
+        let db = state.0.lock().map_err(|e| e.to_string())?;
+        let mut stmt = db
+            .prepare(
+                "SELECT space_id, kind, path FROM space_attachments \
+                 ORDER BY space_id ASC, added_at ASC, id ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+    let exts = crate::attachments::config::current_folder_exts(&app);
+    let ignore = crate::attachments::config::current_folder_ignore(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut by_space: Vec<(String, Vec<(String, String)>)> = Vec::new();
+        for (space_id, kind, path) in pins {
+            match by_space.last_mut() {
+                Some((id, list)) if *id == space_id => list.push((kind, path)),
+                _ => by_space.push((space_id, vec![(kind, path)])),
+            }
+        }
+        by_space
+            .into_iter()
+            .map(|(space_id, list)| {
+                let (documents, capped) = count_pinned_documents(&list, &exts, &ignore);
+                SpaceDocumentCount {
+                    space_id,
+                    documents,
+                    capped,
+                }
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Pin a file or folder to a Space. `kind` is `"file"` or `"folder"`;
 /// anything else is rejected up front so a typo in the UI dispatch
 /// doesn't silently land a malformed row. The instantiation pipeline
@@ -595,6 +681,40 @@ mod tests {
         conn.execute_batch(SCHEMA)
             .expect("SCHEMA must apply cleanly");
         conn
+    }
+
+    #[test]
+    fn pinned_documents_count_folder_files_and_single_files() {
+        let dir = std::env::temp_dir().join(format!("ek_space_docs_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let nested = dir.join("matter").join("drafts");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(dir.join("matter").join("node_modules")).unwrap();
+        std::fs::write(dir.join("matter").join("agreement.pdf"), b"%PDF").unwrap();
+        std::fs::write(dir.join("matter").join("notes.md"), b"# notes").unwrap();
+        std::fs::write(nested.join("draft-2.txt"), b"draft").unwrap();
+        // Not a type the indexer reads, and a folder it skips.
+        std::fs::write(dir.join("matter").join("photo.heic"), b"x").unwrap();
+        std::fs::write(
+            dir.join("matter").join("node_modules").join("readme.md"),
+            b"x",
+        )
+        .unwrap();
+        std::fs::write(dir.join("single.pdf"), b"%PDF").unwrap();
+
+        let exts: Vec<String> = ["md", "txt", "pdf"].iter().map(|s| s.to_string()).collect();
+        let ignore: Vec<String> = vec!["node_modules".to_string()];
+        let s = |p: std::path::PathBuf| p.to_string_lossy().to_string();
+        let pins = vec![
+            ("folder".to_string(), s(dir.join("matter"))),
+            ("file".to_string(), s(dir.join("single.pdf"))),
+            // Gone since it was pinned: counts for nothing, breaks nothing.
+            ("file".to_string(), s(dir.join("deleted.pdf"))),
+            ("folder".to_string(), s(dir.join("no-such-folder"))),
+        ];
+        assert_eq!(count_pinned_documents(&pins, &exts, &ignore), (4, false));
+        assert_eq!(count_pinned_documents(&[], &exts, &ignore), (0, false));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 9-tuple shape returned by SELECTing every column from `spaces`.

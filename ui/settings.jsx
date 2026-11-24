@@ -720,7 +720,217 @@ function MemorySettings() {
   );
 }
 
-function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onClearAllChats }) {
+// ─── Settings → Models ──────────────────────────────────────
+// The app's default model, in plain names. For the bundled engine these
+// are the three tiers modelTiers (utils.js) works out from the catalog
+// and this Mac's memory — Fast, Balanced, Most capable — each of which can
+// be downloaded, and any installed one made the default. Several can be
+// installed side by side (Compare needs two). A workspace uses the default
+// unless its own settings name another model.
+//
+// On Ollama or a custom server there is no catalog to name things from,
+// so the pane lists that backend's models under their own names.
+//
+// Everything else about models (the rest of the catalog, a model from a
+// link, removal, other servers) is under Advanced.
+function ModelsSettings({ defaultModel = "", onDefaultModel, spaces = [], onOpenAdvanced }) {
+  const invoke = getInvoke();
+  const [backend, setBackend] = useState(null); // 'engine' | 'ollama' | 'openai' | null (loading)
+  const [catalog, setCatalog] = useState([]);
+  const [ramBytes, setRamBytes] = useState(0);
+  const [installed, setInstalled] = useState(null); // string[] | null while unknown
+  const [, bump] = useState(0);
+
+  const refreshInstalled = async () => {
+    if (!invoke) return;
+    try {
+      const data = await invoke("llm_list_models");
+      setInstalled(((data && data.models) || []).map((m) => m.name));
+    } catch {
+      setInstalled([]);
+    }
+  };
+
+  useEffect(() => {
+    if (!invoke) return undefined;
+    let alive = true;
+    (async () => {
+      let kind = "ollama";
+      try {
+        const c = await invoke("llm_backend_config_get");
+        kind = (c && c.backend) || "ollama";
+      } catch {}
+      if (!alive) return;
+      setBackend(kind);
+      if (kind === "engine") {
+        try {
+          const [cat, prof] = await Promise.all([
+            invoke("engine_catalog"),
+            invoke("system_profile"),
+          ]);
+          if (!alive) return;
+          // engine_catalog returns { version, models } — never a bare array.
+          setCatalog((cat && cat.models) || []);
+          setRamBytes((prof && prof.totalRamBytes) || 0);
+        } catch {}
+      }
+      refreshInstalled();
+    })();
+    // Re-render on every download tick; re-read what is installed when one ends.
+    const unsubscribe = ekPullsSubscribe(() => bump((n) => n + 1));
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const download = async (id) => {
+    const res = await ekPullModel(id, { engine: true });
+    if (res && res.ok) refreshInstalled();
+  };
+
+  const tiers = modelTiers(catalog, ramBytes);
+  const isInstalled = (id) => Array.isArray(installed) && installed.includes(id);
+  const usedBy = (id) => (spaces || []).filter((s) => s && s.defaultModel === id).length;
+  const gb = (bytes) => `${((bytes || 0) / 1e9).toFixed(1)} GB`;
+  const memoryGb = ramBytes > 0 ? Math.round(ramBytes / (1024 * 1024 * 1024)) : 0;
+
+  const hint = { fontFamily: T.sans, fontSize: 12.5, color: T.fg2, lineHeight: 1.5 };
+  const pill = {
+    fontFamily: T.sans, fontSize: 11, fontWeight: 500, color: T.amber,
+    background: T.amber + "1f", borderRadius: 999, padding: "2px 9px", whiteSpace: "nowrap",
+  };
+  const button = {
+    height: 26, padding: "0 11px", border: `1px solid ${T.border}`, borderRadius: 7,
+    background: T.bg0, color: T.fg, fontFamily: T.sans, fontSize: 12, fontWeight: 500,
+    cursor: "pointer", whiteSpace: "nowrap",
+  };
+  const link = {
+    border: "none", background: "transparent", padding: 0, cursor: "pointer",
+    color: T.amber, fontFamily: T.sans, fontSize: 12, whiteSpace: "nowrap",
+  };
+
+  // One row: a model, what it is for, and the one thing you can do with it.
+  const row = ({ id, name, detail, blurb, size, tier }) => {
+    const pull = ekGetPull(id);
+    const here = isInstalled(id);
+    const isDefault = id === defaultModel;
+    return (
+      <div
+        key={id}
+        data-model-row={id}
+        data-model-tier={tier || undefined}
+        data-default={isDefault ? "true" : undefined}
+        style={{
+          display: "flex", alignItems: "center", gap: 12,
+          border: `1px solid ${isDefault ? T.fg : T.border}`,
+          boxShadow: isDefault ? `0 0 0 1px ${T.fg}` : "none",
+          borderRadius: 10, padding: "10px 12px",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+            <span data-model-name style={{ fontFamily: T.sans, fontSize: 13.5, fontWeight: 600, color: T.fg }}>{name}</span>
+            {(detail || size) && (
+              <span data-model-detail style={{ fontFamily: T.sans, fontSize: 11.5, color: T.fg3 }}>
+                {[detail, size].filter(Boolean).join(" · ")}
+              </span>
+            )}
+          </div>
+          {blurb && <div style={{ ...hint, fontSize: 12 }}>{blurb}</div>}
+        </div>
+        {pull ? (
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span data-model-progress style={{ ...hint, fontSize: 12 }}>
+              {typeof pull.pct === "number" ? `${pull.pct}%` : "Starting…"}
+            </span>
+            <button type="button" style={link} onClick={() => ekCancelPull(id)}>Cancel</button>
+          </span>
+        ) : !here && backend === "engine" ? (
+          <button type="button" data-model-download={id} style={button} onClick={() => download(id)}>
+            Download
+          </button>
+        ) : isDefault ? (
+          <span data-model-is-default style={pill}>Default</span>
+        ) : (
+          <button
+            type="button"
+            data-model-make-default={id}
+            style={link}
+            onClick={() => onDefaultModel && onDefaultModel(id)}
+          >
+            Make default
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  if (backend === null) {
+    return <div data-models-settings style={hint}>Looking for models…</div>;
+  }
+
+  let rows;
+  if (backend === "engine") {
+    rows = MODEL_TIER_ORDER.filter((t) => tiers[t]).map((t) => ({
+      id: tiers[t].id,
+      tier: t,
+      name: MODEL_TIER_INFO[t].name,
+      detail: tiers[t].label || tiers[t].id,
+      size: gb(tiers[t].totalBytes),
+      blurb: MODEL_TIER_INFO[t].blurb,
+    }));
+    // A default chosen under Advanced that is not one of the three still
+    // has to be visible here.
+    if (defaultModel && !rows.some((r) => r.id === defaultModel)) {
+      const d = describeModel(defaultModel, tiers, catalog);
+      rows.push({ id: defaultModel, tier: null, name: d.name, detail: "", size: "", blurb: "Chosen under Advanced." });
+    }
+  } else {
+    rows = (installed || []).map((id) => ({ id, tier: null, name: id, detail: "", size: "", blurb: "" }));
+  }
+  const used = rows
+    .map((r) => ({ r, n: usedBy(r.id) }))
+    .filter(({ n }) => n > 0);
+
+  return (
+    <div data-models-settings data-backend={backend} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ fontFamily: T.sans, fontSize: 17, fontWeight: 600, color: T.fg }}>Models</div>
+      <div style={{ ...hint, marginTop: -4 }}>
+        {backend === "engine"
+          ? `${memoryGb ? `Sized for this Mac, which has ${memoryGb} GB of memory. ` : ""}Workspaces use the default unless you choose another for them.`
+          : `These come from ${backend === "ollama" ? "Ollama" : "your server"}. Workspaces use the default unless you choose another for them.`}
+      </div>
+      {rows.length === 0 && (
+        <div data-models-empty style={hint}>
+          {backend === "engine" ? "No models are listed for this Mac." : "No models found there yet."}
+        </div>
+      )}
+      {rows.map(row)}
+      {used.map(({ r, n }) => (
+        <div key={`used-${r.id}`} data-model-used-by={r.id} style={{ ...hint, fontSize: 12 }}>
+          {r.name} is used by {n === 1 ? "1 workspace" : `${n} workspaces`}.
+        </div>
+      ))}
+      <div style={{ ...hint, fontSize: 12, marginTop: 4 }}>
+        <button type="button" data-models-open-advanced style={link} onClick={() => onOpenAdvanced && onOpenAdvanced()}>
+          Advanced
+        </button>{" "}
+        has the other catalog models, a model from a link, and other servers.
+      </div>
+    </div>
+  );
+}
+
+// Settings is grouped by what you want to do. The four panes most people
+// need come first; "Advanced" holds everything that only makes sense if
+// you know how the app works underneath (which server answers, every
+// model in the catalog, where files are kept, how attachments are read).
+//
+//   defaultModel / onDefaultModel — the app-wide model (main.jsx owns it)
+//   spaces                        — to say which workspaces use a model
+function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onClearAllChats, defaultModel = "", onDefaultModel, spaces = [] }) {
   const [open, setOpen] = useState(false);
   // Danger-zone state. Confirm modal sits above the settings modal at
   // zIndex 9999 (settings is 9998), so opening it while settings is up
@@ -997,10 +1207,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          // Wide enough that all six tabs (General…Files) fit inside the
-          // strip's own 16px side padding — at 420 the last tab sat flush
-          // against the dialog edge.
-          width: 480,
+          // A list of panes down the left, the pane itself on the right.
+          width: 720,
+          maxWidth: "calc(100vw - 32px)",
           background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 12,
@@ -1048,53 +1257,45 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
           </button>
         </div>
 
-        {/* Tab strip */}
+        <div style={{ display: "flex", minHeight: 0 }}>
+        {/* Panes, listed down the left. */}
         <div
+          data-settings-nav
           style={{
+            width: 150,
+            flexShrink: 0,
             display: "flex",
-            borderBottom: `1px solid ${T.border}`,
-            padding: "0 16px",
+            flexDirection: "column",
+            gap: 2,
+            padding: 8,
+            borderRight: `1px solid ${T.border}`,
           }}
         >
           {[
             { id: "general", label: "General" },
-            { id: "backend", label: "Backend" },
             { id: "models", label: "Models" },
-            // Voice input is macOS-only (the Whisper backend is macOS-gated).
-            ...(IS_MAC ? [{ id: "voice", label: "Voice" }] : []),
-            // Hotkeys: Quick Query is macOS+Windows; dictation + screenshot
-            // are macOS-only — nothing to show on Linux, so hide the tab
-            // there rather than render an empty pane.
-            ...(!IS_LINUX ? [{ id: "hotkeys", label: "Hotkeys" }] : []),
-            // "Files" collects the file/folder-backed settings that used to
-            // be three separate tabs (prompts library, memory file,
-            // attachment embedding).
-            { id: "files", label: "Files" },
+            // Dictation is macOS-only (the Whisper backend is macOS-gated).
+            ...(IS_MAC ? [{ id: "voice", label: "Dictation" }] : []),
+            // Shortcuts: Quick Query is macOS+Windows; dictation + screenshot
+            // are macOS-only — nothing to show on Linux.
+            ...(!IS_LINUX ? [{ id: "hotkeys", label: "Shortcuts" }] : []),
+            { id: "advanced", label: "Advanced" },
           ].map(({ id, label }) => (
             <button
               key={id}
+              data-settings-tab={id}
               onClick={() => setActiveTab(id)}
               style={{
-                background: "none",
+                textAlign: "left",
+                background: activeTab === id ? T.bg3 : "transparent",
                 border: "none",
-                borderBottom:
-                  activeTab === id
-                    ? `2px solid ${T.amber}`
-                    : "2px solid transparent",
-                padding: "8px 11px",
-                marginBottom: -1,
+                borderRadius: 7,
+                padding: "6px 10px",
                 cursor: "pointer",
                 fontFamily: T.sans,
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: activeTab === id ? 600 : 400,
-                color: activeTab === id ? T.fg : T.fg3,
-                transition: "color 0.1s",
-              }}
-              onMouseEnter={(e) => {
-                if (activeTab !== id) e.currentTarget.style.color = T.fg2;
-              }}
-              onMouseLeave={(e) => {
-                if (activeTab !== id) e.currentTarget.style.color = T.fg3;
+                color: activeTab === id ? T.fg : T.fg1,
               }}
             >
               {label}
@@ -1104,12 +1305,21 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
 
         {/* Body */}
         <div
+          data-settings-body
           style={{
-            padding: "12px 16px 20px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-            maxHeight: "70vh",
+            flex: 1,
+            minWidth: 0,
+            padding: "14px 20px 20px",
+            // A grid of content-height rows, NOT a flex column: this box
+            // has a fixed height, and a flex column squeezes any child
+            // that allows it (the model manager sets minHeight 0) — its
+            // contents then spill over the sections below it.
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr)",
+            gridAutoRows: "max-content",
+            alignContent: "start",
+            rowGap: 6,
+            height: "min(70vh, 520px)",
             overflowY: "auto",
           }}
         >
@@ -1139,14 +1349,6 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                     </option>
                   ))}
                 </select>
-              </Row>
-
-              <SectionLabel label="Layout" />
-              <Row label="Show technical details">
-                <Toggle
-                  value={tweaks.showDetails}
-                  onChange={(v) => setTweak("showDetails", v)}
-                />
               </Row>
 
               <SectionLabel label="Help" />
@@ -1460,9 +1662,28 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
             </>
           )}
 
-          {/* ── Files tab (was Prompts + Memory + Attachments) ────── */}
-          {activeTab === "files" && (
+          {/* ── Models: the app's default, in plain names ───────── */}
+          {activeTab === "models" && (
+            <ModelsSettings
+              defaultModel={defaultModel}
+              onDefaultModel={onDefaultModel}
+              spaces={spaces}
+              onOpenAdvanced={() => setActiveTab("advanced")}
+            />
+          )}
+
+          {/* ── Advanced: what only makes sense if you know how the app
+              works underneath. Was the Backend, Models and Files tabs. ── */}
+          {activeTab === "advanced" && (
             <>
+              <SectionLabel label="Engine and servers" />
+              <BackendSettings />
+
+              <SectionLabel label="Every model" />
+              {/* ModelManagerPanel lives in model-manager.jsx: the whole
+                  catalog, a model from a link, and removal. */}
+              <ModelManagerPanel activeModel={defaultModel || "gemma4:latest"} />
+
               <SectionLabel label="Prompts folder" />
               <div
                 style={{
@@ -1510,28 +1731,14 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                 appear with a one-click action when chunks go stale.
               </div>
               <AttachmentsSettings />
-            </>
-          )}
 
-          {/* ── Models tab ───────────────────────────────────────── */}
-          {activeTab === "models" && (
-            // ModelManagerPanel lives in model-manager.jsx (shared with
-            // the ModelManagerModal opened from the composer picker).
-            // The active model is read straight from localStorage rather
-            // than prop-drilled through SettingsModal — same key + fallback
-            // as readPersistedComposerModel in main.jsx.
-            <ModelManagerPanel
-              activeModel={
-                localStorage.getItem("ekorbia.main.model") || "gemma4:latest"
-              }
-            />
-          )}
-
-          {/* ── Backend tab (no-Ollama plan, Phase 1 / L1) ────────── */}
-          {activeTab === "backend" && (
-            <>
-              <SectionLabel label="Inference backend" />
-              <BackendSettings />
+              <SectionLabel label="Replies" />
+              <Row label="Show technical details">
+                <Toggle
+                  value={tweaks.showDetails}
+                  onChange={(v) => setTweak("showDetails", v)}
+                />
+              </Row>
             </>
           )}
 
@@ -1556,6 +1763,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
             </>
           )}
 
+        </div>
         </div>
       </div>
     </div>

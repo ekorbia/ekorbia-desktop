@@ -53,6 +53,7 @@ async function mountChatPane(page, opts = {}) {
         },
         model: { id: "m", name: "m", color: "#9bbf83" },
         space: opts.space || null,
+        documentCount: opts.documentCount || 0,
         isStreaming: false,
         searchQuery: "",
         onSendDemo: () => {},
@@ -65,18 +66,24 @@ async function mountChatPane(page, opts = {}) {
   }, opts);
 }
 
-test("ChatPane: renders Space badge when chat is in a Space", async ({ page }) => {
+test("ChatPane: the header does not repeat the workspace (the sidebar names it)", async ({ page }) => {
   await mountChatPane(page, {
     space: { id: "s1", name: "Novel", slug: "novel", color: "amber" },
   });
-  const badge = page.locator('[data-chat-space-badge][data-space-id="s1"]');
-  await expect(badge).toBeVisible();
-  await expect(badge).toContainText("Novel");
+  await expect(page.locator("[data-chat-space-badge]")).toHaveCount(0);
+  await expect(page.locator("h1")).toHaveText("Hello");
 });
 
-test("ChatPane: badge is absent when chat has no Space", async ({ page }) => {
+test("ChatPane: the header says how many documents the chat can read", async ({ page }) => {
+  await mountChatPane(page, { documentCount: 14 });
+  await expect(page.locator("[data-chat-documents]")).toHaveText("14 documents");
+  await mountChatPane(page, { documentCount: 1 });
+  await expect(page.locator("[data-chat-documents]")).toHaveText("1 document");
+});
+
+test("ChatPane: no documents, no chip", async ({ page }) => {
   await mountChatPane(page, { space: null });
-  await expect(page.locator("[data-chat-space-badge]")).toHaveCount(0);
+  await expect(page.locator("[data-chat-documents]")).toHaveCount(0);
 });
 
 // ── Sidebar: lock button visibility gated on activeSpaceId ─────────────
