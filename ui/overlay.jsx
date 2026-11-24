@@ -18,7 +18,7 @@ const QUICK_DEFAULT_MODEL = "gemma4:e4b";
 // Window heights (px) for the three states. Driven by the overlay_resize
 // Rust command rather than JS-side LogicalSize plumbing.
 const COLLAPSED_H = 100; // input row + context bar, no picker/response
-const PICKER_H = 360; //   picker open (model list or prompt list)
+const PICKER_H = 360; //   prompt list open
 const EXPANDED_H = 480; // streaming or response visible
 // Measured, not guessed: with the snippet at its 76px cap the selection panel
 // ends at y=260, so 268 leaves a hairline of room under its border. Expanded
@@ -81,82 +81,83 @@ function QuickQuery() {
   // ── Model selection (persisted) ────────────────────────────────────────────
   // Inlined the localStorage dance instead of reaching for main.jsx's
   // usePersistedState — keeps this file self-contained.
-  const [modelId, setModelId] = qS(() => {
+  // The panel answers with the app's default model (Settings → Models, kept
+  // under `ekorbia.main.model`). It has no chooser of its own: one place to
+  // choose a model, as in the main window. Read on mount and again every
+  // time the panel comes forward, so a change of default applies to the next
+  // question. If the default is not installed (first run, or removed since),
+  // fall back to the first installed chat model rather than fail the send.
+  const readDefaultModel = () => {
     try {
-      return localStorage.getItem("ekorbia.overlay.model") || QUICK_DEFAULT_MODEL;
+      return localStorage.getItem("ekorbia.main.model") || QUICK_DEFAULT_MODEL;
     } catch {
       return QUICK_DEFAULT_MODEL;
     }
-  });
+  };
+  const [modelId, setModelId] = qS(readDefaultModel);
   qE(() => {
+    const sync = () => {
+      const want = readDefaultModel();
+      const inv = getInvoke();
+      if (!inv) {
+        setModelId(want);
+        return;
+      }
+      inv("llm_list_models")
+        .then((data) => {
+          const names = (data?.models || [])
+            .map((m) => m.name)
+            .filter((n) => n && !/embed/i.test(n));
+          setModelId(!names.length || names.includes(want) ? want : names[0]);
+        })
+        .catch(() => setModelId(want));
+    };
+    sync();
+    window.addEventListener("focus", sync);
+    return () => window.removeEventListener("focus", sync);
+  }, []);
+
+  // ── The look: light or dark, following the app ───────────────────────────
+  // This window never mounts <App />, so nothing applies the chosen look to
+  // it. Read the same saved choice the app does (`ekorbia.tweaks`), again
+  // each time the panel comes forward and when the system appearance flips.
+  const readLight = () => {
+    let key = "one_dark";
     try {
-      localStorage.setItem("ekorbia.overlay.model", modelId);
+      const saved = JSON.parse(localStorage.getItem("ekorbia.tweaks") || "{}");
+      if (saved && saved.theme) key = saved.theme;
     } catch {}
-  }, [modelId]);
-
-  // The overlay's sticky model pref can point at a model that isn't pulled
-  // (the first-run default, or one removed since). Unlike the composer, the
-  // overlay had no fallback — it would just fail the send and mislabel it as
-  // "Ollama isn't running". On mount, validate against what's installed and,
-  // if our pick is missing, fall back to the main window's model (if pulled)
-  // or the first installed model. No-op when Ollama is genuinely down
-  // (empty/failed tags) so submit() can still surface that for real.
+    if (key === "system") {
+      return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches);
+    }
+    const themes = typeof THEMES !== "undefined" ? THEMES : null;
+    if (themes && themes[key]) return !!themes[key].light;
+    return /light/.test(key);
+  };
+  const [light, setLight] = qS(readLight);
   qE(() => {
-    const inv = getInvoke();
-    if (!inv) return;
-    inv("llm_list_models")
-      .then((data) => {
-        const names = (data?.models || []).map((m) => m.name);
-        if (!names.length || names.includes(modelId)) return;
-        let mainModel = null;
-        try {
-          mainModel = localStorage.getItem("ekorbia.main.model");
-        } catch {}
-        setModelId(mainModel && names.includes(mainModel) ? mainModel : names[0]);
-      })
-      .catch(() => {});
+    const sync = () => setLight(readLight());
+    window.addEventListener("focus", sync);
+    window.addEventListener("storage", sync);
+    const mq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: light)") : null;
+    if (mq && mq.addEventListener) mq.addEventListener("change", sync);
+    return () => {
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("storage", sync);
+      if (mq && mq.removeEventListener) mq.removeEventListener("change", sync);
+    };
   }, []);
-
-  // Plain model names (Fast / Balanced / Most capable): the same rule the
-  // main window uses (utils.js modelTiers / describeModel), worked out from
-  // the catalog and this Mac's memory. An id the catalog does not know (an
-  // Ollama tag, a model added from a link) is shown as it is.
-  const [modelCatalog, setModelCatalog] = qS([]);
-  const [ramBytes, setRamBytes] = qS(0);
-  qE(() => {
-    const inv = getInvoke();
-    if (!inv) return;
-    inv("engine_catalog")
-      .then((c) => setModelCatalog((c && c.models) || []))
-      .catch(() => {});
-    inv("system_profile")
-      .then((sp) => setRamBytes((sp && sp.totalRamBytes) || 0))
-      .catch(() => {});
-  }, []);
-  const modelTierMap = modelTiers(modelCatalog, ramBytes);
-  const plainModel = (id) => describeModel(id, modelTierMap, modelCatalog);
-
-  // ── Available models (queried from Ollama, like the Composer picker) ───────
-  // `null` = haven't fetched yet (or fetching). Empty array = fetched but
-  // nothing is pulled. `error` non-null = the fetch failed (Ollama down).
-  const [availableModels, setAvailableModels] = qS(null);
-  const [modelsError, setModelsError] = qS(null);
 
   // Active backend kind — the failure messaging below is Ollama-specific
   // ("run ollama serve") and must not lie on the engine / custom-endpoint
   // backends, whose errors are already user-directed.
   const [backendKind, setBackendKind] = qS('ollama');
-  // Whether the backend runs on this machine — drives the picker header
-  // ("Local models" vs "Models"). Defaults local (the common case); a remote
-  // BYO endpoint must not claim "Local".
-  const [local, setLocal] = qS(true);
   qE(() => {
     const inv = getInvoke();
     if (!inv) return;
     inv('llm_backend_config_get')
       .then((c) => {
         setBackendKind((c && c.backend) || 'ollama');
-        setLocal(isLocalEndpoint((c && c.backend) || 'ollama', c && c.baseUrl));
       })
       .catch(() => {});
   }, []);
@@ -194,7 +195,7 @@ function QuickQuery() {
   // ── Picker visibility ──────────────────────────────────────────────────────
   // Single-string state instead of two booleans because only one picker can
   // be open at a time anyway.
-  const [picker, setPicker] = qS(null); // 'model' | 'prompt' | null
+  const [picker, setPicker] = qS(null); // 'prompt' | null
 
   // ── Selection actions (⌘⇧E) ────────────────────────────────────────────────
   // Rust reads the clipboard and pushes it here (see src/selection.rs). Four
@@ -299,22 +300,6 @@ function QuickQuery() {
       })
       .catch(() => setPrompts([]));
   }, []);
-
-  // ── Fetch /api/tags whenever the model picker opens ────────────────────────
-  // Re-fetching on each open keeps the list fresh after the user pulls or
-  // removes a model in Ollama. Matches the Composer's ModelPicker behaviour.
-  qE(() => {
-    if (picker !== "model") return;
-    setAvailableModels(null);
-    setModelsError(null);
-    // Rust-side `llm_list_models` (Phase B.1 proxy) — see ollama.rs for why.
-    invoke('llm_list_models')
-      .then((data) => setAvailableModels(data.models || []))
-      .catch(() => {
-        setAvailableModels([]);
-        setModelsError("Ollama not running");
-      });
-  }, [picker]);
 
   // ── Dismiss ────────────────────────────────────────────────────────────────
   const hide = async () => {
@@ -631,7 +616,7 @@ function QuickQuery() {
           setResponse(msg ? `⚠️ ${msg}` : '⚠️ The model backend reported an error. Check Settings → Backend in the main window.');
         } else if (/40\d|not found|no such model|try pulling|unknown model/i.test(msg)) {
           setResponse(
-            `Model "${modelId}" isn't available in Ollama. Pick a pulled model from the list below.`,
+            "The default model isn't installed. Choose another in Settings → Models in the main window.",
           );
         } else {
           setResponse(
@@ -743,11 +728,6 @@ function QuickQuery() {
   // but sentMessage drives visibility so the question paints instantly
   // without waiting for the first streamed token.)
   const hasContent = !!response || streaming || !!sentMessage;
-  // modelColor() is shared from components.jsx — hashes the model name into
-  // one of MODEL_COLORS so the dot stays stable across renders even for
-  // models that aren't in the static MODELS table.
-  const modelDot = modelColor(modelId);
-
   // Filter first, then sort A→Z by name. prompts_list returns rows
   // sorted by updated_at DESC (the main app's "Recent" default), but
   // the overlay's prompt picker should match the main PromptLibrary's
@@ -779,17 +759,24 @@ function QuickQuery() {
 
   // ── Styles (defined once outside the JSX for readability) ──────────────────
   const ROW_PAD = "0 18px";
-  const C_BG = "rgba(20, 23, 29, 0.94)";
-  const C_BORDER = "rgba(255,255,255,0.05)";
-  const C_BORDER_STRONG = "rgba(255,255,255,0.1)";
-  const C_FG = "#e3e6ec";
-  const C_FG1 = "#a5acba";
-  const C_FG2 = "#6b7384";
-  const C_FG3 = "#4e5564";
-  const C_BG2 = "rgba(255,255,255,0.04)";
-  const C_BG3 = "rgba(255,255,255,0.08)";
-  const C_BG4 = "rgba(255,255,255,0.12)";
-  const C_AMBER = "#f0934a";
+  // Two palettes: translucent whites over a dark tint, or translucent
+  // blacks over a light one. The tint under them sits on the system blur
+  // (NSVisualEffectView, which follows the SYSTEM appearance, not the
+  // app's): when the two disagree the tint goes nearly opaque so a light
+  // panel never turns grey over a dark blur, or the reverse.
+  const systemLight = !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches);
+  const tintAlpha = light === systemLight ? (light ? 0.8 : 0.72) : 0.96;
+  const C_TINT = light ? `rgba(248, 248, 249, ${tintAlpha})` : `rgba(20, 20, 26, ${tintAlpha})`;
+  const C_BORDER = light ? "rgba(0,0,0,0.09)" : "rgba(255,255,255,0.05)";
+  const C_BORDER_STRONG = light ? "rgba(0,0,0,0.16)" : "rgba(255,255,255,0.1)";
+  const C_FG = light ? "#24262b" : "#e3e6ec";
+  const C_FG1 = light ? "#4f525a" : "#a5acba";
+  const C_FG2 = light ? "#74777e" : "#6b7384";
+  const C_FG3 = light ? "#9a9ca3" : "#4e5564";
+  const C_BG2 = light ? "rgba(0,0,0,0.04)" : "rgba(255,255,255,0.04)";
+  const C_BG3 = light ? "rgba(0,0,0,0.07)" : "rgba(255,255,255,0.08)";
+  const C_BG4 = light ? "rgba(0,0,0,0.11)" : "rgba(255,255,255,0.12)";
+  const C_AMBER = light ? "#b15c13" : "#f0934a";
   const FONT_SANS = '"Inter", system-ui, sans-serif';
 
   // Verb-chip styling; `active` marks the one whose result is on screen. A
@@ -813,6 +800,8 @@ function QuickQuery() {
 
   return (
     <div
+      data-quick-panel
+      data-quick-look={light ? "light" : "dark"}
       style={{
         // Two OS-level effects sit under this div:
         //   • NSVisualEffectView (from apply_vibrancy in lib.rs) draws blur
@@ -829,7 +818,7 @@ function QuickQuery() {
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        background: "rgba(20, 20, 26, 0.72)",
+        background: C_TINT,
         // Must match the radius passed to apply_vibrancy in lib.rs. The
         // NSVisualEffectView is masked to a rounded shape at that radius;
         // without this CSS clip our rectangular dark tint paints into the
@@ -952,7 +941,7 @@ function QuickQuery() {
       </div>
 
       {/* ── Context bar ──────────────────────────────────────────────────── */}
-      {/* Hosts the model picker trigger and the (at most one) prompt slot. */}
+      {/* Hosts the (at most one) prompt slot and, on the right, the key hint. */}
       <div
         style={{
           display: "flex",
@@ -964,44 +953,6 @@ function QuickQuery() {
           borderBottom: hasContent || picker ? `1px solid ${C_BORDER}` : "none",
         }}
       >
-        {/* Model picker trigger */}
-        <button
-          data-overlay-model
-          title={plainModel(modelId).detail || modelId}
-          onClick={() =>
-            setPicker((p) => (p === "model" ? null : "model"))
-          }
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            background: picker === "model" ? C_BG3 : C_BG2,
-            border: `1px solid ${picker === "model" ? C_BORDER_STRONG : "transparent"}`,
-            borderRadius: 4,
-            padding: "3px 8px",
-            cursor: "pointer",
-            color: C_FG1,
-            fontFamily: FONT_SANS,
-            fontSize: 11.5,
-          }}
-        >
-          <span
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: 99,
-              background: modelDot,
-              boxShadow: `0 0 4px ${modelDot}88`,
-            }}
-          />
-          <span data-overlay-model-name>{plainModel(modelId).name}</span>
-          <span style={{ fontSize: 8, color: C_FG2 }}>▾</span>
-        </button>
-
-        <span style={{ color: C_FG3, fontFamily: FONT_SANS, fontSize: 11.5 }}>
-          ·
-        </span>
-
         {/* Prompt slot — either the attached chip, or a "+ prompt" trigger. */}
         {/* Clicking the chip body re-opens the picker (to swap), the × clears. */}
         {attached ? (() => {
@@ -1204,194 +1155,6 @@ function QuickQuery() {
 
       {/* ── Bottom area: picker OR response ──────────────────────────────── */}
 
-      {/* Model picker — same content shape as the Composer's ModelPicker. */}
-      {picker === "model" && (
-        <div
-          style={{
-            flex: 1,
-            minHeight: 0,
-            overflowY: "auto",
-            padding: "6px 0",
-          }}
-        >
-          <div
-            style={{
-              padding: "4px 14px 6px",
-              fontFamily: FONT_SANS,
-              // 10.5 (up from 9.5) + brighter color than the standard
-              // section-label dim. Uppercase mono with letter-spacing
-              // amplifies any contrast problem, so this label needs a
-              // step or two more legibility than secondary text.
-              fontSize: 11.5,
-              color: C_FG1,
-            }}
-          >
-            {local ? "Models on this Mac" : "Models"}
-          </div>
-
-          {availableModels === null && (
-            <div
-              style={{
-                padding: "12px 14px",
-                fontFamily: FONT_SANS,
-                fontSize: 12,
-                color: C_FG3,
-              }}
-            >
-              <span className="typing-dot">●</span>{" "}
-              <span className="typing-dot">●</span>{" "}
-              <span className="typing-dot">●</span>
-            </div>
-          )}
-
-          {modelsError && (
-            <div
-              style={{
-                padding: "10px 14px",
-                fontFamily: FONT_SANS,
-                fontSize: 12,
-                color: C_FG3,
-              }}
-            >
-              {modelsError}
-            </div>
-          )}
-
-          {availableModels &&
-            availableModels.length === 0 &&
-            !modelsError && (
-              <div
-                style={{
-                  padding: "10px 14px",
-                  fontFamily: FONT_SANS,
-                  fontSize: 12,
-                  color: C_FG3,
-                }}
-              >
-                No models pulled yet. Run{" "}
-                <span style={{ color: C_AMBER }}>
-                  ollama pull &lt;model&gt;
-                </span>{" "}
-                to add one.
-              </div>
-            )}
-
-          {/* The model that reads documents for search cannot answer a
-              question, so it is not offered. */}
-          {(availableModels || []).filter((m) => !/embed/i.test((m && m.name) || "")).map((m) => {
-            const sel = m.name === modelId;
-            const color = modelColor(m.name);
-            const plain = plainModel(m.name);
-            const size = m.details?.parameter_size || "";
-            const quant = m.details?.quantization_level || "";
-            const sizeOnDisk = formatBytes(m.size);
-            return (
-              <div
-                key={m.name}
-                data-overlay-model-row={m.name}
-                onClick={() => {
-                  setModelId(m.name);
-                  setPicker(null);
-                }}
-                style={{
-                  margin: "0 8px",
-                  padding: "7px 10px",
-                  borderRadius: 5,
-                  cursor: "pointer",
-                  background: sel ? C_BG4 : "transparent",
-                  display: "grid",
-                  gridTemplateColumns: "auto 1fr auto",
-                  gap: 10,
-                  alignItems: "center",
-                }}
-                onMouseEnter={(e) =>
-                  !sel && (e.currentTarget.style.background = C_BG2)
-                }
-                onMouseLeave={(e) =>
-                  !sel && (e.currentTarget.style.background = "transparent")
-                }
-              >
-                <span
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: 99,
-                    background: color,
-                    boxShadow: `0 0 5px ${color}aa`,
-                  }}
-                />
-                <div style={{ minWidth: 0 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "baseline",
-                      gap: 6,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontFamily: FONT_SANS,
-                        fontSize: 13,
-                        color: C_FG,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {plain.name}
-                    </span>
-                    {plain.detail && (
-                      <span style={{ fontFamily: FONT_SANS, fontSize: 12, color: C_FG1 }}>
-                        {plain.detail}
-                      </span>
-                    )}
-                    {size && (
-                      <span
-                        style={{
-                          fontFamily: FONT_SANS,
-                          fontSize: 11.5,
-                          // Bumped from C_FG2 → C_FG1: secondary metadata
-                          // needs more contrast against vibrancy+tint than
-                          // it does against the main app's opaque bg.
-                          color: C_FG1,
-                        }}
-                      >
-                        {size}
-                      </span>
-                    )}
-                    {quant && (
-                      <span
-                        style={{
-                          fontFamily: FONT_SANS,
-                          fontSize: 11,
-                          color: C_FG2,
-                        }}
-                      >
-                        {quant}
-                      </span>
-                    )}
-                  </div>
-                  {sizeOnDisk && (
-                    <div
-                      style={{
-                        fontFamily: FONT_SANS,
-                        fontSize: 11.5,
-                        color: C_FG1,
-                        marginTop: 1,
-                      }}
-                    >
-                      {sizeOnDisk} on disk
-                    </div>
-                  )}
-                </div>
-                {sel && (
-                  <span style={{ color: C_AMBER, fontSize: 12 }}>✓</span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
       {/* Prompt picker — single-select. Click row to set, click selected row to clear. */}
       {picker === "prompt" && (
         <div
@@ -1530,8 +1293,8 @@ function QuickQuery() {
               style={{
                 marginBottom: 10,
                 padding: "8px 12px",
-                background: "rgba(255,255,255,0.05)",
-                border: "1px solid rgba(255,255,255,0.08)",
+                background: C_BG2,
+                border: `1px solid ${C_BORDER}`,
                 borderRadius: 8,
                 whiteSpace: "pre-wrap",
                 color: C_FG1,
@@ -1592,12 +1355,12 @@ function QuickQuery() {
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 6,
-                background: copied ? C_BG3 : C_AMBER,
-                border: `1px solid ${copied ? C_BORDER_STRONG : C_AMBER}`,
+                background: copied ? C_BG3 : C_FG,
+                border: `1px solid ${copied ? C_BORDER_STRONG : C_FG}`,
                 borderRadius: 5,
                 padding: "5px 10px",
                 cursor: "pointer",
-                color: copied ? C_FG : "#2a1505",
+                color: copied ? C_FG : light ? "#fff" : "#14171d",
                 fontFamily: FONT_SANS,
                 fontSize: 12,
                 fontWeight: 500,

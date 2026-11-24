@@ -884,7 +884,7 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
           ref={inputRef}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Space name (e.g. Novel, Q4 plans)"
+          placeholder="Workspace name"
           style={{
             width: "100%",
             boxSizing: "border-box",
@@ -903,11 +903,9 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
           style={{
             marginTop: 16,
             marginBottom: 8,
-            fontFamily: T.mono,
-            fontSize: 10,
+            fontFamily: T.sans,
+            fontSize: 12,
             color: T.fg2,
-            textTransform: "uppercase",
-            letterSpacing: 0.6,
           }}
         >
           Color
@@ -966,8 +964,8 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
               outline: "none",
               flexShrink: 0,
               color: T.fg3,
-              fontFamily: T.mono,
-              fontSize: 9,
+              fontFamily: T.sans,
+              fontSize: 12,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -987,16 +985,7 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
         >
           <button
             onClick={onCancel}
-            style={{
-              padding: "7px 14px",
-              background: "transparent",
-              border: `1px solid ${T.border}`,
-              borderRadius: 5,
-              color: T.fg2,
-              fontFamily: T.sans,
-              fontSize: 12,
-              cursor: "pointer",
-            }}
+            style={ekBtn("secondary")}
           >
             Cancel
           </button>
@@ -1005,16 +994,7 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
             disabled={!name.trim()}
             data-space-create-and-configure
             title="Create the Space and open its settings dialog so you can set system prompt, default model, memory file, pinned prompts, and pinned attachments"
-            style={{
-              padding: "7px 14px",
-              background: "transparent",
-              border: `1px solid ${name.trim() ? T.borderStrong : T.border}`,
-              borderRadius: 5,
-              color: name.trim() ? T.fg1 : T.fg3,
-              fontFamily: T.sans,
-              fontSize: 12,
-              cursor: name.trim() ? "pointer" : "not-allowed",
-            }}
+            style={ekBtn("secondary", { disabled: !name.trim() })}
           >
             Create &amp; configure…
           </button>
@@ -1022,17 +1002,7 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
             onClick={() => name.trim() && onSubmit(name.trim(), color, false)}
             disabled={!name.trim()}
             data-space-create-confirm
-            style={{
-              padding: "7px 14px",
-              background: name.trim() ? T.amber : T.bg3,
-              border: `1px solid ${name.trim() ? T.amber : T.border}`,
-              borderRadius: 5,
-              color: name.trim() ? T.bg0 : T.fg3,
-              fontFamily: T.sans,
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: name.trim() ? "pointer" : "not-allowed",
-            }}
+            style={ekBtn("primary", { disabled: !name.trim() })}
           >
             Create
           </button>
@@ -1143,8 +1113,8 @@ function SpaceColorPickerPopover({ anchorRect, current, onPick, onClose }) {
             outline: "none",
             flexShrink: 0,
             color: T.fg3,
-            fontFamily: T.mono,
-            fontSize: 9,
+            fontFamily: T.sans,
+            fontSize: 12,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -1572,12 +1542,12 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
                 style={{
                   marginTop: 6,
                   fontFamily: T.sans,
-                  fontSize: 11,
+                  fontSize: 12,
                   color: T.fg3,
                   lineHeight: 1.4,
                 }}
               >
-                No installed models found. Start Ollama and pull a model (e.g. <span style={{ fontFamily: T.mono, color: T.fg2 }}>ollama pull gemma4:latest</span>) to populate this list.
+                No installed models found. Start Ollama and pull a model (e.g. <span style={{ fontFamily: T.sans, color: T.fg2 }}>ollama pull gemma4:latest</span>) to populate this list.
               </div>
             )}
           </div>
@@ -1616,7 +1586,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
                 style={{
                   marginTop: 6,
                   fontFamily: T.sans,
-                  fontSize: 11,
+                  fontSize: 12,
                   color: T.fg3,
                   wordBreak: "break-all",
                 }}
@@ -1633,7 +1603,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
                     cursor: "pointer",
                     color: T.fg1,
                     fontFamily: T.sans,
-                    fontSize: 11,
+                    fontSize: 12,
                     textDecoration: "underline",
                   }}
                 >
@@ -1664,11 +1634,11 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
               </SectionHint>
             </SectionLabel>
             {!loaded ? (
-              <div style={{ color: T.fg3, fontSize: 11, fontFamily: T.mono }}>
+              <div style={{ color: T.fg3, fontSize: 12.5, fontFamily: T.sans }}>
                 loading…
               </div>
             ) : promptsLibrary.length === 0 && newlyCreatedPrompts.length === 0 ? (
-              <div style={{ color: T.fg3, fontSize: 11, fontFamily: T.sans }}>
+              <div style={{ color: T.fg3, fontSize: 12, fontFamily: T.sans }}>
                 No prompts in your library yet — add some in the Prompts panel, or use "+ New prompt for this Space" below.
               </div>
             ) : (
@@ -1760,7 +1730,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
                           alignItems: "center",
                           justifyContent: "center",
                           color: T.bg0,
-                          fontSize: 10,
+                          fontSize: 12,
                           fontWeight: 700,
                           lineHeight: 1,
                         }}
@@ -1851,10 +1821,8 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
                     data-prompt-section-header={label}
                     style={{
                       padding: "5px 10px 4px",
-                      fontFamily: T.mono,
-                      fontSize: 9.5,
-                      letterSpacing: 0.4,
-                      textTransform: "uppercase",
+                      fontFamily: T.sans,
+                      fontSize: 12,
                       color: T.fg3,
                       background: T.bg3,
                       borderBottom: `1px solid ${T.border}`,
@@ -1903,7 +1871,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
                           style={{
                             padding: "14px 10px",
                             color: T.fg3,
-                            fontSize: 11,
+                            fontSize: 12,
                             fontFamily: T.sans,
                             textAlign: "center",
                           }}
@@ -1935,10 +1903,10 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
                   padding: "5px 10px",
                   background: "transparent",
                   border: `1px dashed ${T.border}`,
-                  borderRadius: 4,
+                  borderRadius: 8,
                   color: T.fg3,
-                  fontFamily: T.mono,
-                  fontSize: 10.5,
+                  fontFamily: T.sans,
+                  fontSize: 12,
                   cursor: "pointer",
                   width: "100%",
                 }}
@@ -2080,11 +2048,11 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
               </SmallButton>
             </div>
             {!loaded ? (
-              <div style={{ color: T.fg3, fontSize: 11, fontFamily: T.mono }}>
+              <div style={{ color: T.fg3, fontSize: 12.5, fontFamily: T.sans }}>
                 loading…
               </div>
             ) : attachments.length === 0 ? (
-              <div style={{ color: T.fg3, fontSize: 11, fontFamily: T.sans }}>
+              <div style={{ color: T.fg3, fontSize: 12, fontFamily: T.sans }}>
                 Nothing pinned yet.
               </div>
             ) : (
@@ -2101,13 +2069,13 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
                       padding: "5px 8px",
                       background: T.bg2,
                       border: `1px solid ${T.border}`,
-                      borderRadius: 4,
+                      borderRadius: 8,
                       marginBottom: 4,
-                      fontFamily: T.mono,
-                      fontSize: 11,
+                      fontFamily: T.sans,
+                      fontSize: 12.5,
                     }}
                   >
-                    <span style={{ color: T.fg3, fontSize: 9, textTransform: "uppercase" }}>
+                    <span style={{ color: T.fg3, fontSize: 12, }}>
                       {a.kind}
                     </span>
                     <span
@@ -2184,16 +2152,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
           <button
             onClick={onCancel}
             data-space-settings-cancel
-            style={{
-              padding: "7px 14px",
-              background: "transparent",
-              border: `1px solid ${T.border}`,
-              borderRadius: 5,
-              color: T.fg2,
-              fontFamily: T.sans,
-              fontSize: 12,
-              cursor: "pointer",
-            }}
+            style={ekBtn("secondary")}
           >
             Cancel
           </button>
@@ -2201,17 +2160,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
             onClick={handleSave}
             disabled={!name.trim() || saving}
             data-space-settings-save
-            style={{
-              padding: "7px 14px",
-              background: name.trim() ? T.amber : T.bg3,
-              border: `1px solid ${name.trim() ? T.amber : T.border}`,
-              borderRadius: 5,
-              color: name.trim() ? T.bg0 : T.fg3,
-              fontFamily: T.sans,
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: name.trim() ? "pointer" : "not-allowed",
-            }}
+            style={ekBtn("primary", { disabled: !name.trim() || saving })}
           >
             Save
           </button>
@@ -2225,16 +2174,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave, name
 // Local to this file so the modal's styling stays self-contained.
 function SectionLabel({ children }) {
   return (
-    <div
-      style={{
-        fontFamily: T.mono,
-        fontSize: 10,
-        color: T.fg2,
-        textTransform: "uppercase",
-        letterSpacing: 0.6,
-        marginBottom: 6,
-      }}
-    >
+    <div style={ekHeading({ marginBottom: 5 })}>
       {children}
     </div>
   );
@@ -2242,17 +2182,7 @@ function SectionLabel({ children }) {
 
 function SectionHint({ children }) {
   return (
-    <div
-      style={{
-        fontFamily: T.sans,
-        fontSize: 11,
-        color: T.fg3,
-        textTransform: "none",
-        letterSpacing: 0,
-        marginTop: 2,
-        fontWeight: 400,
-      }}
-    >
+    <div style={ekHint({ fontWeight: 400, marginTop: 2 })}>
       {children}
     </div>
   );
@@ -2264,16 +2194,7 @@ function SmallButton({ children, onClick, disabled, danger, ...rest }) {
       onClick={onClick}
       disabled={disabled}
       {...rest}
-      style={{
-        padding: "5px 10px",
-        background: T.bg2,
-        border: `1px solid ${T.border}`,
-        borderRadius: 4,
-        color: disabled ? T.fg3 : danger ? T.red : T.fg1,
-        fontFamily: T.sans,
-        fontSize: 11,
-        cursor: disabled ? "not-allowed" : "pointer",
-      }}
+      style={ekBtn(danger ? "danger" : "secondary", { small: true, disabled })}
     >
       {children}
     </button>
@@ -2285,18 +2206,7 @@ function SmallButton({ children, onClick, disabled, danger, ...rest }) {
 // from the dark defaults, and every dialog field stayed dark in a light
 // theme.
 function modalInputStyle() {
-  return {
-    width: "100%",
-    boxSizing: "border-box",
-    padding: "7px 10px",
-    background: T.bg2,
-    border: `1px solid ${T.border}`,
-    borderRadius: 4,
-    color: T.fg,
-    fontFamily: T.sans,
-    fontSize: 12.5,
-    outline: "none",
-  };
+  return ekField();
 }
 
 
@@ -2492,10 +2402,8 @@ function MenuLabel({ children }) {
       style={{
         padding: "4px 8px 2px",
         color: T.fg3,
-        fontFamily: T.mono,
-        fontSize: 9.5,
-        textTransform: "uppercase",
-        letterSpacing: 0.5,
+        fontFamily: T.sans,
+        fontSize: 12,
       }}
     >
       {children}
@@ -2582,41 +2490,24 @@ function NameModal({
             padding: "6px 8px",
             background: T.bg2,
             border: `1px solid ${T.border}`,
-            borderRadius: 5,
+            borderRadius: 8,
             color: T.fg,
-            fontFamily: T.mono,
-            fontSize: 12,
+            fontFamily: T.sans,
+            fontSize: 13,
             marginBottom: 12,
           }}
         />
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button
             onClick={onCancel}
-            style={{
-              padding: "5px 12px",
-              background: "transparent",
-              border: `1px solid ${T.border}`,
-              borderRadius: 5,
-              color: T.fg2,
-              cursor: "pointer",
-              fontSize: 12,
-            }}
+            style={ekBtn("secondary")}
           >
             Cancel
           </button>
           <button
             onClick={submit}
             disabled={!trimmed}
-            style={{
-              padding: "5px 14px",
-              background: trimmed ? T.amber : T.bg3,
-              border: "none",
-              borderRadius: 5,
-              color: trimmed ? T.bg0 : T.fg3,
-              cursor: trimmed ? "pointer" : "not-allowed",
-              fontSize: 12,
-              fontWeight: 600,
-            }}
+            style={ekBtn("primary", { disabled: !trimmed })}
           >
             {confirmLabel}
           </button>
@@ -2697,15 +2588,7 @@ function ConfirmModal({
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button
             onClick={onCancel}
-            style={{
-              padding: "5px 12px",
-              background: "transparent",
-              border: `1px solid ${T.border}`,
-              borderRadius: 5,
-              color: T.fg2,
-              cursor: "pointer",
-              fontSize: 12,
-            }}
+            style={ekBtn("secondary")}
           >
             {cancelLabel || "Cancel"}
           </button>
@@ -2713,17 +2596,7 @@ function ConfirmModal({
             ref={btnRef}
             onClick={onConfirm}
             data-confirm-button
-            style={{
-              padding: "5px 14px",
-              background: danger ? T.red : T.amber,
-              boxShadow: `0 5px 16px -6px ${danger ? T.red : T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
-              border: "none",
-              borderRadius: 5,
-              color: T.bg0,
-              cursor: "pointer",
-              fontSize: 12,
-              fontWeight: 600,
-            }}
+            style={danger ? { ...ekBtn("primary"), background: T.red, border: `1px solid ${T.red}`, color: "#fff" } : ekBtn("primary")}
           >
             {confirmLabel || "Confirm"}
           </button>
@@ -2769,8 +2642,8 @@ function MessageHitRow({ hit, onClick }) {
     >
       <div
         style={{
-          fontFamily: T.mono,
-          fontSize: 10,
+          fontFamily: T.sans,
+          fontSize: 12,
           color: T.fg2,
           whiteSpace: "nowrap",
           overflow: "hidden",
@@ -2989,8 +2862,8 @@ function ChatRow({
               <span
                 style={{
                   flexShrink: 0,
-                  fontFamily: T.mono,
-                  fontSize: 10,
+                  fontFamily: T.sans,
+                  fontSize: 12,
                   color: T.fg3,
                 }}
               >
@@ -3044,10 +2917,9 @@ function RightPanelTabs({ tab, onTab, onClose }) {
             ? `2px solid ${T.amber}`
             : "2px solid transparent",
           color: active ? T.fg : T.fg2,
-          fontFamily: T.mono,
-          fontSize: 11,
+          fontFamily: T.sans,
+          fontSize: 12.5,
           fontWeight: active ? 600 : 500,
-          letterSpacing: 0.4,
           textTransform: "capitalize",
           cursor: "pointer",
         }}

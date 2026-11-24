@@ -125,19 +125,7 @@ function ToastHost() {
             {t.action && (
               <button
                 onClick={() => { t.action.onClick?.(); dismiss(t.id); }}
-                style={{
-                  alignSelf: "flex-start",
-                  marginTop: 4,
-                  padding: "3px 10px",
-                  background: accent,
-                  border: "none",
-                  borderRadius: 4,
-                  color: T.bg0,
-                  cursor: "pointer",
-                  fontFamily: T.mono,
-                  fontSize: 10.5,
-                  fontWeight: 600,
-                }}
+                style={ekBtn("secondary", { small: true })}
               >
                 {t.action.label}
               </button>
@@ -176,23 +164,13 @@ function StaleEmbeddingsBanner({ count, model, onReindex, onDismiss, busy }) {
         {count} attachment{count === 1 ? "" : "s"} {count === 1 ? "was" : "were"}{" "}
         embedded with a different model. Re-index{" "}
         {count === 1 ? "it" : "them"} with{" "}
-        <span style={{ fontFamily: T.mono, color: T.amber }}>{model || "the current model"}</span>{" "}
+        <span style={{ fontFamily: T.sans, color: T.amber }}>{model || "the current model"}</span>{" "}
         to make them searchable again.
       </span>
       <button
         onClick={onReindex}
         disabled={busy}
-        style={{
-          padding: "4px 10px",
-          background: busy ? T.bg3 : T.amber,
-          border: "none",
-          borderRadius: 4,
-          color: busy ? T.fg3 : T.bg0,
-          cursor: busy ? "default" : "pointer",
-          fontFamily: T.mono,
-          fontSize: 11,
-          fontWeight: 600,
-        }}
+        style={ekBtn("primary", { small: true, disabled: busy })}
       >
         {busy ? "Queuing…" : `Re-index ${count}`}
       </button>

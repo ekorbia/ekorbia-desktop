@@ -449,7 +449,7 @@ function ModelManagerPanel({ activeModel }) {
       return (
         <span
           data-catalog-installed
-          style={{ fontFamily: T.mono, fontSize: 10.5, color: T.green, whiteSpace: "nowrap" }}
+          style={{ fontFamily: T.sans, fontSize: 12, color: T.green, whiteSpace: "nowrap" }}
         >
           ✓ installed
         </span>
@@ -459,11 +459,7 @@ function ModelManagerPanel({ activeModel }) {
       return (
         <button
           onClick={() => ekCancelPull(c.id)}
-          style={{
-            padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
-            background: "transparent", color: T.fg3, fontFamily: T.sans,
-            fontSize: 11.5, cursor: "pointer",
-          }}
+          style={ekBtn("secondary", { small: true })}
         >
           Cancel
         </button>
@@ -473,11 +469,7 @@ function ModelManagerPanel({ activeModel }) {
       <button
         data-catalog-download={c.id}
         onClick={() => ekPullModel(c.id, { engine: true })}
-        style={{
-          padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
-          background: "transparent", color: T.fg2, fontFamily: T.sans,
-          fontSize: 11.5, cursor: "pointer",
-        }}
+        style={ekBtn("secondary", { small: true })}
       >
         Download
       </button>
@@ -504,17 +496,16 @@ function ModelManagerPanel({ activeModel }) {
             <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500 }}>
               {c.label}
             </span>
-            <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+            <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3 }}>
               {formatBytes(c.totalBytes)}
             </span>
             {isHero && (
               <span
                 data-catalog-hero
                 style={{
-                  fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                  fontFamily: T.sans, fontSize: 12, padding: "1px 5px", borderRadius: 8,
                   background: T.bg2, color: "var(--ek-accent)",
                   border: "1px solid var(--ek-accent)",
-                  textTransform: "uppercase", letterSpacing: 0.4,
                 }}
               >
                 {ramGb !== null ? "best for your Mac" : "recommended"}
@@ -524,9 +515,8 @@ function ModelManagerPanel({ activeModel }) {
               <span
                 data-catalog-ram-warning
                 style={{
-                  fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                  fontFamily: T.sans, fontSize: 12, padding: "1px 5px", borderRadius: 8,
                   background: T.amber + "26", color: T.amber,
-                  textTransform: "uppercase", letterSpacing: 0.4,
                 }}
                 title={`This model wants ${c.minRamGb} GB of RAM; this Mac has ${ramGb} GB.`}
               >
@@ -552,14 +542,13 @@ function ModelManagerPanel({ activeModel }) {
       <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500 }}>
         {c.label}
       </span>
-      <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+      <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3 }}>
         {formatBytes(c.totalBytes)}
       </span>
       <span
         style={{
-          fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+          fontFamily: T.sans, fontSize: 12, padding: "1px 5px", borderRadius: 8,
           background: T.blue + "26", color: T.blue,
-          textTransform: "uppercase", letterSpacing: 0.4,
         }}
       >
         embeddings
@@ -602,16 +591,15 @@ function ModelManagerPanel({ activeModel }) {
       >
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
-            <span style={{ fontFamily: T.mono, fontSize: 11.5, color: T.fg }} title={base}>
+            <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg }} title={base}>
               {quant || base}
             </span>
             {recommended && (
               <span
                 style={{
-                  fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                  fontFamily: T.sans, fontSize: 12, padding: "1px 5px", borderRadius: 8,
                   background: T.bg2, color: "var(--ek-accent)",
                   border: "1px solid var(--ek-accent)",
-                  textTransform: "uppercase", letterSpacing: 0.4,
                 }}
               >
                 recommended
@@ -621,9 +609,8 @@ function ModelManagerPanel({ activeModel }) {
               <span
                 data-hf-vision
                 style={{
-                  fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                  fontFamily: T.sans, fontSize: 12, padding: "1px 5px", borderRadius: 8,
                   background: T.blue + "26", color: T.blue,
-                  textTransform: "uppercase", letterSpacing: 0.4,
                 }}
                 title="This repo ships a vision projector; it downloads with the model."
               >
@@ -631,7 +618,7 @@ function ModelManagerPanel({ activeModel }) {
               </span>
             )}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, fontFamily: T.sans, fontSize: 12, color: T.fg3 }}>
             <span>{formatBytes(file.size)}</span>
             {verified && (
               <span data-hf-verified style={{ color: T.green }}>· ✓ hash-verified</span>
@@ -641,18 +628,14 @@ function ModelManagerPanel({ activeModel }) {
         {installed ? (
           <span
             data-catalog-installed
-            style={{ fontFamily: T.mono, fontSize: 10.5, color: T.green, whiteSpace: "nowrap" }}
+            style={{ fontFamily: T.sans, fontSize: 12, color: T.green, whiteSpace: "nowrap" }}
           >
             ✓ installed
           </span>
         ) : pull ? (
           <button
             onClick={() => ekCancelPull(name)}
-            style={{
-              padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
-              background: "transparent", color: T.fg3, fontFamily: T.sans,
-              fontSize: 11.5, cursor: "pointer",
-            }}
+            style={ekBtn("secondary", { small: true })}
           >
             Cancel
           </button>
@@ -660,11 +643,7 @@ function ModelManagerPanel({ activeModel }) {
           <button
             data-hf-download={file.path}
             onClick={() => downloadHfFile(file)}
-            style={{
-              padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
-              background: "transparent", color: T.fg2, fontFamily: T.sans,
-              fontSize: 11.5, cursor: "pointer",
-            }}
+            style={ekBtn("secondary", { small: true })}
           >
             Download
           </button>
@@ -676,8 +655,7 @@ function ModelManagerPanel({ activeModel }) {
   const sectionLabel = (text) => (
     <div
       style={{
-        fontFamily: T.mono, fontSize: 10, color: T.fg3,
-        textTransform: "uppercase", letterSpacing: 0.6,
+        fontFamily: T.sans, fontSize: 12, color: T.fg2,
         padding: "10px 2px 6px",
       }}
     >
@@ -690,13 +668,13 @@ function ModelManagerPanel({ activeModel }) {
       {sectionLabel("Installed models")}
 
       {models === null && (
-        <div style={{ padding: "10px 2px", fontFamily: T.mono, fontSize: 11, color: T.fg3 }}>
+        <div style={{ padding: "10px 2px", fontFamily: T.sans, fontSize: 12.5, color: T.fg3 }}>
           <span className="typing-dot">●</span> <span className="typing-dot">●</span>{" "}
           <span className="typing-dot">●</span>
         </div>
       )}
       {loadError && (
-        <div style={{ padding: "10px 2px", fontFamily: T.mono, fontSize: 11, color: T.fg3 }}>
+        <div style={{ padding: "10px 2px", fontFamily: T.sans, fontSize: 12.5, color: T.fg3 }}>
           {loadError}
         </div>
       )}
@@ -725,14 +703,13 @@ function ModelManagerPanel({ activeModel }) {
                 <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500 }}>
                   {m.name}
                 </span>
-                {params && <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg2 }}>{params}</span>}
-                {quant && <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3 }}>{quant}</span>}
+                {params && <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2 }}>{params}</span>}
+                {quant && <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3 }}>{quant}</span>}
                 {isActive && (
                   <span
                     style={{
-                      fontFamily: T.mono, fontSize: 9, padding: "1px 5px", borderRadius: 3,
+                      fontFamily: T.sans, fontSize: 12, padding: "1px 5px", borderRadius: 8,
                       background: T.green + "26", color: T.green,
-                      textTransform: "uppercase", letterSpacing: 0.4,
                     }}
                   >
                     active
@@ -740,7 +717,7 @@ function ModelManagerPanel({ activeModel }) {
                 )}
               </div>
               {sizeOnDisk && (
-                <div style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3, marginTop: 1 }}>
+                <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, marginTop: 1 }}>
                   {sizeOnDisk} on disk
                 </div>
               )}
@@ -749,13 +726,7 @@ function ModelManagerPanel({ activeModel }) {
             <button
               onClick={() => setConfirmDelete(m.name)}
               title={engineBackend ? `Delete ${m.name} from the models folder` : `Delete ${m.name} from Ollama`}
-              style={{
-                padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
-                background: "transparent", color: T.fg3, fontFamily: T.sans,
-                fontSize: 11.5, cursor: "pointer",
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = T.red; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = T.fg3; }}
+              style={ekBtn("secondary", { small: true })}
             >
               Delete
             </button>
@@ -771,18 +742,14 @@ function ModelManagerPanel({ activeModel }) {
             <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500, flex: 1 }}>
               {p.model}
             </span>
-            <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg2 }}>
+            <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2 }}>
               {p.pct !== null
                 ? `${p.pct}% · ${formatBytes(p.completedBytes)} / ${formatBytes(p.totalBytes)}`
                 : p.statusLine || "starting…"}
             </span>
             <button
               onClick={() => ekCancelPull(p.model)}
-              style={{
-                padding: "2px 8px", borderRadius: 4, border: `1px solid ${T.border}`,
-                background: "transparent", color: T.fg3, fontFamily: T.sans,
-                fontSize: 11, cursor: "pointer",
-              }}
+              style={ekBtn("secondary", { small: true })}
             >
               Cancel
             </button>
@@ -812,7 +779,7 @@ function ModelManagerPanel({ activeModel }) {
         <div
           data-byo-hint
           style={{
-            fontFamily: T.sans, fontSize: 11, color: T.fg3,
+            fontFamily: T.sans, fontSize: 12, color: T.fg2,
             lineHeight: 1.5, marginTop: 10,
           }}
         >
@@ -841,7 +808,7 @@ function ModelManagerPanel({ activeModel }) {
           )}
           {shownChat.map(catalogChatRow)}
           {shownChat.length === 0 && (
-            <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3, padding: "6px 8px" }}>
+            <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, padding: "6px 8px" }}>
               No models match that filter.
             </div>
           )}
@@ -858,7 +825,7 @@ function ModelManagerPanel({ activeModel }) {
               <span aria-hidden="true" style={{ color: T.fg3 }}>▸</span>
               Show {hiddenChat} more
               {hiddenTooBig > 0 && (
-                <span style={{ marginLeft: "auto", fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+                <span style={{ marginLeft: "auto", fontFamily: T.sans, fontSize: 12, color: T.fg3 }}>
                   {hiddenTooBig} need &gt; {ramGb} GB
                 </span>
               )}
@@ -912,34 +879,28 @@ function ModelManagerPanel({ activeModel }) {
               spellCheck={false}
               autoComplete="off"
               style={{
-                flex: 1, minWidth: 0, padding: "7px 10px", borderRadius: 6,
+                flex: 1, minWidth: 0, padding: "7px 10px", borderRadius: 8,
                 border: `1px solid ${T.border}`, background: T.bg2, color: T.fg,
-                fontFamily: T.mono, fontSize: 11.5, outline: "none",
+                fontFamily: T.sans, fontSize: 12.5, outline: "none",
               }}
             />
             <button
               data-custom-gguf-download
               onClick={linkMode === "browse" ? browseHfRepo : startCustomDownload}
               disabled={linkMode === "none"}
-              style={{
-                padding: "7px 16px", borderRadius: 6, border: "none",
-                background: linkMode !== "none" ? T.amber : T.bg3,
-                color: linkMode !== "none" ? T.bg0 : T.fg3,
-                fontFamily: T.sans, fontSize: 12.5, fontWeight: 600,
-                cursor: linkMode !== "none" ? "pointer" : "default", flexShrink: 0,
-              }}
+              style={ekBtn("primary", { disabled: linkMode === "none" })}
             >
               {linkMode === "browse" ? "Browse" : "Add"}
             </button>
           </div>
           <div
             data-custom-gguf-status
-            style={{ fontFamily: T.sans, fontSize: 11, color: T.fg3, padding: "0 2px", lineHeight: 1.5 }}
+            style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, padding: "0 2px", lineHeight: 1.5 }}
           >
             {parsedLink ? (
               <>
                 Installs as{" "}
-                <span style={{ fontFamily: T.mono, color: T.fg2 }}>{parsedLink.name}</span>{" "}
+                <span style={{ fontFamily: T.sans, color: T.fg2 }}>{parsedLink.name}</span>{" "}
                 — named from the file. Best-effort: quality depends on the
                 file's built-in chat template. For vision, add a matching{" "}
                 <span style={{ fontFamily: T.mono }}>{parsedLink.name}.mmproj.gguf</span>{" "}
@@ -976,14 +937,14 @@ function ModelManagerPanel({ activeModel }) {
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 4px" }}>
                 <span
                   style={{
-                    fontFamily: T.mono, fontSize: 10.5, color: T.fg2,
+                    fontFamily: T.sans, fontSize: 12, color: T.fg2,
                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                   }}
                 >
                   {hfBrowse.repo}
                 </span>
                 {!hfBrowse.loading && !hfBrowse.error && (
-                  <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
+                  <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3 }}>
                     {hfBrowse.files.length} model{hfBrowse.files.length === 1 ? "" : "s"}
                     {hfBrowse.mmproj ? " · vision" : ""}
                   </span>
@@ -993,13 +954,13 @@ function ModelManagerPanel({ activeModel }) {
                   data-hf-close
                   onClick={() => setHfBrowse(null)}
                   aria-label="Close repo results"
-                  style={{ border: "none", background: "transparent", color: T.fg3, fontSize: 13, cursor: "pointer", padding: "0 2px" }}
+                  style={{ border: "none", background: "transparent", color: T.fg2, fontSize: 13, cursor: "pointer", padding: "0 2px" }}
                 >
                   ✕
                 </button>
               </div>
               {hfBrowse.loading && (
-                <div style={{ padding: "6px 8px", fontFamily: T.mono, fontSize: 11, color: T.fg3 }}>
+                <div style={{ padding: "6px 8px", fontFamily: T.sans, fontSize: 12.5, color: T.fg3 }}>
                   Reading repo…
                 </div>
               )}
@@ -1022,18 +983,14 @@ function ModelManagerPanel({ activeModel }) {
             <button
               data-engine-reveal
               onClick={() => invoke && invoke("engine_models_dir_reveal").catch(() => {})}
-              style={{
-                padding: "4px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
-                background: T.bg2, color: T.fg, fontFamily: T.sans,
-                fontSize: 11, cursor: "pointer", flexShrink: 0,
-              }}
+              style={ekBtn("secondary", { small: true })}
             >
               Reveal models folder
             </button>
             {engineInfo && (
               <span
                 style={{
-                  fontFamily: T.mono, fontSize: 10, color: T.fg3,
+                  fontFamily: T.sans, fontSize: 12, color: T.fg2,
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                 }}
                 title={engineInfo.modelsDir}
@@ -1059,7 +1016,7 @@ function ModelManagerPanel({ activeModel }) {
           style={{
             flex: 1, padding: "7px 10px", borderRadius: 6,
             border: `1px solid ${T.border}`, background: T.bg2, color: T.fg,
-            fontFamily: T.mono, fontSize: 12, outline: "none",
+            fontFamily: T.sans, fontSize: 13, outline: "none",
           }}
         />
         {/* Offline type-ahead — see datalistNames above for why this is a
@@ -1072,18 +1029,12 @@ function ModelManagerPanel({ activeModel }) {
         <button
           onClick={() => startPull(pullInput)}
           disabled={!pullInput.trim()}
-          style={{
-            padding: "7px 14px", borderRadius: 6, border: "none",
-            background: pullInput.trim() ? T.amber : T.bg3,
-            color: pullInput.trim() ? T.bg0 : T.fg3,
-            fontFamily: T.sans, fontSize: 12.5, fontWeight: 600,
-            cursor: pullInput.trim() ? "pointer" : "default",
-          }}
+          style={ekBtn("primary", { disabled: !pullInput.trim() })}
         >
           Pull
         </button>
       </div>
-      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3, padding: "5px 2px 0" }}>
+      <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, padding: "5px 2px 0" }}>
         Browse the full library at ollama.com/library
       </div>
 
@@ -1107,7 +1058,7 @@ function ModelManagerPanel({ activeModel }) {
                   <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500 }}>
                     {c.name}
                   </span>
-                  <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>{c.approx}</span>
+                  <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3 }}>{c.approx}</span>
                 </div>
                 <div style={{ fontFamily: T.sans, fontSize: 11.5, color: T.fg2, marginTop: 1 }}>
                   {c.blurb}
@@ -1115,11 +1066,7 @@ function ModelManagerPanel({ activeModel }) {
               </div>
               <button
                 onClick={() => startPull(c.name)}
-                style={{
-                  padding: "3px 10px", borderRadius: 4, border: `1px solid ${T.border}`,
-                  background: "transparent", color: T.fg2, fontFamily: T.sans,
-                  fontSize: 11.5, cursor: "pointer",
-                }}
+                style={ekBtn("secondary", { small: true })}
               >
                 Pull
               </button>
@@ -1192,7 +1139,7 @@ function ModelManagerModal({ open, onClose, activeModel }) {
             onClick={() => onClose?.()}
             aria-label="Close"
             style={{
-              border: "none", background: "transparent", color: T.fg3,
+              border: "none", background: "transparent", color: T.fg2,
               fontSize: 16, cursor: "pointer", padding: 2,
             }}
           >

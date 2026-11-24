@@ -100,11 +100,9 @@ function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasV
       <div
         style={{
           padding: "6px 10px 4px",
-          fontFamily: T.mono,
-          fontSize: 10,
+          fontFamily: T.sans,
+          fontSize: 12,
           color: T.fg3,
-          textTransform: "uppercase",
-          letterSpacing: 0.6,
         }}
       >
         {local ? "Local models" : "Models"}
@@ -114,8 +112,8 @@ function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasV
         <div
           style={{
             padding: "12px 10px",
-            fontFamily: T.mono,
-            fontSize: 11,
+            fontFamily: T.sans,
+            fontSize: 12.5,
             color: T.fg3,
           }}
         >
@@ -129,8 +127,8 @@ function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasV
         <div
           style={{
             padding: "10px",
-            fontFamily: T.mono,
-            fontSize: 11,
+            fontFamily: T.sans,
+            fontSize: 12.5,
             color: T.fg3,
           }}
         >
@@ -140,7 +138,7 @@ function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasV
 
       {models && models.length === 0 && !error && (
         <div style={{ padding: "10px" }}>
-          <div style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3, marginBottom: 8 }}>
+          <div style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3, marginBottom: 8 }}>
             No models pulled yet.
           </div>
           <button
@@ -218,14 +216,14 @@ function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasV
                 </span>
                 {size && (
                   <span
-                    style={{ fontFamily: T.mono, fontSize: 10, color: T.fg2 }}
+                    style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2 }}
                   >
                     {size}
                   </span>
                 )}
                 {quant && (
                   <span
-                    style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3 }}
+                    style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3 }}
                   >
                     {quant}
                   </span>
@@ -234,8 +232,8 @@ function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasV
               {sizeOnDisk && (
                 <div
                   style={{
-                    fontFamily: T.mono,
-                    fontSize: 10,
+                    fontFamily: T.sans,
+                    fontSize: 12,
                     color: T.fg1,
                     marginTop: 1,
                   }}
@@ -246,8 +244,8 @@ function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasV
               {isActive && capsStr && (
                 <div
                   style={{
-                    fontFamily: T.mono,
-                    fontSize: 10,
+                    fontFamily: T.sans,
+                    fontSize: 12,
                     color: T.fg1,
                     marginTop: 1,
                   }}
@@ -259,14 +257,12 @@ function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasV
             {isActive && (
               <span
                 style={{
-                  fontFamily: T.mono,
-                  fontSize: 9,
+                  fontFamily: T.sans,
+                  fontSize: 12,
                   padding: "1px 5px",
-                  borderRadius: 3,
+                  borderRadius: 8,
                   background: T.green + "26",
                   color: T.green,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.4,
                 }}
               >
                 active
@@ -310,7 +306,9 @@ function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasV
 // click outside that range is disabled.
 // `nameOfModel(id)` → { name, detail } gives rows their plain names;
 // without it they show the id.
-function CompareModelPickerModal({ open, onClose, onConfirm, nameOfModel }) {
+// `sequential` adds the note that the models answer one after another
+// (true on the bundled engine, which runs one chat model at a time).
+function CompareModelPickerModal({ open, onClose, onConfirm, nameOfModel, sequential }) {
   const [models, setModels] = useState(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(() => new Set());
@@ -360,6 +358,7 @@ function CompareModelPickerModal({ open, onClose, onConfirm, nameOfModel }) {
   };
 
   const canConfirm = selected.size === 2 || selected.size === 3;
+  const quiet = { padding: "10px 2px", fontFamily: T.sans, fontSize: 13, color: T.fg2 };
 
   return (
     <div
@@ -379,226 +378,143 @@ function CompareModelPickerModal({ open, onClose, onConfirm, nameOfModel }) {
         data-compare-picker
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 480,
-          maxHeight: "70vh",
+          width: 500,
+          maxHeight: "72vh",
           background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
-          borderRadius: 8,
+          borderRadius: 14,
           boxShadow: `${T.shadowPop}, ${T.insetHi}`,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
         }}
       >
-        <div
-          style={{
-            padding: "12px 16px",
-            borderBottom: `1px solid ${T.border}`,
-          }}
-        >
-          <div
-            style={{
-              fontFamily: T.sans,
-              fontSize: 13,
-              color: T.fg,
-              fontWeight: 500,
-            }}
-          >
-            New comparison chat
+        <div style={{ padding: "18px 22px 12px" }}>
+          <div style={{ fontFamily: T.sans, fontSize: 17, fontWeight: 600, color: T.fg }}>
+            Compare models
           </div>
-          <div
-            style={{
-              fontFamily: T.mono,
-              fontSize: 11,
-              color: T.fg3,
-              marginTop: 4,
-            }}
-          >
-            Pick 2 or 3 models. Your first message goes to all of them in
-            parallel; you pick a winner and the chat continues with that one.
+          <div style={ekHint({ fontSize: 12.5, marginTop: 3 })}>
+            Choose two or three. Each answers the same question.
           </div>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: 4 }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            padding: "0 22px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
           {models === null && (
-            <div
-              style={{
-                padding: "12px 14px",
-                fontFamily: T.mono,
-                fontSize: 11,
-                color: T.fg3,
-              }}
-            >
+            <div style={quiet}>
               <span className="typing-dot">●</span>{" "}
               <span className="typing-dot">●</span>{" "}
               <span className="typing-dot">●</span>
             </div>
           )}
-          {error && (
-            <div
-              style={{
-                padding: "12px 14px",
-                fontFamily: T.mono,
-                fontSize: 11,
-                color: T.fg3,
-              }}
-            >
-              {error}
-            </div>
+          {error && <div style={quiet}>{error}</div>}
+          {models && models.length === 0 && !error && (
+            <div style={quiet}>No models are installed yet.</div>
           )}
-          {models &&
-            models.length === 0 &&
-            !error && (
-              <div
-                style={{
-                  padding: "12px 14px",
-                  fontFamily: T.mono,
-                  fontSize: 11,
-                  color: T.fg3,
-                }}
-              >
-                No models pulled yet.
-              </div>
-            )}
           {(models || []).map((m) => {
             const isChecked = selected.has(m.name);
-            const color = modelColor(m.name);
-            const size = m.details?.parameter_size || "";
             const sizeOnDisk = formatBytes(m.size);
+            const plain = nameOfModel ? nameOfModel(m.name) : { name: m.name, detail: "" };
+            // A fourth cannot be added: say so by greying the rest.
+            const full = !isChecked && selected.size >= 3;
             return (
               <label
                 key={m.name}
+                data-compare-pick-row={m.name}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "auto auto 1fr auto",
+                  gridTemplateColumns: "18px minmax(0, 1fr) auto",
                   gap: 10,
                   alignItems: "center",
-                  padding: "7px 12px",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                  background: isChecked ? T.bg4 : "transparent",
+                  padding: "9px 12px",
+                  border: `1px solid ${isChecked ? T.fg : T.border}`,
+                  boxShadow: isChecked ? `0 0 0 1px ${T.fg}` : "none",
+                  borderRadius: 10,
+                  background: T.isLight ? T.bg0 : T.bg2,
+                  cursor: full ? "default" : "pointer",
+                  opacity: full ? 0.55 : 1,
+                  flexShrink: 0,
                 }}
-                onMouseEnter={(e) =>
-                  !isChecked && (e.currentTarget.style.background = T.bg3)
-                }
-                onMouseLeave={(e) =>
-                  !isChecked &&
-                  (e.currentTarget.style.background = "transparent")
-                }
               >
                 <input
                   type="checkbox"
                   checked={isChecked}
                   onChange={() => toggle(m.name)}
-                  aria-label={`Compare with ${m.name}`}
+                  aria-label={`Compare with ${plain.name}`}
+                  style={{ width: 16, height: 16, margin: 0, accentColor: T.fg, cursor: "inherit" }}
                 />
-                <ModelDot color={color} size={7} />
-                <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   <span
-                    style={{
-                      fontFamily: T.sans,
-                      fontSize: 12.5,
-                      color: T.fg,
-                      fontWeight: 500,
-                    }}
+                    data-compare-pick-name
+                    style={{ fontFamily: T.sans, fontSize: 13.5, fontWeight: 600, color: T.fg }}
                   >
-                    {nameOfModel ? (
-                      <>
-                        <span data-compare-pick-name style={{ fontFamily: T.sans, fontWeight: 600 }}>
-                          {nameOfModel(m.name).name}
-                        </span>
-                        {nameOfModel(m.name).detail && (
-                          <span style={{ fontFamily: T.sans, color: T.fg2, marginLeft: 8 }}>
-                            {nameOfModel(m.name).detail}
-                          </span>
-                        )}
-                      </>
-                    ) : m.name}
+                    {plain.name}
                   </span>
-                  {size && (
-                    <span
-                      style={{
-                        fontFamily: T.mono,
-                        fontSize: 10,
-                        color: T.fg2,
-                        marginLeft: 6,
-                      }}
-                    >
-                      {size}
+                  {plain.detail && (
+                    <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, marginLeft: 7 }}>
+                      {plain.detail}
                     </span>
                   )}
                 </div>
                 {sizeOnDisk && (
-                  <span
-                    style={{
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg3,
-                    }}
-                  >
+                  <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2 }}>
                     {sizeOnDisk}
                   </span>
                 )}
               </label>
             );
           })}
+          {sequential && (
+            <div data-compare-pick-hint style={ekHint({ marginTop: 2 })}>
+              The models answer one after another, so this takes as long as
+              all the answers together.
+            </div>
+          )}
         </div>
 
         <div
           style={{
-            padding: "10px 16px",
-            borderTop: `1px solid ${T.border}`,
+            padding: "14px 22px 18px",
             display: "flex",
             alignItems: "center",
-            gap: 10,
+            gap: 8,
           }}
         >
-          <span
-            style={{
-              flex: 1,
-              fontFamily: T.mono,
-              fontSize: 11,
-              color: canConfirm ? T.fg2 : T.fg3,
-            }}
-          >
-            {selected.size === 0 && "Select 2 or 3 models"}
-            {selected.size === 1 && "Pick 1 more"}
-            {selected.size === 2 && "2 selected — Done, or add 1 more"}
-            {selected.size === 3 && "3 selected"}
+          <span data-compare-pick-count style={ekHint({ flex: 1 })}>
+            {selected.size === 0 && "Choose two or three"}
+            {selected.size === 1 && "1 chosen — choose one more"}
+            {selected.size === 2 && "2 chosen"}
+            {selected.size === 3 && "3 chosen"}
           </span>
-          <button
-            onClick={onClose}
-            style={{
-              padding: "5px 12px",
-              background: "transparent",
-              border: `1px solid ${T.border}`,
-              borderRadius: 4,
-              color: T.fg2,
-              fontFamily: T.mono,
-              fontSize: 11.5,
-              cursor: "pointer",
-            }}
-          >
+          <button onClick={onClose} style={ekBtn("secondary")}>
             Cancel
           </button>
           <button
+            data-compare-start
             disabled={!canConfirm}
             onClick={() => {
               if (!canConfirm) return;
               onConfirm(Array.from(selected));
             }}
-            style={{
-              padding: "5px 14px",
-              background: canConfirm ? T.bg4 : T.bg2,
-              border: `1px solid ${canConfirm ? T.borderStrong : T.border}`,
-              borderRadius: 4,
-              color: canConfirm ? T.fg : T.fg3,
-              fontFamily: T.mono,
-              fontSize: 11.5,
-              cursor: canConfirm ? "pointer" : "not-allowed",
-            }}
+            style={ekBtn("primary", { disabled: !canConfirm })}
           >
-            Done
+            Start comparing
           </button>
         </div>
       </div>
@@ -848,37 +764,14 @@ function ConfirmDialog({
             ref={cancelBtnRef}
             onClick={() => { if (!busy) onCancel?.(); }}
             disabled={busy}
-            style={{
-              height: 28,
-              padding: "0 14px",
-              background: T.bg2,
-              border: `1px solid ${T.border}`,
-              borderRadius: 6,
-              color: T.fg,
-              fontFamily: T.sans,
-              fontSize: 12,
-              cursor: busy ? "not-allowed" : "pointer",
-              opacity: busy ? 0.6 : 1,
-            }}
+            style={ekBtn("secondary", { disabled: busy })}
           >
             {cancelText}
           </button>
           <button
             onClick={() => { if (!busy) onConfirm?.(); }}
             disabled={busy}
-            style={{
-              height: 28,
-              padding: "0 14px",
-              background: T.red,
-              border: `1px solid ${T.red}`,
-              borderRadius: 6,
-              color: "#fff",
-              fontFamily: T.sans,
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: busy ? "not-allowed" : "pointer",
-              opacity: busy ? 0.7 : 1,
-            }}
+            style={{ ...ekBtn("primary"), background: T.red, border: `1px solid ${T.red}`, color: "#fff", opacity: busy ? 0.6 : 1 }}
           >
             {busy ? "Working…" : confirmText}
           </button>
@@ -1104,8 +997,8 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
             </div>
             <div
               style={{
-                fontFamily: T.mono,
-                fontSize: 11,
+                fontFamily: T.sans,
+                fontSize: 12.5,
                 color: T.fg3,
                 marginTop: 2,
               }}
@@ -1175,7 +1068,7 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                 <span style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: T.fg, flex: 1 }}>
                   {rec.model}
                 </span>
-                <span style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}>{rec.approx}</span>
+                <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3 }}>{rec.approx}</span>
               </div>
               <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5 }}>
                 {rec.reason}
@@ -1215,8 +1108,8 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                     border: `1px solid ${T.border}`,
                     borderRadius: 6,
                     padding: "8px 12px",
-                    fontFamily: T.mono,
-                    fontSize: 12,
+                    fontFamily: T.sans,
+                    fontSize: 13,
                     color: T.amber,
                   }}
                 >
@@ -1244,7 +1137,7 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                     <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500, flex: 1 }}>
                       {target || "…"}
                     </span>
-                    <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg2 }}>
+                    <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2 }}>
                       {pct !== null
                         ? `${pct}% · ${formatBytes(prog.completedBytes)} / ${formatBytes(prog.totalBytes)}`
                         : (prog && prog.statusLine) || "starting…"}
@@ -1300,8 +1193,8 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
               border: "1px solid rgba(200,80,80,0.3)",
               borderRadius: 6,
               padding: "10px 12px",
-              fontFamily: T.mono,
-              fontSize: 11.5,
+              fontFamily: T.sans,
+              fontSize: 12.5,
               color: T.red,
               lineHeight: 1.6,
             }}
@@ -1323,34 +1216,14 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
             <>
               <button
                 onClick={onDismiss}
-                style={{
-                  padding: "7px 16px",
-                  borderRadius: 6,
-                  border: `1px solid ${T.border}`,
-                  background: "transparent",
-                  color: T.fg2,
-                  fontFamily: T.sans,
-                  fontSize: 13,
-                  cursor: "pointer",
-                }}
+                style={ekBtn("secondary")}
               >
                 Continue without Ollama
               </button>
               <button
                 className="ek-btn-primary"
                 onClick={startOllama}
-                style={{
-                  padding: "7px 16px",
-                  borderRadius: 6,
-                  border: "none",
-                  background: T.amber,
-                  boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
-                  color: T.bg0,
-                  fontFamily: T.sans,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
+                style={ekBtn("primary")}
               >
                 {phase === "error" ? "Retry" : "Start Ollama"}
               </button>
@@ -1360,16 +1233,7 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
             <>
               <button
                 onClick={onDismiss}
-                style={{
-                  padding: "7px 14px",
-                  borderRadius: 6,
-                  border: `1px solid ${T.border}`,
-                  background: "transparent",
-                  color: T.fg3,
-                  fontFamily: T.sans,
-                  fontSize: 12.5,
-                  cursor: "pointer",
-                }}
+                style={ekBtn("secondary")}
               >
                 Skip for now
               </button>
@@ -1379,34 +1243,14 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                   onDismiss();
                   window.ekOpenModelManager?.();
                 }}
-                style={{
-                  padding: "7px 14px",
-                  borderRadius: 6,
-                  border: `1px solid ${T.border}`,
-                  background: "transparent",
-                  color: T.fg2,
-                  fontFamily: T.sans,
-                  fontSize: 12.5,
-                  cursor: "pointer",
-                }}
+                style={ekBtn("secondary")}
               >
                 Choose a different model
               </button>
               <button
                 className="ek-btn-primary"
                 onClick={downloadAndSetup}
-                style={{
-                  padding: "7px 16px",
-                  borderRadius: 6,
-                  border: "none",
-                  background: T.amber,
-                  boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
-                  color: T.bg0,
-                  fontFamily: T.sans,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
+                style={ekBtn("primary")}
               >
                 Download and set up
               </button>
@@ -1420,16 +1264,7 @@ function OllamaGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                 ekCancelPull("nomic-embed-text");
                 setPhase("recommend");
               }}
-              style={{
-                padding: "7px 16px",
-                borderRadius: 6,
-                border: `1px solid ${T.border}`,
-                background: "transparent",
-                color: T.fg2,
-                fontFamily: T.sans,
-                fontSize: 13,
-                cursor: "pointer",
-              }}
+              style={ekBtn("secondary")}
             >
               Cancel
             </button>
@@ -1616,7 +1451,7 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
             <div style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.fg }}>
               {titles[phase] || phase}
             </div>
-            <div style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3, marginTop: 2 }}>
+            <div style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3, marginTop: 2 }}>
               {subtitle}
             </div>
           </div>
@@ -1675,7 +1510,7 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                     👁 vision
                   </span>
                 )}
-                <span style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}>{rec.approx}</span>
+                <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3 }}>{rec.approx}</span>
               </div>
               <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5 }}>
                 {rec.reason}
@@ -1720,7 +1555,7 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                     <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500, flex: 1 }}>
                       {label}
                     </span>
-                    <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg2 }}>
+                    <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2 }}>
                       {pct !== null
                         ? `${pct}% · ${formatBytes(prog.completedBytes)} / ${formatBytes(prog.totalBytes)}`
                         : (prog && prog.statusLine) || "starting…"}
@@ -1752,10 +1587,10 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                   marginTop: 8,
                   background: T.bg2,
                   border: `1px solid ${T.border}`,
-                  borderRadius: 6,
+                  borderRadius: 8,
                   padding: "8px 12px",
-                  fontFamily: T.mono,
-                  fontSize: 11,
+                  fontFamily: T.sans,
+                  fontSize: 12.5,
                   color: T.fg3,
                 }}
               >
@@ -1774,16 +1609,7 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
           {(phase === "recommend" || phase === "no-binary") && (
             <button
               onClick={onDismiss}
-              style={{
-                padding: "7px 14px",
-                borderRadius: 6,
-                border: `1px solid ${T.border}`,
-                background: "transparent",
-                color: T.fg3,
-                fontFamily: T.sans,
-                fontSize: 12.5,
-                cursor: "pointer",
-              }}
+              style={ekBtn("secondary")}
             >
               {phase === "no-binary" ? "Continue" : "Skip for now"}
             </button>
@@ -1792,34 +1618,14 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
             <>
               <button
                 onClick={() => { onDismiss?.(); window.ekOpenModelManager?.(); }}
-                style={{
-                  padding: "7px 14px",
-                  borderRadius: 6,
-                  border: `1px solid ${T.border}`,
-                  background: "transparent",
-                  color: T.fg2,
-                  fontFamily: T.sans,
-                  fontSize: 12.5,
-                  cursor: "pointer",
-                }}
+                style={ekBtn("secondary")}
               >
                 Choose a different model
               </button>
               <button
                 className="ek-btn-primary"
                 onClick={downloadAndSetup}
-                style={{
-                  padding: "7px 16px",
-                  borderRadius: 6,
-                  border: "none",
-                  background: T.amber,
-                  boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
-                  color: T.bg0,
-                  fontFamily: T.sans,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
+                style={ekBtn("primary")}
               >
                 Download and set up
               </button>
@@ -1832,16 +1638,7 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                 ekCancelPull("nomic-embed-text");
                 setPhase("recommend");
               }}
-              style={{
-                padding: "7px 16px",
-                borderRadius: 6,
-                border: `1px solid ${T.border}`,
-                background: "transparent",
-                color: T.fg2,
-                fontFamily: T.sans,
-                fontSize: 13,
-                cursor: "pointer",
-              }}
+              style={ekBtn("secondary")}
             >
               Cancel
             </button>
@@ -1908,34 +1705,14 @@ function EngineMigrationOffer({ open, onKeepOllama, onSwitchToEngine, onDismiss 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
           <button
             onClick={onKeepOllama}
-            style={{
-              padding: "7px 16px",
-              borderRadius: 6,
-              border: `1px solid ${T.border}`,
-              background: "transparent",
-              color: T.fg2,
-              fontFamily: T.sans,
-              fontSize: 13,
-              cursor: "pointer",
-            }}
+            style={ekBtn("secondary")}
           >
             Keep Ollama
           </button>
           <button
             className="ek-btn-primary"
             onClick={onSwitchToEngine}
-            style={{
-              padding: "7px 16px",
-              borderRadius: 6,
-              border: "none",
-              background: T.amber,
-              boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
-              color: T.bg0,
-              fontFamily: T.sans,
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
+            style={ekBtn("primary")}
           >
             Switch to bundled engine
           </button>

@@ -308,10 +308,10 @@ function OutputDirModal({ chatId, chatTitle, suggested, onClose, invoke }) {
               flex: 1, padding: '6px 8px',
               background: T.bg2,
               border: `1px solid ${T.border}`,
-              borderRadius: 5,
+              borderRadius: 8,
               color: T.fg,
-              fontFamily: T.mono,
-              fontSize: 12,
+              fontFamily: T.sans,
+              fontSize: 13,
             }}
           />
           <button
@@ -5004,6 +5004,7 @@ function App() {
         onClose={() => setCompareModalOpen(false)}
         onConfirm={confirmCompareModels}
         nameOfModel={nameModel}
+        sequential={backendKind === 'engine'}
       />
 
       <div style={{
@@ -5205,6 +5206,7 @@ function App() {
                     // prompt (falling back to seeding example text).
                     onStarter={handleStarterPrompt}
                     documentCount={chatDocumentCount(attachments)}
+                    nameOfModel={nameModel}
                   />
                   <Composer
                     model={tabModel}

@@ -127,10 +127,23 @@ test.describe("CompareChatPane (Phase 4)", () => {
     await expect(page.locator('[data-model="a"]')).toContainText("from a");
     await expect(page.locator('[data-model="b"]')).toContainText("from b");
     await expect(page.locator('[data-model="c"]')).toContainText("from c");
-    // The user message bubble renders ONCE above the grid (not per
-    // column) — verify the body contains "go" and the role chip "You".
-    await expect(page.locator("#test-root")).toContainText("You");
-    await expect(page.locator("#test-root")).toContainText("go");
+    // The question renders ONCE above the grid (not per column), as a
+    // bubble on the right like an ordinary chat's.
+    const question = page.locator("[data-compare-question]");
+    await expect(question).toHaveCount(1);
+    await expect(question).toHaveText("go");
+    const box = await question.locator("div").first().boundingBox();
+    const pane = await page.locator("[data-compare-pane]").boundingBox();
+    expect(box.x - pane.x).toBeGreaterThan(pane.width / 2);
+    // The columns sit in one rounded box.
+    expect(
+      await page.locator("[data-compare-grid]").evaluate((el) => getComputedStyle(el).borderTopLeftRadius),
+    ).toBe("14px");
+    // Once answered, the message box is the same card as an ordinary
+    // chat's, locked until an answer is chosen.
+    await expect(page.locator("[data-compare-composer] textarea")).toBeDisabled();
+    await expect(page.locator("[data-compare-hint]")).toContainText("Pick a winner above");
+    await expect(page.locator("[data-keep]").first()).toHaveText("Continue with this answer");
   });
 
   test("Keep button is enabled on a finished non-empty variant", async ({
@@ -508,7 +521,7 @@ test.describe("Phase 5: missing-model banner", () => {
     await expect(banner.locator('[data-missing-model="gamma"]')).toBeVisible();
     // Composer hint text changes to flag the missing-models lock.
     await expect(page.locator("#test-root")).toContainText(
-      "install the missing models above",
+      "Install the missing models above",
     );
     // Composer is disabled because of the missing models.
     await expect(
@@ -638,12 +651,10 @@ test.describe("CompareModelPickerModal", () => {
     await page.evaluate(() => {
       window.__TEST_MOUNT("CompareModelPickerModal", { open: true });
     });
-    await expect(page.locator("#test-root")).toContainText(
-      "New comparison chat",
-    );
-    const done = page.locator("#test-root button", { hasText: "Done" });
-    await expect(done).toBeVisible();
-    await expect(done).toBeDisabled();
+    await expect(page.locator("#test-root")).toContainText("Compare models");
+    const start = page.locator("[data-compare-start]");
+    await expect(start).toHaveText("Start comparing");
+    await expect(start).toBeDisabled();
   });
 
   test("REGRESSION: open false → true does not throw Rules-of-Hooks", async ({
@@ -658,10 +669,42 @@ test.describe("CompareModelPickerModal", () => {
     await page.evaluate(() => {
       window.__TEST_RERENDER("CompareModelPickerModal", { open: true });
     });
-    await expect(page.locator("#test-root")).toContainText(
-      "New comparison chat",
-    );
+    await expect(page.locator("#test-root")).toContainText("Compare models");
     expect(pageErrors).toEqual([]);
+  });
+
+  test("rows are cards with plain names; a fourth cannot be added; the note appears when models take turns", async ({ page }) => {
+    await page.evaluate(() => {
+      window.__INVOKE_RESPONSES.llm_list_models = () => ({
+        models: ["m1", "m2", "m3", "m4"].map((name) => ({ name, size: 5e9 })),
+      });
+      window.__NAMES = { m1: ["Fast", "Gemma 4 E4B"], m2: ["Balanced", "Gemma 4 12B"] };
+      window.__TEST_MOUNT("CompareModelPickerModal", {
+        open: true,
+        sequential: true,
+        nameOfModel: (id) => ({ id, name: (window.__NAMES[id] || [id])[0], detail: (window.__NAMES[id] || [id, ""])[1] }),
+        onConfirm: (ids) => { window.__CONFIRMED = ids; },
+      });
+    });
+    const picker = page.locator("[data-compare-picker]");
+    await expect(picker.locator('[data-compare-pick-row="m1"]')).toContainText("Fast");
+    await expect(picker.locator('[data-compare-pick-row="m1"]')).toContainText("Gemma 4 E4B");
+    await expect(picker.locator('[data-compare-pick-row="m3"] [data-compare-pick-name]')).toHaveText("m3");
+    await expect(picker.locator("[data-compare-pick-hint]")).toContainText("one after another");
+
+    const start = picker.locator("[data-compare-start]");
+    await picker.getByLabel("Compare with Fast").check();
+    await expect(picker.locator("[data-compare-pick-count]")).toHaveText("1 chosen — choose one more");
+    await expect(start).toBeDisabled();
+    await picker.getByLabel("Compare with Balanced").check();
+    await expect(start).toBeEnabled();
+    await picker.getByLabel("Compare with m3").check();
+    // Three is the most: a fourth click changes nothing.
+    await picker.getByLabel("Compare with m4").click({ force: true });
+    await expect(picker.getByLabel("Compare with m4")).not.toBeChecked();
+    await expect(picker.locator("[data-compare-pick-count]")).toHaveText("3 chosen");
+    await start.click();
+    expect(await page.evaluate(() => window.__CONFIRMED)).toEqual(["m1", "m2", "m3"]);
   });
 
   test("the model that reads documents for search is not offered", async ({ page }) => {

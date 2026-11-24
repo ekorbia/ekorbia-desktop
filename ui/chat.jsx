@@ -76,7 +76,7 @@ function useStickToBottomOnResize(ref) {
 }
 
 // ─── Chat Pane ──────────────────────────────────────────────
-function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, onContinue, space, showDetails = false, onStarter, engineCtx = null, documentCount = 0 }) {
+function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery, onEditMessage, onRetryMessage, onContinue, space, showDetails = false, onStarter, engineCtx = null, documentCount = 0, nameOfModel }) {
   const scrollerRef = useRef(null);
   const lastContent = chat.messages[chat.messages.length - 1]?.content;
   useEffect(() => {
@@ -465,8 +465,8 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
             gap: 8,
             background: "rgba(122, 166, 184, 0.08)",
             borderBottom: `1px solid rgba(122, 166, 184, 0.25)`,
-            fontFamily: T.mono,
-            fontSize: 10.5,
+            fontFamily: T.sans,
+            fontSize: 12,
             color: "#9fb9c5",
           }}
         >
@@ -654,6 +654,7 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                 // requires doneReason === 'length' — see Message).
                 onContinue={isLastAssistant ? onContinue : null}
                 showDetails={showDetails}
+                nameOfModel={nameOfModel}
                 engineCtx={engineCtx}
               />
             );
@@ -764,11 +765,11 @@ function renderMessageContent(text, regex, sources) {
           display: "inline-block",
           padding: "0 4px",
           margin: "0 1px",
-          borderRadius: 4,
+          borderRadius: 8,
           background: T.amber + "22",
           color: T.amber,
-          fontFamily: T.mono,
-          fontSize: 9,
+          fontFamily: T.sans,
+          fontSize: 12,
           fontWeight: 700,
           verticalAlign: "super",
           lineHeight: 1.3,
@@ -858,12 +859,10 @@ function SourcesFooter({ sources, imagesSkipped }) {
       <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
         <span
           style={{
-            fontFamily: T.mono,
-            fontSize: 10,
+            fontFamily: T.sans,
+            fontSize: 12,
             color: T.fg3,
             marginRight: 4,
-            textTransform: "uppercase",
-            letterSpacing: 0.6,
           }}
         >
           Sources
@@ -909,8 +908,8 @@ function SourcesFooter({ sources, imagesSkipped }) {
                   border: `1px solid ${T.border}`,
                   color: T.fg1,
                   cursor: "pointer",
-                  fontFamily: T.mono,
-                  fontSize: 10,
+                  fontFamily: T.sans,
+                  fontSize: 12,
                   maxWidth: 260,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -967,8 +966,8 @@ function SourcesFooter({ sources, imagesSkipped }) {
                           border: "none",
                           color: T.fg2,
                           cursor: "pointer",
-                          fontFamily: T.mono,
-                          fontSize: 10,
+                          fontFamily: T.sans,
+                          fontSize: 12,
                           textAlign: "left",
                           maxWidth: 360,
                           overflow: "hidden",
@@ -994,11 +993,11 @@ function SourcesFooter({ sources, imagesSkipped }) {
           <span
             title="Switch to a vision-capable model to use the attached images"
             style={{
-              fontFamily: T.mono,
-              fontSize: 10,
+              fontFamily: T.sans,
+              fontSize: 12,
               color: T.fg3,
               padding: "2px 6px",
-              borderRadius: 4,
+              borderRadius: 8,
               background: T.bg2,
               border: `1px dashed ${T.border}`,
             }}
@@ -1065,11 +1064,11 @@ function ToolResultsStrip({ results }) {
             alignItems: 'center',
             gap: 6,
             padding: '4px 8px',
-            borderRadius: 6,
+            borderRadius: 8,
             background: T.green + '15',
             border: `1px solid ${T.green}33`,
-            fontFamily: T.mono,
-            fontSize: 11,
+            fontFamily: T.sans,
+            fontSize: 12.5,
             color: T.fg1,
           }}
         >
@@ -1164,10 +1163,10 @@ function HeuristicSaveStrip({ messageId, chatId, content, streaming }) {
               padding: '4px 8px',
               background: isSaved ? T.green + '15' : T.bg2,
               border: `1px dashed ${isSaved ? T.green + '55' : T.border}`,
-              borderRadius: 6,
+              borderRadius: 8,
               color: isSaved ? T.fg2 : T.fg1,
-              fontFamily: T.mono,
-              fontSize: 11,
+              fontFamily: T.sans,
+              fontSize: 12.5,
               cursor: isSaved ? 'default' : 'pointer',
               opacity: isSaved ? 0.7 : 1,
             }}
@@ -1213,10 +1212,10 @@ function MessageActionButton({ icon, label, title, onClick }) {
         padding: '3px 8px',
         background: hover ? T.bg2 : 'transparent',
         border: `1px solid ${hover ? T.border : 'transparent'}`,
-        borderRadius: 5,
+        borderRadius: 8,
         color: hover ? T.fg : T.fg3,
-        fontFamily: T.mono,
-        fontSize: 10.5,
+        fontFamily: T.sans,
+        fontSize: 12,
         cursor: 'pointer',
         transition: 'color 0.12s, background 0.12s, border-color 0.12s',
       }}
@@ -1265,7 +1264,7 @@ function TokenFooter({ tokens, engineCtx = null }) {
   );
 }
 
-function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetryMessage, onContinue, showDetails = false, engineCtx = null }) {
+function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetryMessage, onContinue, showDetails = false, engineCtx = null, nameOfModel }) {
   const isUser = m.role === "user";
   // Per-message reveal for the token/timing footer when the global
   // "Show technical details" pref is off. Keeps the details one click away
@@ -1363,7 +1362,7 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
       )}
       {isUser && m.prompts?.length > 0 && (
         <div
-          style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 6 }}
+          style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 5, marginBottom: 6 }}
         >
           {/* p.color was resolved from the prompt's favorite at send time
               (main.jsx). It can be null when the prompt had no favorite; we
@@ -1379,10 +1378,9 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
                 borderRadius: 99,
                 background: p.color ? p.color + "22" : T.bg2,
                 border: `1px solid ${p.color ? p.color + "55" : T.border}`,
-                fontFamily: T.mono,
-                fontSize: 10.5,
+                fontFamily: T.sans,
+                fontSize: 12,
                 color: p.color || T.fg1,
-                letterSpacing: 0.2,
               }}
             >
               <span>{p.name}</span>
@@ -1424,9 +1422,9 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
               gap: 6,
               marginTop: 6,
               alignItems: 'center',
-              fontSize: 11,
+              fontSize: 12.5,
               color: T.fg3,
-              fontFamily: T.mono,
+              fontFamily: T.sans,
             }}
           >
             <button
@@ -1437,9 +1435,9 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
                 boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
                 color: T.bg0,
                 border: 'none',
-                borderRadius: 5,
-                fontFamily: T.mono,
-                fontSize: 11,
+                borderRadius: 8,
+                fontFamily: T.sans,
+                fontSize: 12.5,
                 fontWeight: 600,
                 cursor: 'pointer',
               }}
@@ -1453,9 +1451,9 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
                 background: 'transparent',
                 color: T.fg2,
                 border: `1px solid ${T.border}`,
-                borderRadius: 5,
-                fontFamily: T.mono,
-                fontSize: 11,
+                borderRadius: 8,
+                fontFamily: T.sans,
+                fontSize: 12.5,
                 cursor: 'pointer',
               }}
             >
@@ -1468,11 +1466,17 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
       ) : (
         <div
           className={!isUser && m.streaming ? 'ek-stream-border' : undefined}
+          data-message-bubble={isUser ? "user" : "assistant"}
           style={{
             padding: "10px 14px",
-            borderRadius: 10,
+            // What you asked sits on the right as a bubble; the answer
+            // runs the full width of the column.
+            borderRadius: isUser ? "16px 16px 4px 16px" : 10,
             background: isUser ? T.bg2 : "transparent",
-            border: isUser ? `1px solid ${T.border}` : "none",
+            border: "none",
+            width: isUser ? "fit-content" : undefined,
+            maxWidth: isUser ? "80%" : undefined,
+            marginLeft: isUser ? "auto" : undefined,
             fontFamily: T.sans,
             fontSize: 14,
             lineHeight: 1.65,
@@ -1537,11 +1541,10 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
               >
                 <span
                   style={{
-                    fontFamily: T.mono,
-                    fontSize: 10.5,
+                    fontFamily: T.sans,
+                    fontSize: 12,
                     color: T.fg3,
                     fontStyle: "italic",
-                    letterSpacing: 0.3,
                   }}
                 >
                   Reply hit the length limit.
@@ -1556,10 +1559,9 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
                     border: `1px solid ${T.amber}55`,
                     background: T.amber + "18",
                     color: T.amber,
-                    fontFamily: T.mono,
-                    fontSize: 10.5,
+                    fontFamily: T.sans,
+                    fontSize: 12,
                     fontWeight: 600,
-                    letterSpacing: 0.3,
                     cursor: "pointer",
                   }}
                   onMouseEnter={(e) =>
@@ -1584,11 +1586,10 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
                 marginTop: 8,
                 paddingTop: 6,
                 borderTop: `1px dashed ${T.border}`,
-                fontFamily: T.mono,
-                fontSize: 10.5,
+                fontFamily: T.sans,
+                fontSize: 12,
                 color: T.fg3,
                 fontStyle: "italic",
-                letterSpacing: 0.3,
               }}
             >
               — Stopped.
@@ -1610,10 +1611,9 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
             style={{
               marginTop: 4,
               paddingLeft: 14,
-              fontFamily: T.mono,
-              fontSize: 10,
+              fontFamily: T.sans,
+              fontSize: 12,
               color: T.fg3,
-              letterSpacing: 0.3,
               display: "flex",
               alignItems: "center",
               gap: 8,
@@ -1621,8 +1621,11 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
             data-message-footer
           >
             {m.model && (
-              <span data-message-model title={`Generated by ${m.model}`}>
-                {m.model}
+              <span
+                data-message-model
+                title={nameOfModel && nameOfModel(m.model).detail ? nameOfModel(m.model).detail : m.model}
+              >
+                {nameOfModel ? nameOfModel(m.model).name : m.model}
               </span>
             )}
             {m.tokens && (m.tokens.in || m.tokens.out) ? (
@@ -1641,9 +1644,8 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
               background: "transparent",
               border: "none",
               cursor: "pointer",
-              fontFamily: T.mono,
-              fontSize: 10,
-              letterSpacing: 0.3,
+              fontFamily: T.sans,
+              fontSize: 12,
               color: T.fg3,
             }}
             onMouseEnter={(e) => (e.currentTarget.style.color = T.fg2)}
@@ -1662,8 +1664,8 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
           style={{
             marginTop: 6,
             paddingLeft: 14,
-            fontFamily: T.mono,
-            fontSize: 11,
+            fontFamily: T.sans,
+            fontSize: 12.5,
             color: T.fg3,
           }}
         >
@@ -1676,10 +1678,9 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
               border: "none",
               padding: 0,
               color: T.fg2,
-              fontFamily: T.mono,
-              fontSize: 11,
+              fontFamily: T.sans,
+              fontSize: 12.5,
               cursor: "pointer",
-              letterSpacing: 0.2,
             }}
             onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
             onMouseLeave={(e) => (e.currentTarget.style.color = T.fg2)}
@@ -1718,15 +1719,15 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
                       display: "flex",
                       alignItems: "center",
                       gap: 6,
-                      fontFamily: T.mono,
-                      fontSize: 10,
+                      fontFamily: T.sans,
+                      fontSize: 12,
                       color: T.fg3,
-                      textTransform: "uppercase",
-                      letterSpacing: 0.6,
                       marginBottom: 6,
                     }}
                   >
-                    <span style={{ color: T.fg2 }}>{alt.model || "unknown"}</span>
+                    <span style={{ color: T.fg2 }}>
+                      {alt.model ? (nameOfModel ? nameOfModel(alt.model).name : alt.model) : "unknown"}
+                    </span>
                     {alt.tokens && (alt.tokens.in || alt.tokens.out) ? (
                       <span>
                         · {alt.tokens.in || 0}/{alt.tokens.out || 0} tok
@@ -1750,8 +1751,8 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
                   ) : (
                     <div
                       style={{
-                        fontFamily: T.mono,
-                        fontSize: 11,
+                        fontFamily: T.sans,
+                        fontSize: 12.5,
                         color: T.fg3,
                         fontStyle: "italic",
                       }}
@@ -1773,6 +1774,7 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
         <div
           style={{
             display: 'flex',
+            justifyContent: isUser ? 'flex-end' : 'flex-start',
             gap: 4,
             marginTop: 4,
             opacity: hover ? 1 : 0,
@@ -1812,7 +1814,7 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
 function StreamingIndicator() {
   return (
     <div style={{ marginBottom: 28 }}>
-      <div style={{ color: T.amber, fontFamily: T.mono, fontSize: 14 }}>
+      <div style={{ color: T.amber, fontFamily: T.sans, fontSize: 14 }}>
         <span className="typing-dot">●</span>
         <span className="typing-dot">●</span>
         <span className="typing-dot">●</span>
@@ -1852,7 +1854,7 @@ function ThinkingIndicator({ statusText }) {
     >
       <span
         aria-hidden="true"
-        style={{ color: T.amber, fontFamily: T.mono, fontSize: 13, letterSpacing: 2 }}
+        style={{ color: T.amber, fontFamily: T.sans, fontSize: 13, }}
       >
         <span className="typing-dot">●</span>
         <span className="typing-dot">●</span>
@@ -1860,11 +1862,10 @@ function ThinkingIndicator({ statusText }) {
       </span>
       <span
         style={{
-          fontFamily: T.mono,
-          fontSize: 11.5,
+          fontFamily: T.sans,
+          fontSize: 12.5,
           color: T.fg2,
           fontStyle: "italic",
-          letterSpacing: 0.3,
         }}
       >
         {label}
@@ -1921,9 +1922,8 @@ function ReasoningBlock({ text, ms, live }) {
   // One step brighter than the thought itself: the folded line is a
   // control, and has to be findable.
   const labelStyle = {
-    fontFamily: T.mono,
-    fontSize: 10.5,
-    letterSpacing: 0.4,
+    fontFamily: T.sans,
+    fontSize: 12,
     color: T.fg2,
   };
 
@@ -2068,8 +2068,8 @@ function PromptSlashPicker({
         <div
           style={{
             padding: "14px 16px",
-            fontFamily: T.mono,
-            fontSize: 11,
+            fontFamily: T.sans,
+            fontSize: 12.5,
             color: T.fg3,
             textAlign: "center",
           }}
@@ -2582,7 +2582,7 @@ function Composer({
               style={{
                 display: "flex",
                 flexWrap: "wrap",
-                gap: 4,
+                gap: 6,
                 marginBottom: 8,
               }}
             >
@@ -2596,12 +2596,6 @@ function Composer({
                 // Type badge text: extension for files, "DIR" for folders,
                 // "IMG"-equivalent for images. Kept short so the chip
                 // stays compact when many are attached.
-                const fileType = isFolder
-                  ? "DIR"
-                  : isImage
-                    ? (a.label.split(".").pop() || "img").toUpperCase()
-                    : (a.label.split(".").pop() || "txt").toUpperCase();
-                const visionActive = isImage && modelHasVision;
                 const status = a.status || "ready";
                 // Status drives both border tinting and the leading dot.
                 // 'indexing' is amber-spinning, 'error' is red, 'ready' is
@@ -2622,83 +2616,64 @@ function Composer({
                 // when reopening a chat with a mid-flight indexing run).
                 const progressText = isFolder
                   ? (status === "indexing" && (a.phase === "walking" || typeof a.progressTotal !== "number")
-                      ? "walking…"
+                      ? "Reading…"
                       : status === "indexing"
-                        ? `${a.fileCount ?? 0}/${a.progressTotal}`
+                        ? `Reading ${a.fileCount ?? 0} of ${a.progressTotal}`
                         : a.fileCount > 0
-                          ? `${a.fileCount} file${a.fileCount === 1 ? "" : "s"}`
+                          ? documentsLabel(a.fileCount)
                           : "")
                   : "";
                 const tooltipBase = isImage && !modelHasVision
-                  ? `${a.path}\n\nCurrent model has no vision capability — this image won't be analysed. Switch to a vision-capable model (e.g. gemma4, llava) to use it.`
+                  ? `${a.path}\n\nThis model cannot read images, so this one will be skipped.`
                   : isFolder
-                    ? `${a.path}\n\nFolder attachment (indexed for retrieval). Click ↻ to re-index.`
+                    ? `${a.path}\n\nEvery document in this folder can be searched. Click ↻ to read the folder again.`
                     : a.path;
                 const tooltip =
                   status === "error"
-                    ? `${tooltipBase}\n\nIndexing failed: ${a.error || "unknown"}\nClick ↻ to retry.`
+                    ? `${tooltipBase}\n\nCould not read it: ${a.error || "unknown"}\nClick ↻ to try again.`
                     : status === "indexing"
-                      ? `${tooltipBase}\n\nIndexing — chunks will be searchable once this finishes.`
+                      ? `${tooltipBase}\n\nStill reading — it can be searched once this finishes.`
                       : tooltipBase;
+                const chipIconBtn = {
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                };
                 return (
                   <span
                     key={a.id}
                     title={tooltip}
+                    data-attachment-chip={a.kind}
+                    data-attachment-status={status}
                     style={{
-                      display: "inline-flex",
-                      alignItems: "center",
+                      ...ekChip("plain"),
+                      height: 26,
                       gap: 6,
-                      padding: "2px 6px 2px 6px",
-                      background: T.bg2,
+                      padding: "0 8px 0 9px",
                       border: `1px solid ${statusBorder}`,
-                      borderRadius: 4,
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg1,
+                      fontWeight: 400,
                       opacity: isImage && !modelHasVision ? 0.7 : 1,
                     }}
                   >
-                    <span
-                      style={{
-                        display: "inline-block",
-                        padding: "1px 4px",
-                        borderRadius: 2,
-                        background: isFolder
-                          ? T.amber + "22"
-                          : isImage
-                            ? T.amber + "33"
-                            : T.bg3,
-                        color: isFolder || isImage ? T.amber : T.fg2,
-                        fontSize: 9,
-                        fontWeight: 600,
-                        letterSpacing: 0.3,
-                      }}
-                    >
-                      {fileType}
+                    <span style={{ display: "inline-flex", color: T.fg2 }}>
+                      {isFolder ? <I.Folder size={13} /> : <I.File size={13} />}
                     </span>
-                    <span style={{ color: T.fg, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span style={{ color: T.fg, fontWeight: 500, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {a.label}
                     </span>
                     {progressText && (
-                      <span
-                        style={{
-                          color: status === "indexing" ? T.amber : T.fg3,
-                          fontSize: 9,
-                          fontFamily: T.mono,
-                        }}
-                      >
+                      <span style={{ color: status === "indexing" ? T.amber : T.fg2 }}>
                         {progressText}
                       </span>
                     )}
                     {status === "indexing" && (
                       <span
                         className="typing-dot"
-                        title="Indexing"
-                        style={{
-                          color: T.amber,
-                          fontSize: 8,
-                          marginLeft: 1,
-                        }}
+                        title="Reading"
+                        style={{ color: T.amber, fontSize: 8 }}
                       >
                         ●
                       </span>
@@ -2706,73 +2681,28 @@ function Composer({
                     {status === "error" && (
                       <button
                         onClick={() => onReindexAttachment && onReindexAttachment(a.id)}
-                        title="Retry indexing"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          color: T.red,
-                          cursor: "pointer",
-                          padding: 0,
-                          marginLeft: 1,
-                          fontSize: 11,
-                          lineHeight: 1,
-                          display: "inline-flex",
-                        }}
+                        title="Try again"
+                        style={{ ...chipIconBtn, color: T.red }}
                       >
-                        ↻
+                        <I.Refresh size={11} />
                       </button>
                     )}
                     {isFolder && status === "ready" && (
                       <button
                         onClick={() => onReindexAttachment && onReindexAttachment(a.id)}
-                        title="Re-walk folder (pick up new/changed files)"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          color: T.fg3,
-                          cursor: "pointer",
-                          padding: 0,
-                          marginLeft: 1,
-                          fontSize: 11,
-                          lineHeight: 1,
-                          display: "inline-flex",
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = T.fg3)}
+                        title="Read the folder again (picks up new and changed files)"
+                        style={{ ...chipIconBtn, color: T.fg2 }}
                       >
-                        ↻
+                        <I.Refresh size={11} />
                       </button>
-                    )}
-                    {visionActive && (
-                      <span
-                        title="Model supports vision"
-                        style={{
-                          padding: "0 5px",
-                          borderRadius: 4,
-                          background: T.blue + "1f",
-                          border: `1px solid ${T.blue}4d`,
-                          color: T.blue,
-                          fontSize: 8,
-                          fontWeight: 700,
-                          letterSpacing: 0.6,
-                        }}
-                      >
-                        VISION
-                      </span>
                     )}
                     <button
                       onClick={() => onDetachAttachment && onDetachAttachment(a.id)}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: T.fg3,
-                        cursor: "pointer",
-                        padding: 0,
-                        marginLeft: 2,
-                        display: "inline-flex",
-                      }}
+                      aria-label={`Remove ${a.label}`}
+                      title="Remove"
+                      style={{ ...chipIconBtn, color: T.fg2 }}
                     >
-                      <I.X size={9} />
+                      <I.X size={10} />
                     </button>
                   </span>
                 );
@@ -2798,18 +2728,14 @@ function Composer({
                     data-attached-prompt-chip={p.id}
                     data-locked={isLocked ? "1" : "0"}
                     style={{
-                      display: "inline-flex",
-                      alignItems: "center",
+                      ...ekChip("plain"),
+                      height: 26,
                       gap: 6,
-                      padding: "2px 6px 2px 6px",
+                      padding: "0 8px 0 10px",
                       background: favColor ? favColor + "22" : T.bg2,
                       border: `1px solid ${favColor ? favColor + "55" : T.border}`,
-                      borderRadius: 4,
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg1,
                     }}
-                    title={isLocked ? "Locked by Space — unlock in Space settings" : undefined}
+                    title={isLocked ? "Always used in this workspace — change it in workspace settings" : undefined}
                   >
                     {favColor && (
                       <span

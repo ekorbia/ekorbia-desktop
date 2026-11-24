@@ -71,10 +71,10 @@ function HotkeyCapture({ value, onChange, onCancel }) {
         padding: "0 10px",
         background: recording ? T.bg4 : T.bg2,
         border: `1px solid ${recording ? T.amber : T.border}`,
-        borderRadius: 6,
+        borderRadius: 8,
         color: recording ? T.amber : T.fg,
-        fontFamily: T.mono,
-        fontSize: 12,
+        fontFamily: T.sans,
+        fontSize: 13,
         cursor: "pointer",
         textAlign: "center",
       }}
@@ -114,17 +114,7 @@ function SettingInput({ value, onChange, onCommit, placeholder, wide }) {
       onBlur={onCommit}
       onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
       placeholder={placeholder}
-      style={{
-        width: wide ? 280 : 140,
-        background: T.bg2,
-        border: `1px solid ${T.border}`,
-        borderRadius: 4,
-        color: T.fg,
-        fontFamily: T.mono,
-        fontSize: 11,
-        padding: "3px 6px",
-        outline: "none",
-      }}
+      style={ekField({ width: wide ? 280 : 140, padding: "5px 9px" })}
     />
   );
 }
@@ -246,7 +236,7 @@ function AttachmentsSettings() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-        <span style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2 }}>Embedding model</span>
+        <span style={ekLabel()}>Embedding model</span>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           {pickerMode === "dropdown" && pulledEmbedModels.length > 0 ? (
             <select
@@ -264,10 +254,10 @@ function AttachmentsSettings() {
                 width: 180,
                 background: T.bg2,
                 border: `1px solid ${T.border}`,
-                borderRadius: 4,
+                borderRadius: 8,
                 color: T.fg,
-                fontFamily: T.mono,
-                fontSize: 11,
+                fontFamily: T.sans,
+                fontSize: 12.5,
                 padding: "3px 6px",
                 outline: "none",
                 cursor: "pointer",
@@ -299,8 +289,8 @@ function AttachmentsSettings() {
                 alignItems: "center",
                 gap: 4,
                 color: ok ? (T.green) : (T.red),
-                fontFamily: T.mono,
-                fontSize: 10,
+                fontFamily: T.sans,
+                fontSize: 12,
               }}
             >
               ● {ok ? "pulled" : "not pulled"}
@@ -315,10 +305,10 @@ function AttachmentsSettings() {
             style={{
               background: "none",
               border: "none",
-              color: T.fg3,
+              color: T.fg2,
               cursor: "pointer",
-              fontFamily: T.mono,
-              fontSize: 9.5,
+              fontFamily: T.sans,
+              fontSize: 12,
               padding: 0,
               textDecoration: "underline",
             }}
@@ -330,9 +320,9 @@ function AttachmentsSettings() {
       {!ok && checked && (
         <div
           style={{
-            fontFamily: T.mono,
-            fontSize: 9.5,
-            color: T.fg3,
+            fontFamily: T.sans,
+            fontSize: 12,
+            color: T.fg2,
             textAlign: "right",
             marginTop: -4,
           }}
@@ -341,18 +331,18 @@ function AttachmentsSettings() {
         </div>
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-        <span style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2 }}>Top-k chunks per query</span>
+        <span style={ekLabel()}>Top-k chunks per query</span>
         <SettingInput
           value={topK}
           onChange={setTopK}
           onCommit={() => persist("top_k", topK)}
         />
       </div>
-      <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3, textAlign: "right", marginTop: -4 }}>
+      <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, textAlign: "right", marginTop: -4 }}>
         Defaults to 6
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-        <span style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2 }}>Folder file types</span>
+        <span style={ekLabel()}>Folder file types</span>
         <SettingInput
           wide
           value={folderExts}
@@ -360,11 +350,11 @@ function AttachmentsSettings() {
           onCommit={() => persist("folder_exts", folderExts)}
         />
       </div>
-      <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3, textAlign: "right", marginTop: -4 }}>
+      <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, textAlign: "right", marginTop: -4 }}>
         Defaults to md, markdown, txt, pdf
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-        <span style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2 }}>Folder ignore dirs</span>
+        <span style={ekLabel()}>Folder ignore dirs</span>
         <SettingInput
           wide
           value={folderIgnore}
@@ -372,11 +362,11 @@ function AttachmentsSettings() {
           onCommit={() => persist("folder_ignore", folderIgnore)}
         />
       </div>
-      <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3, textAlign: "right", marginTop: -4 }}>
+      <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, textAlign: "right", marginTop: -4 }}>
         Defaults to .git, node_modules, target, …
       </div>
       {savingKey && (
-        <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3, textAlign: "right" }}>
+        <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, textAlign: "right" }}>
           saving…
         </div>
       )}
@@ -473,17 +463,7 @@ function PromptsFolderRow({ onPromptsChanged }) {
     <button
       onClick={onClick}
       title={title}
-      style={{
-        height: 22,
-        padding: "0 8px",
-        background: T.bg2,
-        border: `1px solid ${T.border}`,
-        borderRadius: 4,
-        color: T.fg2,
-        fontFamily: T.mono,
-        fontSize: 10.5,
-        cursor: "pointer",
-      }}
+      style={ekBtn("secondary", { small: true })}
     >
       {children}
     </button>
@@ -493,12 +473,12 @@ function PromptsFolderRow({ onPromptsChanged }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <div
         style={{
-          fontFamily: T.mono,
-          fontSize: 10.5,
+          fontFamily: T.sans,
+          fontSize: 12,
           color: T.fg2,
           background: T.bg2,
           border: `1px solid ${T.border}`,
-          borderRadius: 4,
+          borderRadius: 8,
           padding: "5px 8px",
           // Prompts dirs deep in the home tree wrap onto multiple lines; let
           // them break mid-word so the modal doesn't blow out horizontally.
@@ -522,8 +502,8 @@ function PromptsFolderRow({ onPromptsChanged }) {
       {status && (
         <div
           style={{
-            fontFamily: T.mono,
-            fontSize: 10,
+            fontFamily: T.sans,
+            fontSize: 12,
             color: status.ok ? T.fg2 : T.red,
           }}
         >
@@ -622,18 +602,7 @@ function MemorySettings() {
       onClick={disabled ? undefined : onClick}
       title={title}
       disabled={!!disabled}
-      style={{
-        height: 22,
-        padding: "0 8px",
-        background: T.bg2,
-        border: `1px solid ${T.border}`,
-        borderRadius: 4,
-        color: disabled ? T.fg3 : T.fg2,
-        fontFamily: T.mono,
-        fontSize: 10.5,
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.6 : 1,
-      }}
+      style={ekBtn("secondary", { small: true, disabled })}
     >
       {children}
     </button>
@@ -649,9 +618,9 @@ function MemorySettings() {
           padding: "4px 8px",
           background: T.bg2,
           border: `1px solid ${T.border}`,
-          borderRadius: 6,
-          fontFamily: T.mono,
-          fontSize: 11,
+          borderRadius: 8,
+          fontFamily: T.sans,
+          fontSize: 12.5,
           color: T.fg2,
           minHeight: 24,
         }}
@@ -670,8 +639,8 @@ function MemorySettings() {
         {info && (
           <span
             style={{
-              fontFamily: T.mono,
-              fontSize: 10.5,
+              fontFamily: T.sans,
+              fontSize: 12,
               color: info.oversized ? T.amber : T.fg3,
             }}
           >
@@ -682,8 +651,8 @@ function MemorySettings() {
       {info?.unresolvable && (
         <div
           style={{
-            fontFamily: T.mono,
-            fontSize: 10,
+            fontFamily: T.sans,
+            fontSize: 12,
             color: T.red,
             lineHeight: 1.5,
           }}
@@ -695,8 +664,8 @@ function MemorySettings() {
       {info?.oversized && (
         <div
           style={{
-            fontFamily: T.mono,
-            fontSize: 10,
+            fontFamily: T.sans,
+            fontSize: 12,
             color: T.amber,
             lineHeight: 1.5,
           }}
@@ -708,8 +677,8 @@ function MemorySettings() {
       {status && (
         <div
           style={{
-            fontFamily: T.mono,
-            fontSize: 10,
+            fontFamily: T.sans,
+            fontSize: 12,
             color: status.ok ? T.fg2 : T.red,
           }}
         >
@@ -798,7 +767,7 @@ function ModelsSettings({ defaultModel = "", onDefaultModel, spaces = [], onOpen
 
   const hint = { fontFamily: T.sans, fontSize: 12.5, color: T.fg2, lineHeight: 1.5 };
   const pill = {
-    fontFamily: T.sans, fontSize: 11, fontWeight: 500, color: T.amber,
+    fontFamily: T.sans, fontSize: 12, fontWeight: 500, color: T.amber,
     background: T.amber + "1f", borderRadius: 999, padding: "2px 9px", whiteSpace: "nowrap",
   };
   const button = {
@@ -1110,58 +1079,17 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
         minHeight: 32,
       }}
     >
-      <span style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2 }}>
-        {label}
-      </span>
+      <span style={ekLabel()}>{label}</span>
       {children}
     </div>
   );
 
   const SectionLabel = ({ label }) => (
-    <div
-      style={{
-        fontFamily: T.mono,
-        fontSize: 10,
-        fontWeight: 600,
-        color: T.fg1,
-        textTransform: "uppercase",
-        letterSpacing: 0.7,
-        paddingBottom: 2,
-        marginTop: 8,
-      }}
-    >
-      {label}
-    </div>
+    <div style={ekHeading({ marginTop: 10, paddingBottom: 2 })}>{label}</div>
   );
 
   const Toggle = ({ value, onChange }) => (
-    <button
-      onClick={() => onChange(!value)}
-      style={{
-        position: "relative",
-        width: 36,
-        height: 20,
-        borderRadius: 999,
-        background: value ? T.amber : T.bg4,
-        border: "none",
-        cursor: "pointer",
-        flexShrink: 0,
-        transition: "background 0.15s",
-      }}
-    >
-      <span
-        style={{
-          position: "absolute",
-          top: 3,
-          left: value ? 19 : 3,
-          width: 14,
-          height: 14,
-          borderRadius: "50%",
-          background: value ? T.bg0 : T.fg3,
-          transition: "left 0.15s",
-        }}
-      />
-    </button>
+    <EkToggle value={value} onChange={onChange} />
   );
 
   // Confirm-modal handler. Awaits the parent's onClearAllChats (which
@@ -1243,7 +1171,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               background: "none",
               border: "none",
               cursor: "pointer",
-              color: T.fg3,
+              color: T.fg2,
               padding: 4,
               borderRadius: 4,
               lineHeight: 1,
@@ -1334,10 +1262,10 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                   style={{
                     background: T.bg2,
                     border: `1px solid ${T.border}`,
-                    borderRadius: 6,
+                    borderRadius: 8,
                     color: T.fg,
-                    fontFamily: T.mono,
-                    fontSize: 12,
+                    fontFamily: T.sans,
+                    fontSize: 13,
                     padding: "4px 8px",
                     cursor: "pointer",
                   }}
@@ -1368,28 +1296,16 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                       window.ekOpenOnboarding?.();
                     }, 0);
                   }}
-                  style={{
-                    height: 22,
-                    padding: "0 10px",
-                    background: T.bg2,
-                    border: `1px solid ${T.border}`,
-                    borderRadius: 4,
-                    color: T.fg2,
-                    fontFamily: T.mono,
-                    fontSize: 10.5,
-                    cursor: "pointer",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = T.bg3)}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = T.bg2)}
+                  style={ekBtn("secondary", { small: true })}
                 >
                   Show tour again
                 </button>
               </Row>
               <div
                 style={{
-                  fontFamily: T.mono,
-                  fontSize: 10,
-                  color: T.fg3,
+                  fontFamily: T.sans,
+                  fontSize: 12,
+                  color: T.fg2,
                   lineHeight: 1.5,
                 }}
               >
@@ -1416,12 +1332,10 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               >
                 <div
                   style={{
-                    fontFamily: T.mono,
-                    fontSize: 10,
+                    fontFamily: T.sans,
+                    fontSize: 12,
                     fontWeight: 600,
                     color: T.red,
-                    textTransform: "uppercase",
-                    letterSpacing: 0.7,
                     marginBottom: 6,
                   }}
                 >
@@ -1436,27 +1350,16 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                         ? "No chats to clear"
                         : `Permanently delete all ${chatCount} chat${chatCount === 1 ? "" : "s"}`
                     }
-                    style={{
-                      height: 24,
-                      padding: "0 10px",
-                      background: T.bg2,
-                      border: `1px solid ${T.red}`,
-                      borderRadius: 4,
-                      color: chatCount === 0 ? T.fg3 : T.red,
-                      fontFamily: T.mono,
-                      fontSize: 10.5,
-                      cursor: !onClearAllChats || chatCount === 0 ? "not-allowed" : "pointer",
-                      opacity: !onClearAllChats || chatCount === 0 ? 0.6 : 1,
-                    }}
+                    style={ekBtn("danger", { small: true, disabled: chatCount === 0 })}
                   >
                     Clear all chats…
                   </button>
                 </Row>
                 <div
                   style={{
-                    fontFamily: T.mono,
-                    fontSize: 10,
-                    color: T.fg3,
+                    fontFamily: T.sans,
+                    fontSize: 12,
+                    color: T.fg2,
                     lineHeight: 1.5,
                     marginTop: 4,
                   }}
@@ -1486,9 +1389,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                 <div
                   style={{
                     flex: 1,
-                    fontFamily: T.mono,
-                    fontSize: 10,
-                    color: T.fg3,
+                    fontFamily: T.sans,
+                    fontSize: 12,
+                    color: T.fg2,
                     lineHeight: 1.5,
                   }}
                 >
@@ -1499,20 +1402,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                 <button
                   onClick={resetHotkeys}
                   title="Reset all shortcuts to their defaults"
-                  style={{
-                    flexShrink: 0,
-                    height: 22,
-                    padding: "0 10px",
-                    background: T.bg2,
-                    border: `1px solid ${T.border}`,
-                    borderRadius: 4,
-                    color: T.fg2,
-                    fontFamily: T.mono,
-                    fontSize: 10.5,
-                    cursor: "pointer",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = T.bg3)}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = T.bg2)}
+                  style={ekBtn("secondary", { small: true })}
                 >
                   Reset to defaults
                 </button>
@@ -1529,8 +1419,8 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                       style={{
                         marginTop: -2,
                         padding: "4px 0",
-                        fontFamily: T.mono,
-                        fontSize: 10.5,
+                        fontFamily: T.sans,
+                        fontSize: 12,
                         color: T.red,
                         textAlign: "right",
                       }}
@@ -1540,9 +1430,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                   )}
                   <div
                     style={{
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg3,
+                      fontFamily: T.sans,
+                      fontSize: 12,
+                      color: T.fg2,
                       lineHeight: 1.5,
                     }}
                   >
@@ -1562,8 +1452,8 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                       style={{
                         marginTop: -2,
                         padding: "4px 0",
-                        fontFamily: T.mono,
-                        fontSize: 10.5,
+                        fontFamily: T.sans,
+                        fontSize: 12,
                         color: T.red,
                         textAlign: "right",
                       }}
@@ -1573,9 +1463,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                   )}
                   <div
                     style={{
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg3,
+                      fontFamily: T.sans,
+                      fontSize: 12,
+                      color: T.fg2,
                       lineHeight: 1.5,
                     }}
                   >
@@ -1598,8 +1488,8 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                       style={{
                         marginTop: -2,
                         padding: "4px 0",
-                        fontFamily: T.mono,
-                        fontSize: 10.5,
+                        fontFamily: T.sans,
+                        fontSize: 12,
                         color: T.red,
                         textAlign: "right",
                       }}
@@ -1609,9 +1499,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                   )}
                   <div
                     style={{
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg3,
+                      fontFamily: T.sans,
+                      fontSize: 12,
+                      color: T.fg2,
                       lineHeight: 1.5,
                     }}
                   >
@@ -1636,8 +1526,8 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                       style={{
                         marginTop: -2,
                         padding: "4px 0",
-                        fontFamily: T.mono,
-                        fontSize: 10.5,
+                        fontFamily: T.sans,
+                        fontSize: 12,
                         color: T.red,
                         textAlign: "right",
                       }}
@@ -1647,9 +1537,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
                   )}
                   <div
                     style={{
-                      fontFamily: T.mono,
-                      fontSize: 10,
-                      color: T.fg3,
+                      fontFamily: T.sans,
+                      fontSize: 12,
+                      color: T.fg2,
                       lineHeight: 1.5,
                     }}
                   >
@@ -1687,9 +1577,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               <SectionLabel label="Prompts folder" />
               <div
                 style={{
-                  fontFamily: T.mono,
-                  fontSize: 10,
-                  color: T.fg3,
+                  fontFamily: T.sans,
+                  fontSize: 12,
+                  color: T.fg2,
                   lineHeight: 1.5,
                   marginBottom: 4,
                 }}
@@ -1702,9 +1592,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               <SectionLabel label="Memory file" />
               <div
                 style={{
-                  fontFamily: T.mono,
-                  fontSize: 10,
-                  color: T.fg3,
+                  fontFamily: T.sans,
+                  fontSize: 12,
+                  color: T.fg2,
                   lineHeight: 1.5,
                   marginBottom: 8,
                 }}
@@ -1719,9 +1609,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               <SectionLabel label="Attachments" />
               <div
                 style={{
-                  fontFamily: T.mono,
-                  fontSize: 10,
-                  color: T.fg3,
+                  fontFamily: T.sans,
+                  fontSize: 12,
+                  color: T.fg2,
                   lineHeight: 1.5,
                   marginBottom: 4,
                 }}
@@ -1748,9 +1638,9 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               <SectionLabel label="Voice input" />
               <div
                 style={{
-                  fontFamily: T.mono,
-                  fontSize: 10,
-                  color: T.fg3,
+                  fontFamily: T.sans,
+                  fontSize: 12,
+                  color: T.fg2,
                   lineHeight: 1.5,
                   marginBottom: 8,
                 }}
@@ -1827,7 +1717,7 @@ function EngineTuning({ info, onChanged }) {
 
   const rowStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 };
   const labelStyle = { fontFamily: T.sans, fontSize: 12.5, color: T.fg };
-  const hintStyle = { fontFamily: T.sans, fontSize: 10.5, color: T.fg3, lineHeight: 1.5, marginTop: 3 };
+  const hintStyle = { fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5, marginTop: 3 };
   const thinking = !!info.thinking;
 
   return (
@@ -1855,10 +1745,10 @@ function EngineTuning({ info, onChanged }) {
             style={{
               background: T.bg2,
               border: `1px solid ${T.border}`,
-              borderRadius: 6,
+              borderRadius: 8,
               color: T.fg,
-              fontFamily: T.mono,
-              fontSize: 12,
+              fontFamily: T.sans,
+              fontSize: 13,
               padding: "4px 8px",
               cursor: "pointer",
             }}
@@ -1891,26 +1781,28 @@ function EngineTuning({ info, onChanged }) {
             onClick={() => apply({ thinking: !thinking })}
             style={{
               position: "relative",
-              width: 36,
+              width: 34,
               height: 20,
-              borderRadius: 999,
-              background: thinking ? T.amber : T.bg4,
+              padding: 0,
+              borderRadius: 10,
+              background: thinking ? T.fg : T.bg4,
               border: "none",
               cursor: "pointer",
               flexShrink: 0,
-              transition: "background 0.15s",
+              transition: "background 0.12s ease",
             }}
           >
             <span
               style={{
                 position: "absolute",
-                top: 3,
-                left: thinking ? 19 : 3,
-                width: 14,
-                height: 14,
+                top: 2,
+                left: thinking ? 16 : 2,
+                width: 16,
+                height: 16,
                 borderRadius: "50%",
-                background: thinking ? T.bg0 : T.fg3,
-                transition: "left 0.15s",
+                background: T.bg0,
+                boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+                transition: "left 0.12s ease",
               }}
             />
           </button>
@@ -1924,7 +1816,7 @@ function EngineTuning({ info, onChanged }) {
       </div>
 
       {error && (
-        <div data-engine-tuning-error style={{ fontFamily: T.mono, fontSize: 11, color: T.red }}>
+        <div data-engine-tuning-error style={{ fontFamily: T.sans, fontSize: 12.5, color: T.red }}>
           {error}
         </div>
       )}
@@ -2014,8 +1906,9 @@ function BackendSettings() {
           flex: 1,
           textAlign: "left",
           background: selected ? T.bg2 : "transparent",
-          border: `1px solid ${selected ? "var(--ek-accent)" : T.border}`,
-          borderRadius: 8,
+          border: `1px solid ${selected ? T.fg : T.border}`,
+          boxShadow: selected ? `0 0 0 1px ${T.fg}` : "none",
+          borderRadius: 10,
           padding: "10px 12px",
           cursor: "pointer",
           display: "flex",
@@ -2026,23 +1919,14 @@ function BackendSettings() {
         <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.fg }}>
           {title}
         </span>
-        <span style={{ fontFamily: T.sans, fontSize: 11, color: T.fg2, lineHeight: 1.45 }}>
+        <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.45 }}>
           {blurb}
         </span>
       </button>
     );
   };
 
-  const inputStyle = {
-    width: "100%",
-    background: T.bg1,
-    color: T.fg,
-    border: `1px solid ${T.border}`,
-    borderRadius: 7,
-    padding: "7px 10px",
-    fontFamily: T.mono,
-    fontSize: 12,
-  };
+  const inputStyle = ekField();
 
   if (!loaded) return null;
 
@@ -2074,8 +1958,8 @@ function BackendSettings() {
           {engineInfo && (
             <div
               style={{
-                fontFamily: T.mono,
-                fontSize: 11,
+                fontFamily: T.sans,
+                fontSize: 12.5,
                 color: engineInfo.binaryOk ? T.green : T.red,
               }}
               data-backend-engine-binary
@@ -2091,9 +1975,9 @@ function BackendSettings() {
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
-                fontFamily: T.mono,
-                fontSize: 10.5,
-                color: T.fg3,
+                fontFamily: T.sans,
+                fontSize: 12,
+                color: T.fg2,
               }}
             >
               <span
@@ -2110,28 +1994,18 @@ function BackendSettings() {
               <button
                 data-backend-engine-reveal
                 onClick={() => invoke("engine_models_dir_reveal").catch(() => {})}
-                style={{
-                  background: T.bg2,
-                  color: T.fg,
-                  border: `1px solid ${T.border}`,
-                  borderRadius: 7,
-                  padding: "4px 10px",
-                  fontFamily: T.sans,
-                  fontSize: 11,
-                  cursor: "pointer",
-                  flexShrink: 0,
-                }}
+                style={ekBtn("secondary", { small: true })}
               >
                 Reveal models folder
               </button>
             </div>
           )}
           <EngineTuning info={engineInfo} onChanged={setEngineInfo} />
-          <div style={{ fontFamily: T.sans, fontSize: 10.5, color: T.fg3, lineHeight: 1.5 }}>
+          <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5 }}>
             One chat model and one embedding model stay loaded at a time;
             switching models swaps automatically and idle models unload
             after ~10 minutes. Vision works when a model has a matching
-            projector file (<span style={{ fontFamily: T.mono }}>name.mmproj.gguf</span>)
+            projector file (<span style={{ fontFamily: T.sans }}>name.mmproj.gguf</span>)
             next to it.
           </div>
         </div>
@@ -2166,16 +2040,7 @@ function BackendSettings() {
               data-backend-test
               onClick={test}
               disabled={testState === "testing"}
-              style={{
-                background: T.bg2,
-                color: T.fg,
-                border: `1px solid ${T.border}`,
-                borderRadius: 7,
-                padding: "6px 12px",
-                fontFamily: T.sans,
-                fontSize: 12,
-                cursor: "pointer",
-              }}
+              style={ekBtn("secondary", { disabled: testState === "testing" })}
             >
               {testState === "testing" ? "Testing…" : "Test connection"}
             </button>
@@ -2183,8 +2048,8 @@ function BackendSettings() {
               <span
                 data-backend-test-result
                 style={{
-                  fontFamily: T.mono,
-                  fontSize: 11,
+                  fontFamily: T.sans,
+                  fontSize: 12.5,
                   color: testState.ok ? T.green : T.red,
                 }}
               >
@@ -2194,7 +2059,7 @@ function BackendSettings() {
               </span>
             )}
           </div>
-          <div style={{ fontFamily: T.sans, fontSize: 10.5, color: T.fg3, lineHeight: 1.5 }}>
+          <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5 }}>
             The model picker lists whatever your server reports at /v1/models.
             In-app model downloads and deletes are managed by your server, so
             they're hidden on this backend — and capability badges use
@@ -2209,31 +2074,17 @@ function BackendSettings() {
           data-backend-save
           onClick={save}
           className="ek-btn-primary"
-          style={{
-            background: "var(--ek-accent)",
-            // T.bg0 (not --ek-accent-ink): the ink var resolves to the amber
-            // itself on light themes, which vanished against the amber fill.
-            // T.bg0 is the app-wide "text on an accent fill" convention and
-            // contrasts on both themes.
-            color: T.bg0,
-            border: "none",
-            borderRadius: 7,
-            padding: "7px 16px",
-            fontFamily: T.sans,
-            fontSize: 12,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
+          style={ekBtn("primary")}
         >
           Save
         </button>
         {saveState === "saved" && (
-          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.green }}>
+          <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.green }}>
             ✓ Applied — takes effect on the next message
           </span>
         )}
         {saveState && saveState !== "saved" && (
-          <span data-backend-save-error style={{ fontFamily: T.mono, fontSize: 11, color: T.red }}>
+          <span data-backend-save-error style={{ fontFamily: T.sans, fontSize: 12.5, color: T.red }}>
             {saveState}
           </span>
         )}

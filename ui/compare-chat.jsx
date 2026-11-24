@@ -152,29 +152,31 @@ function CompareChatPane({
           comparisons would render a list here. */}
       {userMessage && (
         <div
+          data-compare-question
           style={{
-            padding: "10px 24px 14px",
-            borderBottom: `1px solid ${T.border}`,
-            fontFamily: T.sans,
-            fontSize: 13.5,
-            color: T.fg,
-            lineHeight: 1.55,
-            background: T.bg1,
+            flexShrink: 0,
+            display: "flex",
+            justifyContent: "flex-end",
+            padding: "18px 28px 14px",
           }}
         >
           <div
             style={{
-              fontFamily: T.mono,
-              fontSize: 10,
-              color: T.fg3,
-              textTransform: "uppercase",
-              letterSpacing: 0.6,
-              marginBottom: 4,
+              maxWidth: "80%",
+              maxHeight: 132,
+              overflowY: "auto",
+              padding: "10px 14px",
+              borderRadius: "16px 16px 4px 16px",
+              background: T.bg2,
+              color: T.fg,
+              fontFamily: T.sans,
+              fontSize: 13.5,
+              lineHeight: 1.55,
+              whiteSpace: "pre-wrap",
             }}
           >
-            You
+            {userMessage.content}
           </div>
-          <div style={{ whiteSpace: "pre-wrap" }}>{userMessage.content}</div>
         </div>
       )}
 
@@ -182,7 +184,7 @@ function CompareChatPane({
           composer is enabled and the body shows a friendly hint. Once a
           message is sent, the grid replaces the hint with N columns. */}
       {!userMessage ? (
-        <CompareEmptyState models={models} />
+        <CompareEmptyState models={models} nameOfModel={nameOfModel} />
       ) : (
         <div
           data-compare-grid
@@ -191,8 +193,14 @@ function CompareChatPane({
             minHeight: 0,
             display: "grid",
             gridTemplateColumns,
+            // The 1px gap over a border-coloured ground draws the line
+            // between columns.
             background: T.border,
             gap: 1,
+            margin: "0 28px 14px",
+            border: `1px solid ${T.border}`,
+            borderRadius: 14,
+            overflow: "hidden",
           }}
         >
           {columns.map(({ model, message }) => (
@@ -268,8 +276,8 @@ function CompareMissingBanner({ missing }) {
       </div>
       <div
         style={{
-          fontFamily: T.mono,
-          fontSize: 11,
+          fontFamily: T.sans,
+          fontSize: 12.5,
           color: T.fg2,
           display: "flex",
           flexWrap: "wrap",
@@ -292,7 +300,7 @@ function CompareMissingBanner({ missing }) {
         ))}
       </div>
       <div
-        style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}
+        style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3 }}
       >
         Compare mode needs every selected model. Run{" "}
         <span style={{ color: T.amber }}>{cmd}</span> to restore — or close
@@ -306,15 +314,29 @@ function CompareHeader({ chat, modelCount, isStreaming, onStopAll, onCancel }) {
   return (
     <div
       style={{
-        padding: "10px 20px",
+        padding: "16px 20px 12px",
         borderBottom: `1px solid ${T.border}`,
         display: "flex",
         alignItems: "center",
         gap: 10,
         flexShrink: 0,
-        background: T.bg1,
+        background: T.bg0,
       }}
     >
+      <span
+        style={{
+          fontFamily: T.sans,
+          fontSize: 15,
+          color: T.fg,
+          fontWeight: 600,
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {chat?.title || "New comparison"}
+      </span>
       <span
         data-compare-badge
         style={{
@@ -323,45 +345,23 @@ function CompareHeader({ chat, modelCount, isStreaming, onStopAll, onCancel }) {
           gap: 6,
           fontFamily: T.sans,
           fontSize: 12,
-          color: T.fg2,
+          color: T.fg1,
           padding: "2px 9px",
           border: `1px solid ${T.border}`,
           borderRadius: 999,
           whiteSpace: "nowrap",
+          flexShrink: 0,
         }}
       >
         <I.Columns size={12} />
         Comparing {modelCount} models
       </span>
-      <span
-        style={{
-          fontFamily: T.sans,
-          fontSize: 13,
-          color: T.fg,
-          fontWeight: 500,
-          flex: 1,
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {chat?.title || "New comparison chat"}
-      </span>
+      <span style={{ flex: 1 }} />
       {isStreaming && (
         <button
           onClick={onStopAll}
           data-stop-all
-          style={{
-            padding: "4px 10px",
-            background: "transparent",
-            border: `1px solid ${T.border}`,
-            borderRadius: 4,
-            color: T.fg2,
-            fontFamily: T.mono,
-            fontSize: 11,
-            cursor: "pointer",
-          }}
+          style={ekBtn("secondary", { small: true })}
         >
           Stop all
         </button>
@@ -390,7 +390,7 @@ function CompareHeader({ chat, modelCount, isStreaming, onStopAll, onCancel }) {
   );
 }
 
-function CompareEmptyState({ models }) {
+function CompareEmptyState({ models, nameOfModel }) {
   return (
     <div
       data-compare-empty
@@ -408,8 +408,8 @@ function CompareEmptyState({ models }) {
         style={{
           maxWidth: 480,
           textAlign: "center",
-          fontFamily: T.mono,
-          fontSize: 12.5,
+          fontFamily: T.sans,
+          fontSize: 13,
           color: T.fg2,
           lineHeight: 1.6,
         }}
@@ -435,11 +435,11 @@ function CompareEmptyState({ models }) {
                 gap: 5,
                 padding: "3px 8px",
                 margin: 2,
-                borderRadius: 4,
+                borderRadius: 8,
                 background: T.bg2,
                 border: `1px solid ${T.border}`,
-                fontFamily: T.mono,
-                fontSize: 11,
+                fontFamily: T.sans,
+                fontSize: 12.5,
                 color: T.fg,
               }}
             >
@@ -449,13 +449,13 @@ function CompareEmptyState({ models }) {
                 }
                 size={6}
               />
-              {m}
+              {nameOfModel ? nameOfModel(m).name : m}
             </span>
           ))}
         </div>
         <div style={{ color: T.fg3 }}>
-          Type a message below — it goes to all {models.length} models in
-          parallel. Pick a winner to continue the chat with that model.
+          Your question goes to {models.length === 2 ? "both" : `all ${models.length}`} models.
+          Then choose the answer you want to carry on with.
         </div>
       </div>
     </div>
@@ -509,13 +509,13 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null, label
     >
       <div
         style={{
-          padding: "8px 12px",
+          margin: "0 18px",
+          padding: "12px 0 9px",
           borderBottom: `1px solid ${T.border}`,
           display: "flex",
           alignItems: "center",
           gap: 8,
           flexShrink: 0,
-          background: T.bg1,
         }}
       >
         <ModelDot
@@ -558,10 +558,10 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null, label
               padding: "3px 8px",
               background: "transparent",
               border: `1px solid ${T.border}`,
-              borderRadius: 4,
+              borderRadius: 8,
               color: T.fg2,
-              fontFamily: T.mono,
-              fontSize: 10.5,
+              fontFamily: T.sans,
+              fontSize: 12,
               cursor: "pointer",
             }}
           >
@@ -590,7 +590,7 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null, label
           // really show in normal flow (CompareEmptyState catches the
           // pre-send case) but defensively guard.
           <div
-            style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}
+            style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3 }}
           >
             Waiting…
           </div>
@@ -608,7 +608,7 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null, label
                 live={!!message.reasoningLive}
               />
               {!message.reasoningLive && (
-                <div style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}>
+                <div style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3 }}>
                   <span className="typing-dot">●</span>{" "}
                   <span className="typing-dot">●</span>{" "}
                   <span className="typing-dot">●</span>
@@ -617,7 +617,7 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null, label
             </>
           ) : (
             <div
-              style={{ fontFamily: T.mono, fontSize: 11, color: T.fg3 }}
+              style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3 }}
             >
               <span className="typing-dot">●</span>{" "}
               <span className="typing-dot">●</span>{" "}
@@ -658,8 +658,8 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null, label
               <div
                 style={{
                   marginTop: 6,
-                  fontFamily: T.mono,
-                  fontSize: 10.5,
+                  fontFamily: T.sans,
+                  fontSize: 12,
                   color: T.fg3,
                   fontStyle: "italic",
                 }}
@@ -676,17 +676,15 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null, label
       {!streaming && message && (
         <div
           style={{
-            padding: "8px 12px",
-            borderTop: `1px solid ${T.border}`,
+            padding: "8px 18px 12px",
             display: "flex",
             alignItems: "center",
             gap: 8,
             flexShrink: 0,
-            background: T.bg1,
           }}
         >
           {message.tokens && showDetails ? (
-            <span style={{ fontFamily: T.mono, fontSize: 10, flex: 1 }}>
+            <span style={{ fontFamily: T.sans, fontSize: 12, flex: 1 }}>
               <TokenFooter tokens={message.tokens} engineCtx={engineCtx} />
             </span>
           ) : (
@@ -697,18 +695,9 @@ function CompareColumn({ model, message, onStop, onKeep, engineCtx = null, label
             disabled={!canKeep}
             data-keep
             title={canKeep ? "Keep this response" : "No content to keep"}
-            style={{
-              padding: "5px 14px",
-              background: canKeep ? T.bg4 : T.bg2,
-              border: `1px solid ${canKeep ? T.borderStrong : T.border}`,
-              borderRadius: 4,
-              color: canKeep ? T.fg : T.fg3,
-              fontFamily: T.mono,
-              fontSize: 11,
-              cursor: canKeep ? "pointer" : "not-allowed",
-            }}
+            style={ekBtn("secondary", { small: true, disabled: !canKeep })}
           >
-            ✓ Keep this
+            Continue with this answer
           </button>
         </div>
       )}
@@ -756,74 +745,60 @@ function CompareComposer({
 
   // Hint states: pre-send (live), during-stream (locked), post-send-
   // pre-pick (locked), and missing-models (locked but different reason).
+  const locked = !!disabled;
+  const lockedForModels = disabledReason === "missing-models";
+  // The one line under the box: why it is locked, or what a comparison
+  // does not do. (A comparison sends the question and any attached
+  // prompts — not the workspace's documents or notes.)
   let hint;
-  if (isStreaming) hint = "Streaming…";
-  else if (disabledReason === "missing-models")
-    hint = "Composer locked — install the missing models above";
-  else if (disabled) hint = "Pick a winner above to continue the chat";
-  else hint = `Send to all ${modelCount} models — ${MOD_GLYPH}${ENTER_GLYPH}`;
+  if (isStreaming) hint = "The models are answering…";
+  else if (lockedForModels) hint = "Install the missing models above to ask.";
+  else if (locked) hint = "Pick a winner above to continue the chat with that model.";
+  else hint = "A comparison does not read this workspace's documents.";
+
+  const canSend = !locked && !isStreaming && !!text.trim();
 
   return (
     <div
       data-compare-composer
       style={{
-        padding: "10px 16px",
-        borderTop: `1px solid ${T.border}`,
-        background: T.bg1,
         flexShrink: 0,
+        width: "100%",
+        maxWidth: 816,
+        boxSizing: "border-box",
+        margin: "0 auto",
+        padding: "0 28px 8px",
         display: "flex",
         flexDirection: "column",
-        gap: 6,
+        gap: 7,
       }}
     >
-      {/* Attached-prompt chip strip — mirrors the regular Composer's
-          attached-prompts row so the same affordance carries into
-          compare-mode. Hidden when nothing is attached so the composer
-          stays compact for unattached sends. */}
-      {attachedPrompts.length > 0 && !disabled && (
-        <div
-          data-compare-prompt-chips
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 5,
-          }}
-        >
-          {attachedPrompts.map((p) => {
-            const fav = p.favorite ? FAVORITE_COLOR_MAP[p.favorite] : null;
-            return (
-              <span
-                key={p.id}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                  padding: "2px 6px 2px 8px",
-                  background: T.bg2,
-                  border: `1px solid ${T.border}`,
-                  borderRadius: 4,
-                  fontFamily: T.mono,
-                  fontSize: 11,
-                  color: T.fg,
-                }}
-              >
-                <span
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: 99,
-                    background: fav?.color || T.fg3,
-                    flexShrink: 0,
-                  }}
-                />
+      <div
+        style={{
+          border: `1px solid ${T.border}`,
+          borderRadius: 18,
+          background: T.isLight ? T.bg0 : T.bg1,
+          boxShadow: T.isLight ? "0 2px 10px rgba(23,25,30,0.06)" : "none",
+          padding: "12px 12px 10px 16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          opacity: locked ? 0.6 : 1,
+        }}
+      >
+        {/* Attached prompts ride along to every column. */}
+        {attachedPrompts.length > 0 && !locked && (
+          <div data-compare-prompt-chips style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {attachedPrompts.map((p) => (
+              <span key={p.id} style={ekChip("plain")}>
                 {p.name}
                 {onDetachPrompt && (
                   <button
                     onClick={() => onDetachPrompt(p.id)}
                     aria-label={`Detach ${p.name}`}
-                    title="Detach prompt"
+                    title="Remove"
                     style={{
-                      marginLeft: 2,
+                      marginLeft: 1,
                       padding: 0,
                       width: 14,
                       height: 14,
@@ -832,103 +807,100 @@ function CompareComposer({
                       justifyContent: "center",
                       background: "transparent",
                       border: "none",
-                      color: T.fg3,
+                      color: T.fg2,
                       cursor: "pointer",
                     }}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.color = T.fg)
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.color = T.fg3)
-                    }
                   >
                     <I.X size={9} />
                   </button>
                 )}
               </span>
-            );
-          })}
+            ))}
+          </div>
+        )}
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            disabled={locked || isStreaming}
+            placeholder={
+              locked
+                ? "Choose an answer above"
+                : modelCount === 2
+                  ? "Ask both models"
+                  : modelCount > 2
+                    ? `Ask all ${modelCount} models`
+                    : "Ask the models"
+            }
+            rows={2}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              resize: "none",
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              padding: "2px 0",
+              color: T.fg,
+              fontFamily: T.sans,
+              fontSize: 14.5,
+              lineHeight: 1.5,
+            }}
+          />
+          {isStreaming ? (
+            <button
+              onClick={onStop}
+              data-composer-stop
+              aria-label="Stop"
+              title="Stop all"
+              style={{
+                width: 32,
+                height: 32,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: T.fg,
+                border: "none",
+                borderRadius: "50%",
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: T.bg0 }} />
+            </button>
+          ) : (
+            <button
+              onClick={submit}
+              disabled={!canSend}
+              data-compare-send
+              aria-label="Send"
+              title={`Send (${ENTER_GLYPH})`}
+              style={{
+                width: 32,
+                height: 32,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: canSend ? T.fg : T.bg3,
+                border: "none",
+                borderRadius: "50%",
+                color: canSend ? T.bg0 : T.fg3,
+                cursor: canSend ? "pointer" : "default",
+                flexShrink: 0,
+              }}
+            >
+              <I.ArrowUp size={15} />
+            </button>
+          )}
         </div>
-      )}
+      </div>
       <div
         data-compare-hint
-        style={{
-          fontFamily: T.sans,
-          fontSize: 12,
-          color: T.fg2,
-        }}
+        style={ekHint({ textAlign: "center", color: locked && !lockedForModels ? T.fg1 : T.fg2 })}
       >
         {hint}
-      </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKeyDown}
-          disabled={disabled || isStreaming}
-          placeholder={
-            disabled
-              ? "Composer locked — pick a column above"
-              : modelCount === 2
-                ? "Ask both models"
-                : modelCount > 2
-                  ? `Ask all ${modelCount} models`
-                  : "Ask the models"
-          }
-          rows={2}
-          style={{
-            flex: 1,
-            resize: "none",
-            background: T.bg2,
-            border: `1px solid ${T.border}`,
-            borderRadius: 5,
-            padding: "8px 10px",
-            color: T.fg,
-            fontFamily: T.sans,
-            fontSize: 13,
-            lineHeight: 1.5,
-            opacity: disabled || isStreaming ? 0.6 : 1,
-          }}
-        />
-        {isStreaming ? (
-          <button
-            onClick={onStop}
-            data-composer-stop
-            style={{
-              padding: "8px 14px",
-              background: T.bg4,
-              border: `1px solid ${T.borderStrong}`,
-              borderRadius: 5,
-              color: T.fg,
-              fontFamily: T.mono,
-              fontSize: 11.5,
-              cursor: "pointer",
-            }}
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            onClick={submit}
-            disabled={disabled || !text.trim()}
-            data-compare-send
-            style={{
-              padding: "8px 14px",
-              background: disabled || !text.trim() ? T.bg2 : T.bg4,
-              border: `1px solid ${
-                disabled || !text.trim() ? T.border : T.borderStrong
-              }`,
-              borderRadius: 5,
-              color: disabled || !text.trim() ? T.fg3 : T.fg,
-              fontFamily: T.mono,
-              fontSize: 11.5,
-              cursor: disabled || !text.trim() ? "not-allowed" : "pointer",
-            }}
-          >
-            Send
-          </button>
-        )}
       </div>
     </div>
   );

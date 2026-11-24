@@ -58,6 +58,145 @@ function panelGrad() {
 }
 window.panelGrad = panelGrad;
 
+// ─── Shared control styles ──────────────────────────────────
+// One look for every button, field, heading, hint and chip in the app.
+// Functions, not constants: T changes with the look (light / dark), so a
+// style has to be built at render time — a module-level object would
+// freeze the dark defaults.
+//
+//   ekBtn(kind, opts)   kind: "secondary" (outlined, the default),
+//                       "primary" (solid — one per dialog), "quiet" (no
+//                       outline), "danger" (red words, outlined).
+//                       opts: { disabled, small }
+//   ekField(extra)      a text input, select or textarea
+//   ekHeading(extra)    the title over a group of settings
+//   ekLabel(extra)      the name of one setting
+//   ekHint(extra)       the sentence under a setting
+//   ekKbd(extra)        a key or key combination
+//   ekChip(tone)        a small pill. tone: "plain" | "accent"
+function ekBtn(kind, opts) {
+  const o = opts || {};
+  const st = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    height: o.small ? 26 : 30,
+    padding: o.small ? "0 10px" : "0 12px",
+    boxSizing: "border-box",
+    borderRadius: 8,
+    border: `1px solid ${T.isLight ? T.border : T.borderStrong}`,
+    background: T.isLight ? T.bg0 : T.bg2,
+    color: T.fg,
+    fontFamily: T.sans,
+    fontSize: o.small ? 12 : 13,
+    fontWeight: 500,
+    lineHeight: 1,
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+    cursor: o.disabled ? "default" : "pointer",
+    opacity: o.disabled ? 0.5 : 1,
+  };
+  if (kind === "primary") {
+    st.background = o.disabled ? T.bg3 : T.fg;
+    st.border = `1px solid ${o.disabled ? T.border : T.fg}`;
+    st.color = o.disabled ? T.fg2 : T.bg0;
+    st.fontWeight = 600;
+    st.opacity = 1;
+  } else if (kind === "quiet") {
+    st.background = "transparent";
+    st.border = "1px solid transparent";
+    st.color = T.fg1;
+    st.fontWeight = 400;
+  } else if (kind === "danger") {
+    st.background = "transparent";
+    st.color = T.red;
+  }
+  return st;
+}
+
+function ekField(extra) {
+  return Object.assign(
+    {
+      width: "100%",
+      boxSizing: "border-box",
+      padding: "7px 10px",
+      background: T.bg0,
+      border: `1px solid ${T.isLight ? T.border : T.borderStrong}`,
+      borderRadius: 8,
+      color: T.fg,
+      fontFamily: T.sans,
+      fontSize: 13,
+      lineHeight: 1.4,
+      outline: "none",
+    },
+    extra || {},
+  );
+}
+
+function ekHeading(extra) {
+  return Object.assign(
+    { fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.fg },
+    extra || {},
+  );
+}
+
+function ekLabel(extra) {
+  return Object.assign({ fontFamily: T.sans, fontSize: 13, color: T.fg }, extra || {});
+}
+
+function ekHint(extra) {
+  return Object.assign(
+    { fontFamily: T.sans, fontSize: 12, lineHeight: 1.5, color: T.fg2 },
+    extra || {},
+  );
+}
+
+function ekKbd(extra) {
+  return Object.assign(
+    {
+      display: "inline-block",
+      fontFamily: T.sans,
+      fontSize: 11.5,
+      lineHeight: 1.5,
+      color: T.fg1,
+      background: T.bg0,
+      border: `1px solid ${T.isLight ? T.border : T.borderStrong}`,
+      borderRadius: 5,
+      padding: "0 6px",
+      whiteSpace: "nowrap",
+    },
+    extra || {},
+  );
+}
+
+function ekChip(tone) {
+  const accent = tone === "accent";
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    height: 24,
+    padding: "0 9px",
+    boxSizing: "border-box",
+    borderRadius: 999,
+    border: `1px solid ${accent ? "transparent" : T.border}`,
+    background: accent ? `${T.amber}22` : T.bg2,
+    color: accent ? T.amber : T.fg1,
+    fontFamily: T.sans,
+    fontSize: 12,
+    fontWeight: 500,
+    whiteSpace: "nowrap",
+  };
+}
+window.ekBtn = ekBtn;
+window.ekField = ekField;
+window.ekHeading = ekHeading;
+window.ekLabel = ekLabel;
+window.ekHint = ekHint;
+window.ekKbd = ekKbd;
+window.ekChip = ekChip;
+
 // ─── Space color palette ────────────────────────────────────
 //
 // Maps `spaces.color` palette keys (canonical strings stored in the DB)

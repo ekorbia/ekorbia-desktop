@@ -1,9 +1,10 @@
 // The quick-question panel (ui/overlay.jsx QuickQuery): what its top two
-// rows show.
+// rows show, which model answers, and which look it wears.
 //
-//   • Models are named plainly (Fast / Balanced / Most capable), by the
-//     same rule as the main window, and the model that reads documents for
-//     search is not offered.
+//   • It answers with the app's default model and has no chooser of its
+//     own — one place to choose a model, as in the main window.
+//   • It follows the app's look (light or dark). Its window never mounts
+//     the app, so it reads the saved choice itself.
 //   • The microphone is the last thing in the input row in every state.
 //     It used to sit left of a key hint that came and went, so it jumped
 //     sideways when a list opened or an answer arrived.
@@ -11,24 +12,16 @@
 
 const { test, expect } = require("@playwright/test");
 
-test.beforeEach(async ({ page }) => {
+// `before` runs in the page ahead of the mount (set saved choices there).
+async function mountPanel(page, before) {
   await page.goto("/tests/e2e/fixtures/playwright.html");
   await page.waitForFunction(() => window.__JSX_READY === true);
+  if (before) await page.evaluate(before);
   await page.evaluate(() => {
-    try { localStorage.setItem("ekorbia.overlay.model", "gemma4-12b"); } catch (_) {}
     const R = window.__INVOKE_RESPONSES;
-    R.system_profile = () => ({ totalRamBytes: 36 * 1024 * 1024 * 1024, platform: "macos", arch: "aarch64" });
-    R.engine_catalog = () => ({
-      version: 1,
-      models: [
-        { id: "gemma4-e4b", label: "Gemma 4 E4B", purpose: "chat", minRamGb: 8, totalBytes: 6.1e9, suggest: true, caps: {} },
-        { id: "gemma4-12b", label: "Gemma 4 12B", purpose: "chat", minRamGb: 16, totalBytes: 7.2e9, suggest: true, recommended: true, caps: {} },
-        { id: "gemma4-26b-a4b", label: "Gemma 4 26B (A4B)", purpose: "chat", minRamGb: 32, totalBytes: 15.4e9, suggest: true, caps: {} },
-        { id: "nomic-embed-text", label: "Nomic Embed", purpose: "embed", minRamGb: 8, totalBytes: 3e8, suggest: true, caps: {} },
-      ],
-    });
+    if (!window.__MODELS) window.__MODELS = ["gemma4-e4b", "gemma4-12b", "gemma4-26b-a4b", "nomic-embed-text"];
     R.llm_list_models = () => ({
-      models: ["gemma4-e4b", "gemma4-12b", "gemma4-26b-a4b", "nomic-embed-text", "my-own-model"].map((name) => ({ name, model: name, size: 5e9 })),
+      models: window.__MODELS.map((name) => ({ name, model: name, size: 5e9 })),
     });
     R.llm_chat_stream = (args) => {
       args.onChunk.__deliver({ type: "delta", text: "Ninety days." });
@@ -39,39 +32,89 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(
     () => (window.__EVENT_LISTENERS["selection:captured"] || []).length > 0,
   );
+}
+
+const sentModels = (page) =>
+  page.evaluate(() => window.__INVOKES.filter((i) => i.cmd === "llm_chat_stream").map((i) => i.args.body.model));
+
+async function ask(page, text) {
+  await page.locator("[data-quick-panel] input").first().fill(text);
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Ninety days.")).toBeVisible();
+}
+
+test("it answers with the app's default model and offers no chooser", async ({ page }) => {
+  await mountPanel(page, () => {
+    localStorage.setItem("ekorbia.main.model", "gemma4-26b-a4b");
+    // A choice an older version kept for this panel alone is ignored.
+    localStorage.setItem("ekorbia.overlay.model", "gemma4-e4b");
+  });
+  const panel = page.locator("[data-quick-panel]");
+  await expect(panel).not.toContainText("gemma4");
+  await expect(panel.locator("[data-overlay-model]")).toHaveCount(0);
+  await ask(page, "What is the notice period?");
+  expect(await sentModels(page)).toEqual(["gemma4-26b-a4b"]);
 });
 
-test("the model is named plainly, with the catalog's name behind it", async ({ page }) => {
-  const chip = page.locator("[data-overlay-model]");
-  await expect(chip.locator("[data-overlay-model-name]")).toHaveText("Balanced");
-  await expect(chip).toHaveAttribute("title", "Gemma 4 12B");
+test("a new default applies the next time the panel comes forward", async ({ page }) => {
+  await mountPanel(page, () => localStorage.setItem("ekorbia.main.model", "gemma4-12b"));
+  await page.evaluate(() => {
+    localStorage.setItem("ekorbia.main.model", "gemma4-e4b");
+    window.dispatchEvent(new Event("focus"));
+  });
+  await ask(page, "What is the notice period?");
+  expect(await sentModels(page)).toEqual(["gemma4-e4b"]);
 });
 
-test("the list names models plainly and leaves out the search model", async ({ page }) => {
-  await page.locator("[data-overlay-model]").click();
-  const rows = page.locator("[data-overlay-model-row]");
-  await expect(rows).toHaveCount(4);
-  await expect(page.locator('[data-overlay-model-row="gemma4-e4b"]')).toContainText("Fast");
-  await expect(page.locator('[data-overlay-model-row="gemma4-e4b"]')).toContainText("Gemma 4 E4B");
-  await expect(page.locator('[data-overlay-model-row="gemma4-26b-a4b"]')).toContainText("Most capable");
-  // A model the catalog does not know keeps its own name.
-  await expect(page.locator('[data-overlay-model-row="my-own-model"]')).toContainText("my-own-model");
-  await expect(page.locator('[data-overlay-model-row="nomic-embed-text"]')).toHaveCount(0);
+test("a default that is not installed falls back to an installed chat model", async ({ page }) => {
+  await mountPanel(page, () => {
+    localStorage.setItem("ekorbia.main.model", "removed-model");
+    // The search model is listed first; it must not be the fallback.
+    window.__MODELS = ["nomic-embed-text", "gemma4-12b"];
+  });
+  await ask(page, "What is the notice period?");
+  expect(await sentModels(page)).toEqual(["gemma4-12b"]);
+});
 
-  await page.locator('[data-overlay-model-row="gemma4-26b-a4b"]').click();
-  await expect(page.locator("[data-overlay-model-name]")).toHaveText("Most capable");
-  expect(await page.evaluate(() => localStorage.getItem("ekorbia.overlay.model"))).toBe("gemma4-26b-a4b");
+test("it wears the app's look: light when the app is light, dark when it is dark", async ({ page }) => {
+  const ink = () =>
+    page.locator("[data-quick-panel] input").first().evaluate((el) => getComputedStyle(el).color);
+
+  await mountPanel(page, () => {
+    window.THEMES = { one_dark: { label: "Midnight" }, one_light: { label: "Daylight", light: true } };
+    localStorage.setItem("ekorbia.tweaks", JSON.stringify({ theme: "one_light" }));
+  });
+  const panel = page.locator("[data-quick-panel]");
+  await expect(panel).toHaveAttribute("data-quick-look", "light");
+  // Dark words on a light ground.
+  expect(await ink()).toBe("rgb(36, 38, 43)");
+
+  // The look is changed in the app; the panel picks it up when it next
+  // comes forward.
+  await page.evaluate(() => {
+    localStorage.setItem("ekorbia.tweaks", JSON.stringify({ theme: "one_dark" }));
+    window.dispatchEvent(new Event("focus"));
+  });
+  await expect(panel).toHaveAttribute("data-quick-look", "dark");
+  expect(await ink()).toBe("rgb(227, 230, 236)");
+});
+
+test("with no saved look it is dark, like the app", async ({ page }) => {
+  await mountPanel(page, () => localStorage.removeItem("ekorbia.tweaks"));
+  await expect(page.locator("[data-quick-panel]")).toHaveAttribute("data-quick-look", "dark");
 });
 
 test("the key hint is in the bar below the input, in words", async ({ page }) => {
+  await mountPanel(page);
   const hint = page.locator("[data-overlay-hint]");
   await expect(hint).toHaveText("Return to ask · Esc to close");
-  // It goes away while a list is open.
-  await page.locator("[data-overlay-model]").click();
+  // It goes away while the prompt list is open.
+  await page.getByRole("button", { name: "+ prompt" }).click();
   await expect(hint).toHaveCount(0);
 });
 
 test("the microphone stays at the right edge of the input row in every state", async ({ page }) => {
+  await mountPanel(page);
   const mic = page.locator("[data-voice-mic]");
   // Dictation is macOS only; elsewhere there is no button to place.
   if ((await mic.count()) === 0) return;
@@ -79,21 +122,16 @@ test("the microphone stays at the right edge of the input row in every state", a
     const b = await mic.boundingBox();
     return Math.round(b.x + b.width);
   };
-  const lastInRow = () =>
-    mic.evaluate((el) => el.parentElement.lastElementChild === el || el.nextElementSibling === null);
-
   const idle = await rightEdge();
-  expect(await lastInRow()).toBe(true);
+  expect(await mic.evaluate((el) => el.nextElementSibling === null)).toBe(true);
 
   // A list open.
-  await page.locator("[data-overlay-model]").click();
-  await expect(page.locator("[data-overlay-model-row]").first()).toBeVisible();
+  await page.getByRole("button", { name: "+ prompt" }).click();
+  await expect(page.getByPlaceholder("Search prompts…")).toBeVisible();
   expect(await rightEdge()).toBe(idle);
-  await page.locator("[data-overlay-model]").click();
+  await page.keyboard.press("Escape");
 
   // An answer on screen.
-  await page.locator("input").first().fill("What is the notice period?");
-  await page.keyboard.press("Enter");
-  await expect(page.getByText("Ninety days.")).toBeVisible();
+  await ask(page, "What is the notice period?");
   expect(await rightEdge()).toBe(idle);
 });

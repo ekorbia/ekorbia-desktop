@@ -334,18 +334,16 @@ function VoiceModelPanel({ compact }) {
                 <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500 }}>
                   {m.name}
                 </span>
-                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>{m.approx}</span>
+                <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3 }}>{m.approx}</span>
                 {m.recommended && (
                   <span
                     style={{
-                      fontFamily: T.mono,
-                      fontSize: 9,
+                      fontFamily: T.sans,
+                      fontSize: 12,
                       padding: "1px 5px",
-                      borderRadius: 3,
+                      borderRadius: 8,
                       background: T.green + "26",
                       color: T.green,
-                      textTransform: "uppercase",
-                      letterSpacing: 0.4,
                     }}
                   >
                     recommended
@@ -354,21 +352,19 @@ function VoiceModelPanel({ compact }) {
                 {m.multilingual && (
                   <span
                     style={{
-                      fontFamily: T.mono,
-                      fontSize: 9,
+                      fontFamily: T.sans,
+                      fontSize: 12,
                       padding: "1px 5px",
-                      borderRadius: 3,
+                      borderRadius: 8,
                       background: "rgba(122,162,247,0.15)",
                       color: T.blue || "#7aa2f7",
-                      textTransform: "uppercase",
-                      letterSpacing: 0.4,
                     }}
                   >
                     multilingual
                   </span>
                 )}
                 {isDefault && isInstalled && (
-                  <span style={{ fontFamily: T.mono, fontSize: 9, color: T.fg3 }}>· default</span>
+                  <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3 }}>· default</span>
                 )}
               </div>
               <div style={{ fontFamily: T.sans, fontSize: 11.5, color: T.fg2, marginTop: 1 }}>
@@ -401,7 +397,7 @@ function VoiceModelPanel({ compact }) {
             {/* Action column */}
             {dl ? (
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg2 }}>
+                <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2 }}>
                   {dl.pct !== null ? `${dl.pct}%` : "…"}
                 </span>
                 <button onClick={() => ekVoiceCancelDownload(m.name)} style={ghostBtn()}>
@@ -426,18 +422,7 @@ function VoiceModelPanel({ compact }) {
                   // First download becomes the default if nothing is set yet.
                   if (!installedSet.size) pickDefault(m.name);
                 }}
-                style={{
-                  padding: "4px 12px",
-                  borderRadius: 5,
-                  border: "none",
-                  background: T.amber,
-                  boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
-                  color: T.bg0,
-                  fontFamily: T.sans,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
+                style={ekBtn("secondary", { small: true })}
               >
                 Download
               </button>
@@ -559,13 +544,13 @@ function VoiceModelPanel({ compact }) {
           Translate to English
         </label>
       </div>
-      <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.fg3, padding: "2px 8px 0" }}>
+      <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, padding: "2px 8px 0" }}>
         Language &amp; translation apply to multilingual models; English-only models
         always transcribe English.
       </div>
 
       {!compact && (
-        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3, padding: "8px 2px 0", lineHeight: 1.5 }}>
+        <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, padding: "8px 2px 0", lineHeight: 1.5 }}>
           Models download once from Hugging Face, then run fully offline. Audio is
           transcribed on your machine and never uploaded.
         </div>
@@ -575,16 +560,7 @@ function VoiceModelPanel({ compact }) {
 }
 
 function ghostBtn() {
-  return {
-    padding: "3px 10px",
-    borderRadius: 4,
-    border: `1px solid ${T.border}`,
-    background: "transparent",
-    color: T.fg2,
-    fontFamily: T.sans,
-    fontSize: 11.5,
-    cursor: "pointer",
-  };
+  return ekBtn("secondary", { small: true });
 }
 
 // ── Setup modal (first-use, when no model is installed) ──────────────────────
@@ -637,7 +613,7 @@ function VoiceSetupModal({ open, onClose }) {
           <div style={{ fontFamily: T.serif, fontSize: 17, color: T.fg, flex: 1 }}>
             Set up voice input
           </div>
-          <button onClick={() => onClose?.()} aria-label="Close" style={{ border: "none", background: "transparent", color: T.fg3, fontSize: 16, cursor: "pointer", padding: 2 }}>
+          <button onClick={() => onClose?.()} aria-label="Close" style={{ border: "none", background: "transparent", color: T.fg2, fontSize: 16, cursor: "pointer", padding: 2 }}>
             ✕
           </button>
         </div>
@@ -655,7 +631,7 @@ function VoiceSetupModal({ open, onClose }) {
 function VoiceSettings() {
   return (
     <>
-      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3, textTransform: "uppercase", letterSpacing: 0.6, padding: "2px 2px 8px" }}>
+      <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, padding: "2px 2px 8px" }}>
         Speech models
       </div>
       <VoiceModelPanel />
@@ -863,11 +839,11 @@ function VoiceMicButton({ onInsert, disabled, onRecordingChange, onNeedsSetup, s
           gap: 5,
           background: recording ? "rgba(191,131,131,0.18)" : "transparent",
           border: "none",
-          borderRadius: 5,
+          borderRadius: 8,
           cursor: disabled || busy ? "default" : "pointer",
           color: recording ? T.red : T.fg2,
-          fontFamily: T.mono,
-          fontSize: 11,
+          fontFamily: T.sans,
+          fontSize: 12.5,
           opacity: disabled ? 0.5 : 1,
         }}
       >

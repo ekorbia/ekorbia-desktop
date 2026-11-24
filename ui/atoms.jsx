@@ -4,6 +4,51 @@
 
 // ─── Tiny atoms ─────────────────────────────────────────────
 'use strict';
+// The one on/off switch. `label` names it for assistive tech (the visible
+// words sit beside it); `testId` becomes data-toggle. No rest props here:
+// Babel's helper for them is a top-level name that a second file cannot
+// declare again (see CLAUDE.md).
+function EkToggle({ value, onChange, label, testId, disabled }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={!!value}
+      aria-label={label}
+      data-toggle={testId}
+      disabled={disabled}
+      onClick={() => !disabled && onChange && onChange(!value)}
+      style={{
+        position: "relative",
+        width: 34,
+        height: 20,
+        padding: 0,
+        borderRadius: 10,
+        background: value ? T.fg : T.bg4,
+        border: "none",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.5 : 1,
+        flexShrink: 0,
+        transition: "background 0.12s ease",
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 2,
+          left: value ? 16 : 2,
+          width: 16,
+          height: 16,
+          borderRadius: "50%",
+          background: T.bg0,
+          boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+          transition: "left 0.12s ease",
+        }}
+      />
+    </button>
+  );
+}
+
 function TrafficLights({ onRed, onYellow }) {
   const dot = (bg, key, click) => (
     <button
@@ -60,11 +105,11 @@ function IconButton({
         gap: 6,
         background: active ? T.bg4 : hover ? T.bg3 : "transparent",
         border: "none",
-        borderRadius: 5,
+        borderRadius: 8,
         cursor: "pointer",
         color: active ? T.fg : T.fg2,
-        fontFamily: T.mono,
-        fontSize: 11,
+        fontFamily: T.sans,
+        fontSize: 12.5,
       }}
     >
       {Ico && (

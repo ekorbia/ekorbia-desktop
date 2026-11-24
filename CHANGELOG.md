@@ -37,8 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A comparison heads each column with the model's plain name and how long
   it took. The model that reads documents for search is no longer offered
   as one to compare.
-- The quick-question panel names models the same plain way, keeps the
-  microphone at the right edge, and spells out its key hint.
+- **One look across the app.** Settings, comparisons, dialogs, attachment
+  chips, toasts and dictation use the same buttons, fields and headings as
+  Home and the chat window. Monospace labels and capitalised headings are
+  gone.
+- What you ask appears as a bubble on the right. An attached folder shows
+  as a pill that counts its documents.
+- **Comparisons** open from a "Compare models" dialog, show the question
+  once above the answers, and use the same message box as a chat.
+- **The quick-question panel** follows the app's light or dark look and
+  answers with the default model; it no longer has its own model chooser.
+  Its microphone stays at the right edge and the key hint is spelled out.
 
 ### Fixed
 
