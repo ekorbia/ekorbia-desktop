@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The app opens on Home.** Home lists your workspaces (Spaces, under a
+  plainer name), your recent chats, and a row for a quick question, which
+  starts a chat in General. General holds the chats that belong to no
+  workspace.
+- **Opening a workspace shows only its chats.** The sidebar has a way back
+  to Home and a settings button for the workspace. Private chats and
+  comparisons are in the menu beside **New chat**, and **⌘N** starts a chat.
+- **The tab strip, the title-bar buttons and the status bar are gone.** One
+  line at the foot of the sidebar says where chats stay. Prompts, Watches
+  and saved files are in the settings menu beside it for now.
+- Moving a chat to another workspace is in its right-click menu. Dragging
+  it onto a Space is gone.
+
+### Fixed
+
+- **A chat started in a workspace with pinned documents stays there.** It
+  used to turn up under All chats after a relaunch.
+- Ending a private chat while its reply is arriving now stops the reply.
+
 ### Security
 
 - **A reply can no longer make the app fetch anything from the internet.**

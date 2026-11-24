@@ -254,6 +254,13 @@
     text-decoration: underline;
     text-underline-offset: 2px;
   }
+  /* Home screen (home.jsx): hover states that need no JS state. */
+  .ek-home-row:hover { background: rgba(128, 128, 128, 0.12); }
+  .ek-home-card { transition: border-color 0.12s ease; }
+  .ek-home-card:hover { border-color: var(--ek-accent) !important; }
+  .ek-home-card:focus-visible, .ek-home-row:focus-visible { outline: 2px solid var(--ek-accent); outline-offset: 2px; }
+  .ek-home-card .ek-home-card-more { opacity: 0; }
+  .ek-home-card:hover .ek-home-card-more, .ek-home-card-more:focus-visible { opacity: 1; }
   .ek-md a:hover { color: var(--ek-accent-hover); }
   /* A remote image a reply linked to: shown as a link, never fetched
      (neutraliseRemoteContent in markdown.jsx). */
@@ -481,6 +488,7 @@
 <script type="text/babel" data-presets="react" src="prompts-library.jsx"></script>
 <script type="text/babel" data-presets="react" src="watch.jsx"></script>
 <script type="text/babel" data-presets="react" src="files.jsx"></script>
+<script type="text/babel" data-presets="react" src="home.jsx"></script>
 <script type="text/babel" data-presets="react" src="settings.jsx"></script>
 <!-- onboarding.jsx references HOTKEY_LS_KEY / SCREENSHOT_HOTKEY_LS_KEY +
      formatHotkey from settings.jsx, so it must load after it. main.jsx

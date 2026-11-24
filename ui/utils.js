@@ -733,6 +733,132 @@ function chatIdOfMessage(chats, messageId) {
   return null;
 }
 
+// ── Workspaces (home.jsx, shell.jsx, main.jsx) ─────────────────────────────
+// A workspace is a Space. "General" is every chat that has no Space; it is
+// spelled `null` wherever a workspace id is passed around, and '' where one
+// is used as an object key.
+
+// The chat rows that belong to one workspace. `spaceId` null → General.
+function chatsInWorkspace(chatRows, spaceId) {
+  const rows = Array.isArray(chatRows) ? chatRows.filter(Boolean) : [];
+  return spaceId
+    ? rows.filter((c) => c.spaceId === spaceId)
+    : rows.filter((c) => !c.spaceId);
+}
+
+// Per-workspace figures for the Home cards, keyed by Space id ('' for
+// General): how many chats, and when one was last touched (unix seconds,
+// 0 when there are none).
+function workspaceSummaries(chatRows) {
+  const out = {};
+  for (const c of Array.isArray(chatRows) ? chatRows : []) {
+    if (!c) continue;
+    const key = c.spaceId || '';
+    const s = out[key] || (out[key] = { chats: 0, lastActive: 0 });
+    s.chats += 1;
+    const at = Number(c.updatedAt || c.createdAt || 0);
+    if (at > s.lastActive) s.lastActive = at;
+  }
+  return out;
+}
+
+// The most recently touched chats across every workspace, newest first, in
+// the same item shape the sidebar rows use (bucketChatsByDate) so either
+// list can hand a row to openChatInTab.
+function recentChatItems(chatRows, limit) {
+  const rows = (Array.isArray(chatRows) ? chatRows.filter(Boolean) : []).slice();
+  rows.sort((a, b) =>
+    Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+  return rows.slice(0, limit > 0 ? limit : rows.length).map((r) => {
+    let models = null;
+    if (Array.isArray(r.models)) models = r.models;
+    else if (typeof r.multiModels === 'string' && r.multiModels) {
+      try {
+        const parsed = JSON.parse(r.multiModels);
+        if (Array.isArray(parsed)) models = parsed;
+      } catch (_e) { /* not JSON: a single-model chat */ }
+    }
+    return {
+      id: r.id,
+      title: r.title,
+      model: r.model,
+      when: relativeTime(Number(r.updatedAt || r.createdAt || 0)),
+      preview: r.preview || null,
+      tabType: r.tabType || null,
+      models,
+      spaceId: r.spaceId || null,
+    };
+  });
+}
+
+// Which workspace an open chat is shown in: its Space, or, for a private
+// chat (which never joins a Space and inherits nothing from one), the
+// workspace it was started from. null = General.
+function tabWorkspaceId(tab) {
+  return (tab && (tab.spaceId || tab.homeSpaceId)) || null;
+}
+
+// Open chats a workspace's sidebar lists above its saved ones, because the
+// saved list cannot show them: every private chat started here (never
+// saved, so this row is the only way back to it), and the unsent chat in
+// front (a new chat has no row until its first message).
+function unsavedTabsForWorkspace(tabs, savedIds, spaceId, activeTabId) {
+  const saved = savedIds instanceof Set ? savedIds : new Set(savedIds || []);
+  const want = spaceId || null;
+  return (Array.isArray(tabs) ? tabs : []).filter((t) => {
+    if (!t || saved.has(t.id)) return false;
+    if (tabWorkspaceId(t) !== want) return false;
+    return !!t.ephemeral || t.id === activeTabId;
+  });
+}
+
+// After a chat is closed or deleted: which of the remaining open chats to
+// show, staying in the same workspace. Prefers the remembered chat when it
+// is still open there; null means "none left here, start a new one".
+function nextTabInWorkspace(tabs, spaceId, preferId) {
+  const want = spaceId || null;
+  const here = (Array.isArray(tabs) ? tabs : [])
+    .filter((t) => t && tabWorkspaceId(t) === want);
+  if (!here.length) return null;
+  const preferred = preferId && here.find((t) => t.id === preferId);
+  return (preferred || here[here.length - 1]).id;
+}
+
+// The one-line privacy position shown on Home and at the foot of the
+// sidebar. Local backends keep chats on this Mac; a custom server on
+// another machine is named, because then they do not.
+function privacyStatus(backendKind, baseUrl) {
+  if (isLocalEndpoint(backendKind, baseUrl)) {
+    return { kind: 'local', text: 'Chats stay on this Mac' };
+  }
+  let host = '';
+  try {
+    const raw = String(baseUrl || '');
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : 'http://' + raw;
+    host = new URL(withScheme).hostname;
+  } catch (_e) { host = ''; }
+  return {
+    kind: 'server',
+    host,
+    text: host ? `Using server: ${host}` : 'Using another server',
+  };
+}
+
+// A short label for where a workspace's documents live: the last two
+// segments of its first pinned folder, else a count of pinned files.
+function workspaceDocsLabel(pins) {
+  const list = (Array.isArray(pins) ? pins : []).filter((p) => p && p.path);
+  if (!list.length) return '';
+  const folders = list.filter((p) => p.kind === 'folder');
+  if (folders.length) {
+    const parts = String(folders[0].path).split('/').filter(Boolean);
+    const tail = parts.slice(-2).join('/');
+    const more = list.length - 1;
+    return more > 0 ? `${tail} +${more} more` : tail;
+  }
+  return list.length === 1 ? '1 file' : `${list.length} files`;
+}
+
 // ── Watch recipes + Today digest (watch.jsx, main.jsx) ─────────────────────
 
 // Turn a watch "recipe" + resolved default paths into a partial WatchModal
@@ -1627,6 +1753,14 @@ if (typeof window !== "undefined") {
   window.extractMathSegments = extractMathSegments;
   window.restoreMathSegments = restoreMathSegments;
   window.replyImageIsInline = replyImageIsInline;
+  window.chatsInWorkspace = chatsInWorkspace;
+  window.workspaceSummaries = workspaceSummaries;
+  window.recentChatItems = recentChatItems;
+  window.tabWorkspaceId = tabWorkspaceId;
+  window.unsavedTabsForWorkspace = unsavedTabsForWorkspace;
+  window.nextTabInWorkspace = nextTabInWorkspace;
+  window.privacyStatus = privacyStatus;
+  window.workspaceDocsLabel = workspaceDocsLabel;
   window.externalLinkTarget = externalLinkTarget;
 }
 
@@ -1862,5 +1996,13 @@ if (typeof module !== "undefined" && module.exports) {
     restoreMathSegments,
     replyImageIsInline,
     externalLinkTarget,
+    chatsInWorkspace,
+    workspaceSummaries,
+    recentChatItems,
+    tabWorkspaceId,
+    unsavedTabsForWorkspace,
+    nextTabInWorkspace,
+    privacyStatus,
+    workspaceDocsLabel,
   };
 }

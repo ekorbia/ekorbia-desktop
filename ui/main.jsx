@@ -69,7 +69,6 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "theme": "one_dark",
   "fontScale": 1.0,
   "density": "comfortable",
-  "showStatusBar": true,
   "showDetails": false
 }/*EDITMODE-END*/;
 
@@ -475,14 +474,23 @@ function App() {
     { id: welcomeIdRef.current, title: 'New chat', model: readPersistedComposerModel() },
   ]);
   const [activeTab, setActiveTab] = useS(welcomeId);
-  const [sidebarOpen, setSidebarOpen] = usePersistedState('ekorbia.sidebar.open', true);
-  // Command palette (⌘K). Declared next to sidebarOpen because the same
+  // Which screen is showing. The app opens on 'home' (the workspaces);
+  // 'workspace' is the sidebar + conversation for ONE workspace, namely
+  // `activeSpaceId` (null = General: every chat with no Space). Not
+  // persisted — every launch starts on Home.
+  const [view, setView] = useS('home');
+  // Latest "start a chat" for the ⌘N handler, whose effect is mount-only.
+  const newChatRef = useR(null);
+  // Command palette (⌘K). Declared next to the screen state because the same
   // deps-free keydown effect below toggles both; the commands list and
   // its runner map are built further down (buildPaletteCommands), below
   // every handler they reference.
   const [paletteOpen, setPaletteOpen] = useS(false);
-  const [rightPanelOpen, setRightPanelOpen] = usePersistedState('ekorbia.rightpanel.open', true);
-  const [sidebarWidth, setSidebarWidth] = usePersistedState('ekorbia.sidebar.width', 220);
+  // The Prompts / Watches / Files panel. Closed until asked for from the
+  // settings menu (MoreMenu in shell.jsx); no longer remembered across
+  // launches, because nothing on screen shows it is open elsewhere.
+  const [rightPanelOpen, setRightPanelOpen] = useS(false);
+  const [sidebarWidth, setSidebarWidth] = usePersistedState('ekorbia.sidebar.width', 252);
   const [rightPanelWidth, setRightPanelWidth] = usePersistedState('ekorbia.rightpanel.width', 380);
   // Which tab is showing in the right panel: 'prompts' or 'watches'.
   const [rightPanelTab, setRightPanelTab] = usePersistedState('ekorbia.rightpanel.tab', 'prompts');
@@ -1193,21 +1201,24 @@ function App() {
   // Composer prop boundary, so the picker behaves as if nothing is locked
   // — safer than throwing during the brief moment between mount and load.
   const [lockedSlugsBySpace, setLockedSlugsBySpace] = useS({});
-  const ACTIVE_SPACE_LS_KEY = 'ekorbia.activeSpaceId';
-  const [activeSpaceId, setActiveSpaceId] = useS(() => {
-    try {
-      const raw = localStorage.getItem(ACTIVE_SPACE_LS_KEY);
-      return raw && raw !== 'null' ? raw : null;
-    } catch {
-      return null;
-    }
-  });
-  useE(() => {
-    try {
-      if (activeSpaceId) localStorage.setItem(ACTIVE_SPACE_LS_KEY, activeSpaceId);
-      else localStorage.removeItem(ACTIVE_SPACE_LS_KEY);
-    } catch {}
-  }, [activeSpaceId]);
+  // The workspace on show in the workspace window: a Space id, or null
+  // for General. Starts at null and is not remembered — the app opens on
+  // Home, and Home (openWorkspace) is what picks a workspace.
+  const [activeSpaceId, setActiveSpaceId] = useS(null);
+  // Every saved chat row, all workspaces together (db_load_chats). Home
+  // reads its cards and recent list from this; `history` below is the one
+  // workspace on show, bucketed by date for the sidebar.
+  const [allChatRows, setAllChatRows] = useS([]);
+  // { [spaceId]: [{ kind, path }] } — each workspace's pinned documents,
+  // for the "where its documents live" line on Home and in the sidebar.
+  const [pinsBySpace, setPinsBySpace] = useS({});
+  // A question typed into Home's quick-question row, waiting for its new
+  // General chat to be in front: { chatId, text }. Sent by an effect, so
+  // handleSend runs with that chat's state in its closure.
+  const [pendingAsk, setPendingAsk] = useS(null);
+  // The chat last in front in each workspace this session ('' = General),
+  // so opening a workspace returns to it.
+  const lastTabByWorkspaceRef = useR({});
 
   // ── Backend load on mount ───────────────────────────────────────────────────
   // Prompts now live as Markdown files in the configured prompts directory.
@@ -1256,50 +1267,12 @@ function App() {
         const liveIds = new Set((spaceRows || []).map((s) => s.id));
         const safeActiveSpace = activeSpaceId && liveIds.has(activeSpaceId) ? activeSpaceId : null;
         if (safeActiveSpace !== activeSpaceId) setActiveSpaceId(safeActiveSpace);
-        const filteredChats = safeActiveSpace
-          ? (chatRows || []).filter((c) => c.spaceId === safeActiveSpace)
-          : (chatRows || []);
-        setHistory(bucketChatsByDate(filteredChats));
-        // Auto-open the most-recently-updated chat on launch so the app
-        // resumes where the user left off instead of dumping them into a
-        // blank "New chat". chatRows is ordered `updated_at DESC` by the
-        // Rust side (see chat.rs: db_load_chats), so [0] is freshest.
-        //
-        // First-run / cleared-history (empty list) intentionally falls
-        // through to the welcome tab the lazy useState initialisers
-        // already set up — no-history users still get the friendly
-        // empty composer.
-        //
-        // We open the historical chat then strip the welcome tab so the
-        // user lands on a single tab (the loaded chat), not two. The
-        // welcome id was generated fresh this launch (welcomeIdRef), so
-        // it can never collide with a real persisted chat id — safe to
-        // delete from `chats` unconditionally.
-        if (Array.isArray(chatRows) && chatRows.length > 0) {
-          const newest = chatRows[0];
-          // Forward multi-model fields so a relaunch lands the user back
-          // in compare mode rather than a single-model view of the same
-          // chat id. multiModels is JSON on the row; parse here.
-          const parsedModels = newest.multiModels
-            ? tryParseJson(newest.multiModels, null)
-            : null;
-          try {
-            await openChatInTab({
-              id: newest.id,
-              title: newest.title,
-              model: newest.model,
-              tabType: newest.tabType || null,
-              models: Array.isArray(parsedModels) ? parsedModels : null,
-            });
-            setTabs(ts => ts.filter(t => t.id !== welcomeId));
-            setChats(cs => { const n = { ...cs }; delete n[welcomeId]; return n; });
-          } catch (openErr) {
-            // Don't block startup on a failed auto-open — the user can
-            // still click the chat in the sidebar. Leave the welcome
-            // tab in place as a usable fallback.
-            console.error('auto-open newest chat failed:', openErr);
-          }
-        }
+        setAllChatRows(chatRows || []);
+        refreshPinsForAllSpaces(spaceRows || []);
+        setHistory(bucketChatsByDate(chatsInWorkspace(chatRows, safeActiveSpace)));
+        // The app opens on Home, which lists the recent chats itself, so
+        // nothing is opened here. The welcome tab the lazy useState
+        // initialisers set up stays as General's unsent chat.
       } catch (e) {
         console.error('chat load failed:', e);
       }
@@ -1312,7 +1285,13 @@ function App() {
   useE(() => {
     const onKey = (e) => {
       const meta = e.metaKey || e.ctrlKey;
-      if (meta && e.key === '\\') { e.preventDefault(); setSidebarOpen(o => !o); }
+      // ⌘N starts a chat in the workspace on show (General from Home).
+      if (meta && !e.shiftKey && !e.altKey && (e.key === 'n' || e.key === 'N')) {
+        e.preventDefault();
+        // A tick later: from Home this replaces the screen, and an input
+        // there may be the target of this very key event.
+        setTimeout(() => { newChatRef.current && newChatRef.current(); }, 0);
+      }
       // ⌘K toggles the command palette. Functional update keeps this
       // effect deps-free; a guard effect below force-closes the palette
       // whenever a first-run gate / tour takes the screen.
@@ -1482,13 +1461,13 @@ function App() {
   // — if our persisted/default choice isn't installed — fall back to the
   // first available model. This is what stops a fresh install (or a new
   // machine) from sitting on `gemma4:26b` when the user has llama3 only.
-  // Failures are silent: if Ollama is down, the StatusBar surfaces it and
+  // Failures are silent: if Ollama is down, the status line surfaces it and
   // the user can fix the model later via the picker.
   useE(() => {
     // Routed through the Rust `llm_list_models` command rather than direct
     // fetch — see ollama.rs comment block for the WebView2 PNA story.
     // 3s timeout is now applied Rust-side; failures throw an IPC error
-    // which we swallow (the StatusBar shows the real "not running" state).
+    // which we swallow (the status line shows the real "not running" state).
     invoke('llm_list_models')
       .then((data) => {
         const pulled = (data.models || []).map((m) => m.name);
@@ -1935,9 +1914,15 @@ function App() {
         // right-click "Move to Space" submenu) to file afterwards.
         const newItem = {
           id: activeTab, title, model: modelId, when: 'now',
-          spaceId: null, preview: previewSnippet(text),
+          spaceId: chat.spaceId || null, preview: previewSnippet(text),
         };
         setHistory(hs => prependChatToToday(hs, newItem));
+        // Home's cards and recent list read the raw rows.
+        const nowSecs = Math.floor(Date.now() / 1000);
+        setAllChatRows(rows => rows.some(r => r.id === activeTab) ? rows : [{
+          id: activeTab, title, model: modelId, spaceId: chat.spaceId || null,
+          preview: previewSnippet(text), createdAt: nowSecs, updatedAt: nowSecs,
+        }, ...rows]);
       }
     } else if (!ephemeral) {
       // Existing chat: bump it to the top of Today and show the just-sent
@@ -1954,6 +1939,14 @@ function App() {
     // nothing perceptible before a multi-second stream.
     try {
       await persistChat({ id: activeTab, title, model: modelId, createdAt: nowTs, updatedAt: nowTs, ...multiFieldsForChat(activeTab) });
+      // A chat born in a workspace with pinned documents already has a
+      // row by now (attaching them creates one, see ensure_chat_row), so
+      // the upsert above UPDATEd it — and the update never writes
+      // space_id. File it explicitly, or it reappears in General after a
+      // relaunch.
+      if (chat.spaceId && !isEphemeralChat(activeTab)) {
+        invoke('db_move_chat_to_space', { chatId: activeTab, spaceId: chat.spaceId }).catch(console.error);
+      }
     } catch (e) {
       console.error('chat persist failed:', e);
     }
@@ -3080,11 +3073,12 @@ function App() {
       invoke('db_delete_chat', { id }).catch(console.error);
     }
     setHistory(hs => removeChatFromHistory(hs, id));
-    setTabs(ts => {
-      const next = ts.filter(t => t.id !== id);
-      if (id === activeTab && next.length) setActiveTab(next[0].id);
-      return next;
-    });
+    setAllChatRows(rows => rows.filter(r => r.id !== id));
+    // If it was the chat in front, stay in its workspace (see closeTab).
+    const ws = tabWorkspaceId(tabs.find(t => t.id === id));
+    const remaining = tabs.filter(t => t.id !== id);
+    setTabs(ts => ts.filter(t => t.id !== id));
+    if (id === activeTab) landInWorkspace(ws, remaining, undefined, id);
     setChats(cs => { const n = { ...cs }; delete n[id]; return n; });
     // Drop the deleted chat's slot from the per-chat attached-prompts
     // map. Without this, the map slowly grows by one dangling entry
@@ -3123,6 +3117,7 @@ function App() {
     const freshId = genId();
     const freshModel = readPersistedComposerModel();
     setHistory(EMPTY_HISTORY);
+    setAllChatRows([]);
     // Groups themselves survive a "clear chats" — db_clear_all_chats only
     // wipes the chats table. Reloading from disk keeps the in-memory list
     // in sync with reality (in particular, FK SET NULL on fresh installs
@@ -3163,10 +3158,9 @@ function App() {
       // list.
       const safeActiveSpace = activeSpaceId && liveIds.has(activeSpaceId) ? activeSpaceId : null;
       if (safeActiveSpace !== activeSpaceId) setActiveSpaceId(safeActiveSpace);
-      const filteredChats = safeActiveSpace
-        ? (chatRows || []).filter((c) => c.spaceId === safeActiveSpace)
-        : (chatRows || []);
-      setHistory(bucketChatsByDate(filteredChats));
+      setAllChatRows(chatRows || []);
+      refreshPinsForAllSpaces(spaceRows || []);
+      setHistory(bucketChatsByDate(chatsInWorkspace(chatRows, safeActiveSpace)));
       // Re-index the locked-pin slugs alongside the sidebar refresh so
       // the Composer's "suppress ×" gate stays current after every Space
       // mutation. Don't await — the sidebar shouldn't block on per-Space
@@ -3183,6 +3177,21 @@ function App() {
   // keeps wall-clock at max(t_i) instead of sum. Individual failures
   // collapse to an empty Set for that Space (the lock UI silently
   // degrades to "no chip is locked" rather than crashing the modal).
+  // Each workspace's pinned documents, for Home's cards and the sidebar's
+  // "where its documents live" line. Independent lookups; a failure
+  // leaves that workspace with none rather than failing the reload.
+  const refreshPinsForAllSpaces = async (spaceRows) => {
+    const list = spaceRows || [];
+    const entries = await Promise.all(list.map(async (s) => {
+      try {
+        return [s.id, (await invoke('space_attachments_list', { spaceId: s.id })) || []];
+      } catch {
+        return [s.id, []];
+      }
+    }));
+    setPinsBySpace(Object.fromEntries(entries));
+  };
+
   const refreshLockedSlugsForAllSpaces = async (spaceRows) => {
     const list = spaceRows || [];
     if (list.length === 0) {
@@ -3471,8 +3480,23 @@ function App() {
   // Failures of either backend call are logged + ignored — the chat
   // still creates successfully, just without that piece of Space
   // inheritance.
-  const resolveSpaceContextForNewChat = async () => {
-    if (!activeSpace) {
+  const resolveSpaceContextForNewChat = async (spaceOverride) => {
+    // `spaceOverride` names the workspace explicitly (null = General) for
+    // callers creating a chat somewhere other than the workspace on show:
+    // Home's quick question, opening a workspace from Home, landing after
+    // a chat is closed. Omitted = the workspace on show. A Space created a
+    // moment ago may not be in this render's `spaces` yet, so an unknown
+    // id is fetched rather than treated as General.
+    let space = activeSpace;
+    if (spaceOverride !== undefined) {
+      space = spaceOverride
+        ? (spaces || []).find((s) => s.id === spaceOverride) || null
+        : null;
+      if (spaceOverride && !space) {
+        try { space = await invoke('space_get', { id: spaceOverride }); } catch { space = null; }
+      }
+    }
+    if (!space) {
       return {
         preferredModel: readPersistedComposerModel(),
         spaceId: null,
@@ -3480,7 +3504,7 @@ function App() {
         pinnedAttachments: [],
       };
     }
-    const preferred = activeSpace.defaultModel || readPersistedComposerModel();
+    const preferred = space.defaultModel || readPersistedComposerModel();
     let promptSlugs = [];
     let pinnedAttachments = [];
     // Run both list queries concurrently — they hit different SQLite
@@ -3488,8 +3512,8 @@ function App() {
     // t2) instead of t1 + t2.
     try {
       const [promptRows, attachRows] = await Promise.all([
-        invoke('space_prompts_list', { spaceId: activeSpace.id }),
-        invoke('space_attachments_list', { spaceId: activeSpace.id }),
+        invoke('space_prompts_list', { spaceId: space.id }),
+        invoke('space_attachments_list', { spaceId: space.id }),
       ]);
       promptSlugs = (promptRows || []).map((r) => r.promptSlug).filter(Boolean);
       pinnedAttachments = (attachRows || []).filter((a) => a && a.path);
@@ -3498,7 +3522,7 @@ function App() {
     }
     return {
       preferredModel: preferred,
-      spaceId: activeSpace.id,
+      spaceId: space.id,
       promptSlugs,
       pinnedAttachments,
     };
@@ -3530,9 +3554,9 @@ function App() {
   // reads `activeSpaceId` from the closure, so we must set state and
   // then re-reload using the NEW id. We pass the target id explicitly
   // (rather than relying on closure) so the reload sees the fresh value.
-  const selectSpace = async (id) => {
+  const selectSpace = async (id, opts) => {
     const next = id || null;
-    if (next === activeSpaceId) return;
+    if (next === activeSpaceId && !(opts && opts.force)) return;
     setActiveSpaceId(next);
     try {
       const [chatRows, spaceRows] = await Promise.all([
@@ -3540,12 +3564,13 @@ function App() {
         invoke('space_list'),
       ]);
       setSpaces(spaceRows || []);
-      const filteredChats = next
-        ? (chatRows || []).filter((c) => c.spaceId === next)
-        : (chatRows || []);
-      setHistory(bucketChatsByDate(filteredChats));
+      setAllChatRows(chatRows || []);
+      // null is General: the chats that have no Space.
+      setHistory(bucketChatsByDate(chatsInWorkspace(chatRows, next)));
+      return chatRows || [];
     } catch (e) {
       console.error('selectSpace reload failed:', e);
+      return null;
     }
   };
 
@@ -3554,69 +3579,72 @@ function App() {
   // sum item counts across sections. Ephemeral chats aren't in history
   // so they're not counted — matches the user's mental model that
   // "history" is the persisted list they see in the sidebar.
-  const totalChatCount =
-    (history.dateSections || []).reduce((n, s) => n + (s.items?.length || 0), 0);
+  const totalChatCount = Math.max(
+    allChatRows.length,
+    (history.dateSections || []).reduce((n, s) => n + (s.items?.length || 0), 0),
+  );
 
   const activeTabModelId = tabs.find(t => t.id === activeTab)?.model || modelId;
   const tabModel = MODELS_BY_ID[activeTabModelId] || { id: activeTabModelId, name: activeTabModelId, color: T.green };
 
-  const closeTab = (id) => {
-    // Pre-compute the post-close tab list so the branch decision happens
-    // OUTSIDE any setState reducer. Putting genId() inside a setTabs
-    // reducer would double-fire under StrictMode and mint two fresh ids
-    // for the same close action.
-    const next = tabs.filter(t => t.id !== id);
-
-    if (next.length === 0) {
-      // Last tab closed — spawn a fresh empty chat so the user lands on
-      // a working composer. Without this, the tab bar would go empty but
-      // `chat = chats[activeTab] ?? ...` (see top of App) keeps resolving
-      // to the just-closed chat's entry, so ChatPane keeps rendering its
-      // stale title + messages. Mirrors newTab()'s shape inline so we
-      // can also drop the closed ephemeral entry in the same setChats
-      // call.
-      const fresh = genId();
-      setTabs([{ id: fresh, title: 'New chat', model: model.id }]);
-      setChats(cs => {
-        const upd = {
-          ...cs,
-          [fresh]: { id: fresh, title: 'New chat', messages: [], loaded: true },
-        };
-        if (isEphemeralChat(id)) delete upd[id];
-        return upd;
-      });
-      setActiveTab(fresh);
-      // Drop the closed chat's attached-prompts slot. Closing a tab
-      // doesn't reopen the chat (it's just hidden), but the per-chat
-      // attached set is a session-only convenience — on reopen we
-      // re-hydrate from the last user message in openChatInTab. So
-      // it's safe to drop now to keep the map bounded.
-      setAttachedPromptsByChat(m => { const n = { ...m }; delete n[id]; return n; });
-      return;
+  // Put a chat from workspace `ws` in front, choosing among `openTabs`:
+  // the one last in front there if it is still open, else any open one,
+  // else a new unsent chat. Never a chat from another workspace — that
+  // would yank the sidebar somewhere the user did not ask to go.
+  // `rows` are freshly loaded chat rows when the caller has them (state
+  // set in the same tick is not in this closure yet); `excludeId` is a
+  // chat that is being closed or deleted and must not be picked up again.
+  // Returns true when an open chat was brought to the front at once; false
+  // when a chat is being created or loaded (it comes to the front a moment
+  // later, and the follow-the-chat effect shows it then).
+  const landInWorkspace = (ws, openTabs, rows, excludeId) => {
+    const next = nextTabInWorkspace(openTabs, ws, lastTabByWorkspaceRef.current[ws || '']);
+    if (next) {
+      setActiveTab(next);
+      return true;
     }
+    newTab({ spaceId: ws || null, fresh: true, rows, excludeId });
+    return false;
+  };
 
-    setTabs(next);
-    if (id === activeTab) setActiveTab(next[0].id);
+  // Close an open chat: end a private chat, or cancel a comparison before
+  // its first question. There is no tab strip any more, but open chats are
+  // still held in `tabs` (a reply can keep streaming into one that is not
+  // in front), so closing one still means dropping it from that list. If
+  // it was in front, another chat of the same workspace takes its place.
+  const closeTab = (id) => {
+    const ws = tabWorkspaceId(tabs.find(t => t.id === id));
+    const remaining = tabs.filter(t => t.id !== id);
+    // Ending a private chat mid-reply: stop the reply, or it would keep
+    // generating into a chat that no longer exists and leave the app
+    // "streaming" with nothing to show for it (same as closePrivateTabs).
+    const inFlight = abortRef.current;
+    if (isEphemeralChat(id) && inFlight && chatIdOfMessage(chats, inFlight) === id) {
+      invoke('llm_chat_stream_cancel', { requestId: inFlight }).catch(() => {});
+      abortRef.current = null;
+      streamingRef.current = false;
+      setStreaming(false);
+    }
+    setTabs(ts => ts.filter(t => t.id !== id));
     // For ephemeral chats, also drop the in-memory entry — they have no
-    // sidebar row and no DB row, so once the tab is closed there's no way
-    // to bring them back. Holding them in `chats` would just be a leak.
-    // Persisted chats stay in memory because the sidebar can reopen them
-    // (load-on-demand is already wired in openChatInTab).
+    // saved row, so once closed there is no way to bring them back and
+    // holding them in `chats` would just be a leak. Persisted chats stay
+    // in memory because the sidebar can reopen them.
     if (isEphemeralChat(id)) {
       setChats(cs => { const n = { ...cs }; delete n[id]; return n; });
     }
     // Drop this chat's slot from the per-chat attached-prompts map.
     // Re-hydrated from the last user message on reopen (see
-    // openChatInTab). Keeps the map size bounded by open-tab count.
+    // openChatInTab). Keeps the map size bounded by open-chat count.
     setAttachedPromptsByChat(m => { const n = { ...m }; delete n[id]; return n; });
+    if (id === activeTab) landInWorkspace(ws, remaining, undefined, id);
   };
 
   // Close every private chat at once — the window was closed (see the
   // `main:hidden` listener). One pass, because closeTab computes its result
   // from this render's `tabs` and would lose all but the last of several
-  // closes made in the same tick. The decision is planClosePrivateTabs
-  // (utils.js, node-tested); this is only the state plumbing, mirroring
-  // closeTab's two branches.
+  // closes made in the same tick. Which chats go is planClosePrivateTabs
+  // (utils.js, node-tested); this is the state plumbing.
   const closePrivateTabs = () => {
     const plan = planClosePrivateTabs(tabs, activeTab, isEphemeralChat);
     if (!plan.closed.length) return;
@@ -3631,35 +3659,21 @@ function App() {
       streamingRef.current = false;
       setStreaming(false);
     }
-    if (plan.needsFresh) {
-      // Only private chats were open: land on a fresh empty chat, exactly
-      // like closing the last tab. genId() stays outside the reducers
-      // (StrictMode would mint two ids).
-      const fresh = genId();
-      setTabs([{ id: fresh, title: 'New chat', model: model.id }]);
-      setChats(cs => {
-        const upd = {
-          ...cs,
-          [fresh]: { id: fresh, title: 'New chat', messages: [], loaded: true },
-        };
-        plan.closed.forEach((id) => { delete upd[id]; });
-        return upd;
-      });
-      setActiveTab(fresh);
-    } else {
-      setTabs(plan.tabs);
-      if (plan.activeTab !== activeTab) setActiveTab(plan.activeTab);
-      setChats(cs => {
-        const n = { ...cs };
-        plan.closed.forEach((id) => { delete n[id]; });
-        return n;
-      });
-    }
+    const ws = tabWorkspaceId(tabs.find(t => t.id === activeTab));
+    setTabs(plan.tabs);
+    setChats(cs => {
+      const n = { ...cs };
+      plan.closed.forEach((id) => { delete n[id]; });
+      return n;
+    });
     setAttachedPromptsByChat(m => {
       const n = { ...m };
       plan.closed.forEach((id) => { delete n[id]; });
       return n;
     });
+    // The chat in front was private: stay in its workspace, on another
+    // open chat there or a new unsent one.
+    if (plan.closed.includes(activeTab)) landInWorkspace(ws, plan.tabs);
   };
   const mainHiddenHandlerRef = useR(null);
   mainHiddenHandlerRef.current = closePrivateTabs;
@@ -3851,15 +3865,57 @@ function App() {
     return () => { cancelled = true; if (unlisten) unlisten(); };
   }, []);
 
-  const newTab = async () => {
-    const id = genId();
+  // Start a chat. `opts.spaceId` names the workspace (null = General);
+  // omitted, it is the workspace on show, or General when called from Home.
+  // One unsent chat per workspace is enough, so asking for a new chat while
+  // an empty one is already open there just brings that one to the front —
+  // unless `opts.fresh` (the caller has just closed it). Resolves to the
+  // chat's id. Called with a click event as `opts` by the New chat button,
+  // which carries neither field.
+  const newTab = async (opts = {}) => {
+    const ws = opts.spaceId !== undefined
+      ? (opts.spaceId || null)
+      : (view === 'home' ? null : activeSpaceId);
+    if (!opts.fresh) {
+      const blank = tabs.find(t =>
+        !t.ephemeral && !t.tabType && tabWorkspaceId(t) === ws
+        && chats[t.id]?.loaded && !(chats[t.id].messages || []).length
+        && !sidebarContainsChatId(history, t.id));
+      if (blank) {
+        setActiveTab(blank.id);
+        if (blank.model) setModelId(blank.model);
+        setView('workspace');
+        if (ws !== activeSpaceId) selectSpace(ws);
+        setComposerFocusKey(k => k + 1);
+        return blank.id;
+      }
+    }
     // Resolve Space context (model preference, spaceId, pinned-prompt
     // slugs) BEFORE state writes so the chat materialises with the right
     // model already preselected — no flash of the global default before
-    // the Space's choice takes over. resolveSpaceContextForNewChat
-    // returns the global defaults when no Space is active, so this is
-    // safe to call unconditionally.
-    const ctx = await resolveSpaceContextForNewChat();
+    // the Space's choice takes over. It returns the global defaults for
+    // General, so this is safe to call unconditionally.
+    const ctx = await resolveSpaceContextForNewChat(ws);
+    // An unsent chat left here by an earlier session still has a saved row
+    // if documents were attached to it (attaching creates the row; the
+    // launch sweep keeps rows that have attachments). Its model is still
+    // the '' placeholder and it has no messages. Pick it up rather than
+    // leave one more behind each time this workspace is opened — its
+    // documents are already indexed.
+    const pending = chatsInWorkspace(opts.rows || allChatRows, ws).find(r =>
+      !r.model && !r.preview && !r.tabType
+      && r.id !== opts.excludeId && !tabs.some(t => t.id === r.id));
+    if (pending) {
+      // Set before the open, whose own hydration only fills an empty slot.
+      setAttachedPromptsByChat(m => ({ ...m, [pending.id]: ctx.promptSlugs }));
+      setModelId(ctx.preferredModel);
+      openChatInTab({
+        id: pending.id, title: 'New chat', model: ctx.preferredModel,
+        spaceId: ctx.spaceId || null,
+      });
+      return pending.id;
+    }
+    const id = genId();
     const tabRow = { id, title: 'New chat', model: ctx.preferredModel };
     if (ctx.spaceId) tabRow.spaceId = ctx.spaceId;
     setTabs(ts => [...ts, tabRow]);
@@ -3889,9 +3945,18 @@ function App() {
     // I/O. The fire-and-forget here is intentional; the helper handles
     // its own error toasts AND refreshes chatAttachments when done.
     if (ctx.pinnedAttachments.length) {
-      instantiateSpaceAttachmentsForChat(id, ctx.pinnedAttachments).catch(console.error);
+      instantiateSpaceAttachmentsForChat(id, ctx.pinnedAttachments)
+        // Attaching created the chat's row without a workspace; file it,
+        // so an unsent chat is found here again next time (see `pending`
+        // above) instead of turning up in General.
+        .then(() => (ctx.spaceId
+          ? invoke('db_move_chat_to_space', { chatId: id, spaceId: ctx.spaceId })
+          : undefined))
+        .catch(console.error);
     }
+    return id;
   };
+  newChatRef.current = () => newTab();
 
   // Private chat (Phase 4b): same as newTab, but registers the chat id
   // in the ephemeral ref so every persistence helper (persistChat,
@@ -3903,7 +3968,15 @@ function App() {
     const id = genId();
     ephemeralChatIdsRef.current.add(id);
     const preferred = readPersistedComposerModel();
-    setTabs(ts => [...ts, { id, title: 'Private chat', model: preferred, ephemeral: true }]);
+    // A private chat joins no Space and inherits nothing from one, but it
+    // is listed in the sidebar of the workspace it was started from
+    // (`homeSpaceId`, read by tabWorkspaceId) so starting one does not
+    // move the user out of where they are.
+    const home = view === 'home' ? null : activeSpaceId;
+    setTabs(ts => [...ts, {
+      id, title: 'Private chat', model: preferred, ephemeral: true,
+      ...(home ? { homeSpaceId: home } : {}),
+    }]);
     setChats(cs => ({
       ...cs,
       [id]: { id, title: 'Private chat', messages: [], loaded: true, ephemeral: true },
@@ -3911,6 +3984,89 @@ function App() {
     setActiveTab(id);
     setModelId(preferred);
   };
+
+  // ── Home ⇄ workspace ──────────────────────────────────────────────────
+  // The chat in front decides what is on screen. Whenever a different chat
+  // comes to the front — opened from Home or a search hit, handed over by
+  // the overlay, born from a screen capture or the New chat button — the
+  // workspace window shows, on that chat's workspace. One rule here
+  // instead of a setView in every path that can activate a chat.
+  const shownTabRef = useR(activeTab);
+  useE(() => {
+    const tab = tabs.find(t => t.id === activeTab);
+    if (!tab) return; // not in `tabs` yet: this runs again when it is
+    const ws = tabWorkspaceId(tab);
+    lastTabByWorkspaceRef.current[ws || ''] = activeTab;
+    if (shownTabRef.current === activeTab) return;
+    shownTabRef.current = activeTab;
+    setView('workspace');
+    if (ws !== activeSpaceId) selectSpace(ws);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- follows the chat in front only
+  }, [activeTab, tabs]);
+
+  // Fresh figures for Home: every chat row, the Spaces, their documents.
+  const refreshHomeData = async () => {
+    try {
+      const [chatRows, spaceRows] = await Promise.all([
+        invoke('db_load_chats'),
+        invoke('space_list'),
+      ]);
+      setAllChatRows(chatRows || []);
+      setSpaces(spaceRows || []);
+      refreshPinsForAllSpaces(spaceRows || []);
+    } catch (e) {
+      console.error('home refresh failed:', e);
+    }
+  };
+
+  const goHome = () => {
+    setQuery('');
+    setRightPanelOpen(false);
+    setView('home');
+    refreshHomeData();
+  };
+
+  // Open a workspace from Home (null = General): its chats in the sidebar,
+  // and in front the chat last shown there this session, or a new one.
+  // Home stays on screen until the workspace's chat is ready to show, so
+  // the previous workspace's conversation never flashes up under the new
+  // sidebar.
+  const openWorkspace = async (spaceId) => {
+    const ws = spaceId || null;
+    setQuery('');
+    const rows = await selectSpace(ws, { force: true });
+    if (landInWorkspace(ws, tabs, rows || undefined)) setView('workspace');
+  };
+
+  // Open a saved chat from a list that may not carry its workspace (a
+  // search hit, a Home row): fill it in from the saved rows first, so the
+  // chat lands in the right workspace and a comparison reopens as one.
+  const openChat = (c) => {
+    if (!c || !c.id) return;
+    const row = allChatRows.find(r => r.id === c.id);
+    const item = row ? recentChatItems([row], 1)[0] : null;
+    openChatInTab(item ? { ...item, title: c.title || item.title } : c);
+  };
+
+  // Home's quick-question row: a chat in General, brought to the front,
+  // with the question as its first message. The send itself happens in the
+  // effect below, once that chat is the one handleSend would act on.
+  const askInGeneral = async (text) => {
+    const q = String(text || '').trim();
+    if (!q || streamingRef.current) return;
+    setQuery('');
+    await selectSpace(null, { force: true });
+    const id = await newTab({ spaceId: null });
+    if (id) setPendingAsk({ chatId: id, text: q });
+  };
+  useE(() => {
+    if (!pendingAsk) return;
+    if (activeTab !== pendingAsk.chatId || !chats[pendingAsk.chatId]) return;
+    const { text } = pendingAsk;
+    setPendingAsk(null);
+    handleSend(text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once per question
+  }, [pendingAsk, activeTab, chats]);
 
   // Compare-mode tab creation (Phase 2). Entry point is the sidebar's
   // "compare" icon button; that opens the CompareModelPickerModal, which
@@ -4426,7 +4582,7 @@ function App() {
         },
       });
     } catch (e) {
-      // IPC / Ollama failures are surfaced by the StatusBar's own
+      // IPC / Ollama failures are surfaced by the status line's own
       // polling — no need to bubble up here.
     } finally {
       setModelWarming(false);
@@ -4478,15 +4634,14 @@ function App() {
     add('open-settings', 'Open Settings', 'Actions',
       () => window.postMessage({ type: '__activate_edit_mode' }, '*'),
       { keywords: 'preferences options config backend' });
-    add('toggle-sidebar', 'Toggle sidebar', 'Actions', () => setSidebarOpen(o => !o),
-      { keywords: 'history panel hide show' });
-    // Spaces — jump the sidebar scope. "All chats" mirrors the rail's
-    // home row; each Space by its display name.
-    add('space-all', 'Go to All chats', 'Spaces', () => setActiveSpaceId(null),
-      { keywords: 'space home everything' });
+    add('go-home', 'Go to Home', 'Actions', () => goHome(),
+      { keywords: 'workspaces start back all' });
+    // Workspaces — open one. General holds the chats with no workspace.
+    add('space-all', 'General', 'Workspaces', () => openWorkspace(null),
+      { keywords: 'space workspace unfiled everything' });
     for (const s of (spaces || [])) {
-      add(`space-${s.id}`, s.name || 'Space', 'Spaces', () => setActiveSpaceId(s.id),
-        { keywords: 'space workspace go' });
+      add(`space-${s.id}`, s.name || 'Workspace', 'Workspaces', () => openWorkspace(s.id),
+        { keywords: 'space workspace go open' });
     }
     // Themes — THEMES labels + Match System, current one flagged.
     add('theme-system', 'Match System', 'Theme', () => setTweak('theme', 'system'),
@@ -4507,7 +4662,7 @@ function App() {
     }
     for (const c of recentChats) {
       add(`chat-${c.id}`, c.title || 'New chat', 'Recent chats',
-        () => openChatInTab(c),
+        () => openChat(c),
         { hint: c.preview || undefined, keywords: 'open chat recent' });
     }
   }
@@ -4516,6 +4671,41 @@ function App() {
     const run = paletteRunners[id];
     if (run) run();
   };
+
+  // ── Shell pieces shared by Home and the workspace sidebar ──
+  // The saved chats of the workspace on show, for telling open chats that
+  // have no saved row yet (and for scoping search hits).
+  const savedChatIds = new Set();
+  for (const sec of (history.dateSections || [])) {
+    for (const c of sec.items) savedChatIds.add(c.id);
+  }
+  const workspaceOpenTabs = unsavedTabsForWorkspace(tabs, savedChatIds, activeSpaceId, activeTab)
+    .map(t => ({ id: t.id, title: t.title, ephemeral: !!t.ephemeral }));
+  const workspaceChatIds = new Set(savedChatIds);
+  for (const r of chatsInWorkspace(allChatRows, activeSpaceId)) workspaceChatIds.add(r.id);
+  const workspaceHits = messageHits.filter(h => workspaceChatIds.has(h.chatId));
+  // The status line and the settings menu. One node, handed to whichever
+  // of Home or the sidebar is showing, so only one status line polls.
+  const shellFooter = (
+    <>
+      <StatusLine
+        model={tabModel}
+        backendKind={backendKind}
+        onProblemClick={() => setSetupGateOpen(true)}
+        warming={modelWarming}
+        // Anything still being read, across every chat, so a long folder
+        // index in chat A stays visible while the user works in chat B.
+        indexingAttachments={Object.values(chatAttachments)
+          .flat()
+          .filter((a) => a.status === 'indexing')}
+      />
+      <span style={{ flex: 1 }} />
+      <MoreMenu
+        onSettings={() => window.postMessage({ type: '__activate_edit_mode' }, '*')}
+        onPanel={(tab) => { setRightPanelTab(tab); setRightPanelOpen(true); }}
+      />
+    </>
+  );
 
   return (
     <>
@@ -4658,367 +4848,337 @@ function App() {
         width: '100vw', height: '100vh',
         minWidth: 0, minHeight: 0,
         background: theme.bg0, color: theme.fg,
-        display: 'flex', flexDirection: 'column',
+        display: 'flex',
         fontSize: 14 * tweaks.fontScale,
       }}>
-        <TitleBar
-          onToggleSidebar={() => setSidebarOpen(o => !o)}
-          // Each tab button toggles the panel if it's already on that tab,
-          // otherwise opens the panel and switches to that tab. Clicking
-          // "the tab I'm not currently on" never closes the panel — just
-          // swaps content, matching how browser/IDE tab bars behave.
-          onTogglePrompts={() => {
-            if (rightPanelOpen && rightPanelTab === 'prompts') {
-              setRightPanelOpen(false);
-            } else {
-              setRightPanelOpen(true);
-              setRightPanelTab('prompts');
+        {/* Home: what the app opens on. */}
+        {view === 'home' && (
+          <HomeScreen
+            spaces={spaces}
+            chatRows={allChatRows}
+            pinsBySpace={pinsBySpace}
+            defaultModelId={readPersistedComposerModel()}
+            query={query}
+            onQuery={setQuery}
+            messageHits={messageHits}
+            onPickHit={(hit) =>
+              openChat({ id: hit.chatId, title: hit.chatTitle, model: hit.chatModel })
             }
+            onOpenSpace={openWorkspace}
+            onOpenChat={openChat}
+            onAsk={askInGeneral}
+            // One reply at a time: a question asked while another chat is
+            // still answering would be dropped by handleSend.
+            askDisabled={streaming}
+            onCreateSpace={createSpace}
+            onRenameSpace={renameSpace}
+            onRecolorSpace={recolorSpace}
+            onDeleteSpace={deleteSpace}
+            onEditSpaceSave={saveSpaceSettings}
+            promptsLibrary={prompts}
+            footer={shellFooter}
+          />
+        )}
+
+        {/* The workspace window: one workspace's chats, and the chat in
+            front. It stays mounted while Home is showing (display: none),
+            so an unsent draft in the message box and a reply that is
+            still arriving survive a trip to Home. */}
+        <div
+          data-workspace-window
+          style={{
+            flex: 1, minWidth: 0, minHeight: 0,
+            display: view === 'workspace' ? 'flex' : 'none',
           }}
-          onToggleWatch={() => {
-            if (rightPanelOpen && rightPanelTab === 'watches') {
-              setRightPanelOpen(false);
-            } else {
-              setRightPanelOpen(true);
-              setRightPanelTab('watches');
+        >
+          <Sidebar
+            chats={history}
+            activeId={activeTab}
+            onPick={openChatInTab}
+            onDelete={deleteChat}
+            onRename={renameChat}
+            query={query}
+            onQuery={setQuery}
+            onNew={newTab}
+            onNewPrivate={newPrivateTab}
+            onNewCompare={newCompareTab}
+            width={sidebarWidth}
+            onHome={goHome}
+            // A workspace is a Space; null is General (the chats with no
+            // Space). The chat list is filtered upstream, in selectSpace.
+            spaces={spaces}
+            activeSpaceId={activeSpaceId}
+            onMoveChatToSpace={moveChatToSpace}
+            promptsLibrary={prompts}
+            onEditSpaceSave={saveSpaceSettings}
+            docsLabel={workspaceDocsLabel(pinsBySpace[activeSpaceId])}
+            // Open chats the saved list cannot show: private chats, and
+            // the unsent chat in front.
+            openTabs={workspaceOpenTabs}
+            onPickOpen={setActiveTab}
+            onCloseOpen={closeTab}
+            // Full-text hits, limited to this workspace's chats. The hit
+            // carries chatModel; openChat fills in the rest.
+            messageHits={workspaceHits}
+            onPickHit={(hit) =>
+              openChat({ id: hit.chatId, title: hit.chatTitle, model: hit.chatModel })
             }
-          }}
-          onToggleFiles={() => {
-            if (rightPanelOpen && rightPanelTab === 'files') {
-              setRightPanelOpen(false);
-            } else {
-              setRightPanelOpen(true);
-              setRightPanelTab('files');
-            }
-          }}
-          onToggleTweaks={() => window.postMessage({type:'__activate_edit_mode'}, '*')}
-          sidebarOpen={sidebarOpen}
-          rightPanelOpen={rightPanelOpen}
-          rightPanelTab={rightPanelTab}
-          model={tabModel}
-        />
-        <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-          {sidebarOpen && (
-            <>
-              <Sidebar
-                chats={history}
-                activeId={activeTab}
-                onPick={openChatInTab}
-                onDelete={deleteChat}
-                query={query}
-                onQuery={setQuery}
-                onNew={newTab}
-                onNewPrivate={newPrivateTab}
-                onNewCompare={newCompareTab}
-                width={sidebarWidth}
-                // ── Spaces (workspace bundles) ─────────────────────────
-                // A Space bundles a system prompt, default model, optional
-                // pinned attachments + prompts, and an optional Space-
-                // scoped memory file. The sidebar surfaces them as the
-                // top section with an "All chats" pseudo-row, and the
-                // active Space filters the chat list below.
-                spaces={spaces}
-                activeSpaceId={activeSpaceId}
-                onSelectSpace={selectSpace}
-                onCreateSpace={createSpace}
-                onRenameSpace={renameSpace}
-                onRecolorSpace={recolorSpace}
-                onDeleteSpace={deleteSpace}
-                onMoveChatToSpace={moveChatToSpace}
-                promptsLibrary={prompts}
-                onEditSpaceSave={saveSpaceSettings}
-                onRename={renameChat}
-                // Full-text hits + click handler. The hit carries chatModel
-                // so we don't have to look it up from history (which is
-                // grouped/filtered and awkward to scan).
-                messageHits={messageHits}
-                onPickHit={(hit) =>
-                  openChatInTab({ id: hit.chatId, title: hit.chatTitle, model: hit.chatModel })
-                }
-              />
-              <Resizer onDrag={(dx) => {
-                if (dx === 0) sidebarStartRef.current = sidebarWidth;
-                setSidebarWidth(Math.max(160, Math.min(420, sidebarStartRef.current + dx)));
-              }} />
-            </>
-          )}
+            footer={view === 'workspace' ? shellFooter : null}
+          />
+          <Resizer onDrag={(dx) => {
+            if (dx === 0) sidebarStartRef.current = sidebarWidth;
+            setSidebarWidth(Math.max(200, Math.min(420, sidebarStartRef.current + dx)));
+          }} />
 
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-            <TabBar
-              tabs={tabs}
-              activeId={activeTab}
-              onSelect={setActiveTab}
-              onClose={closeTab}
-              onNew={newTab}
-              // Derived map of tab.id → attachment count for the TabBar
-              // indicator. Cheap to recompute on each render since the
-              // list is per-tab and small; Object.entries keeps it
-              // straightforward without a useMemo dance.
-              attachmentCounts={Object.fromEntries(
-                Object.entries(chatAttachments).map(([k, v]) => [k, (v || []).length]),
-              )}
-            />
-            {staleAttachments.count > 0 && (
-              <StaleEmbeddingsBanner
-                count={staleAttachments.count}
-                model={staleAttachments.currentModel}
-                onReindex={onReindexAllStale}
-                onDismiss={() => setStaleAttachments({ count: 0, currentModel: staleAttachments.currentModel })}
-                busy={reindexingStale}
-              />
-            )}
-            {chat.tabType === 'multi-pending' ? (
-              // Compare-mode chats route to the panel UI. handleSendMultiModel
-              // fans out the first message to every model in chat.models;
-              // keepVariant transitions the tab to 'single-from-multi' and
-              // re-routes future renders through the branch below.
-              <CompareChatPane
-                chat={chat}
-                isStreaming={streaming}
-                onSend={handleSendMultiModel}
-                onStopAll={() => handleStopMultiModel()}
-                onStopColumn={(asstId) => handleStopMultiModel(asstId)}
-                onKeep={keepVariant}
-                onCancel={() => closeTab(activeTab)}
-                attachedPrompts={attachedPrompts}
-                onDetachPrompt={detachPrompt}
-                engineCtx={engineCtx}
-              />
-            ) : (
-              <>
-                <ChatPane
-                  // Pre-process so picked variants carry their unpicked
-                  // siblings as m.alternatives, then drop the unpicked
-                  // rows from the rendered list. Single-mode chats have
-                  // isPicked=null/undefined everywhere, so the pipeline
-                  // is a no-op for them (no group → no alternatives).
-                  //
-                  // The unpicked rows stay in the DB and in chat.messages
-                  // (we only filter at the render-site copy here), so a
-                  // future feature that wants them — re-comparing, picking
-                  // again, exporting variant history — can read from
-                  // chat.messages directly.
-                  chat={(() => {
-                    const raw = chat.messages || [];
-                    // Group unpicked siblings by variantGroupId. Keys
-                    // are stable opaque ids generated at send time;
-                    // O(N) build is fine since N is small.
-                    const unpickedByGroup = new Map();
-                    for (const m of raw) {
-                      if (m.isPicked === 0 && m.variantGroupId) {
-                        const list = unpickedByGroup.get(m.variantGroupId) || [];
-                        list.push(m);
-                        unpickedByGroup.set(m.variantGroupId, list);
-                      }
-                    }
-                    const messages = raw
-                      .filter(m => m.isPicked !== 0)
-                      .map(m => {
-                        if (m.isPicked === 1 && m.variantGroupId) {
-                          const alts = unpickedByGroup.get(m.variantGroupId);
-                          if (alts?.length) return { ...m, alternatives: alts };
-                        }
-                        return m;
-                      });
-                    return { ...chat, messages };
-                  })()}
-                  model={tabModel}
-                  isStreaming={streaming}
-                  onRename={renameChat}
-                  // Propagate the sidebar search query so messages can highlight
-                  // matches in-place. Empty/whitespace queries are handled inside
-                  // ChatPane (regex becomes null, render is unchanged).
-                  searchQuery={query}
-                  // Edit + retry (Phase 3). Both go through truncateAndResend,
-                  // gated by streaming inside the handlers themselves so the UI
-                  // doesn't need to know.
-                  onEditMessage={handleEditAndResubmit}
-                  onRetryMessage={handleRetryAssistant}
-                  // Continue a reply the provider cut at the token/ctx
-                  // limit (doneReason 'length' on the last assistant
-                  // message — the chip renders only there).
-                  onContinue={handleContinue}
-                  // Resolved Space row for this chat (or null). Used by
-                  // ChatPane to render the Space badge in the header.
-                  // Resolved at the parent so ChatPane stays presentation-
-                  // only and doesn't need the spaces array.
-                  space={chat.spaceId ? (spaces || []).find(s => s.id === chat.spaceId) || null : null}
-                  // Progressive disclosure: when off (default), per-message
-                  // token/timing footers collapse to a quiet "Details" toggle.
-                  showDetails={tweaks.showDetails}
-                  // Bundled engine's context window, so the footer can show
-                  // input as a budget against it. Null on Ollama/BYO.
-                  engineCtx={engineCtx}
-                  // Empty-state starter cards attach a matching library
-                  // prompt (falling back to seeding example text).
-                  onStarter={handleStarterPrompt}
+            {/* With no title bar, this strip is what drags the window from
+                above the conversation. */}
+            <div {...WINDOW_DRAG} data-window-drag-strip style={{ height: 12, flexShrink: 0 }} />
+              {staleAttachments.count > 0 && (
+                <StaleEmbeddingsBanner
+                  count={staleAttachments.count}
+                  model={staleAttachments.currentModel}
+                  onReindex={onReindexAllStale}
+                  onDismiss={() => setStaleAttachments({ count: 0, currentModel: staleAttachments.currentModel })}
+                  busy={reindexingStale}
                 />
-                <Composer
-                  model={tabModel}
-                  onModelChange={(id) => {
-                    setModelId(id);
-                    setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, model: id } : t));
-                    // User explicitly picked a model — persist as the
-                    // stable default for future new chats. This is the
-                    // ONLY place we write to COMPOSER_MODEL_LS_KEY (no
-                    // auto-persist on modelId change), so opening an
-                    // old chat doesn't drift the default.
-                    persistComposerModel(id);
-                  }}
-                  onSend={handleSend}
+              )}
+              {chat.tabType === 'multi-pending' ? (
+                // Compare-mode chats route to the panel UI. handleSendMultiModel
+                // fans out the first message to every model in chat.models;
+                // keepVariant transitions the tab to 'single-from-multi' and
+                // re-routes future renders through the branch below.
+                <CompareChatPane
+                  chat={chat}
                   isStreaming={streaming}
-                  onStop={handleStop}
+                  onSend={handleSendMultiModel}
+                  onStopAll={() => handleStopMultiModel()}
+                  onStopColumn={(asstId) => handleStopMultiModel(asstId)}
+                  onKeep={keepVariant}
+                  onCancel={() => closeTab(activeTab)}
                   attachedPrompts={attachedPrompts}
                   onDetachPrompt={detachPrompt}
-                  // Locked-pin enforcement: for chats inside a Space,
-                  // resolve the set of slugs flagged `locked=true` in
-                  // `space_prompts`. The Composer hides the × on those
-                  // chips so the user can't detach a Space-mandated
-                  // prompt from one chat. Resolved at render time (not
-                  // snapshotted into the chat) — unlocking later flows
-                  // through to every open chat on the next render.
-                  lockedPromptSlugs={
-                    chat.spaceId
-                      ? (lockedSlugsBySpace[chat.spaceId] || EMPTY_LOCKED_SET)
-                      : EMPTY_LOCKED_SET
-                  }
-                  // Full library for the in-composer slash-command picker.
-                  // Filter out _virtual prompts (watch-notes carriers) per
-                  // the rule in CLAUDE.md — they're context blobs that
-                  // shouldn't appear as user-selectable presets.
-                  prompts={prompts.filter(p => !p._virtual)}
-                  onPickPrompt={togglePromptAttach}
-                  attachments={attachments}
-                  onAttachFile={onAttachFile}
-                  onAttachFolder={onAttachFolder}
-                  onDetachAttachment={onDetachAttachment}
-                  onReindexAttachment={onReindexAttachment}
-                  modelHasVision={activeModelHasVision}
-                  modelHasTools={activeModelHasTools}
-                  seedText={composerSeedText}
-                  seedKey={composerSeedKey}
-                  focusSignal={composerFocusKey}
-                  // Hide attach buttons in private mode — see Composer notes.
-                  ephemeral={!!chat.ephemeral}
-                  // When off (default), the capability chip collapses to a
-                  // quiet ⓘ tooltip beside the model picker.
-                  showDetails={tweaks.showDetails}
+                  engineCtx={engineCtx}
                 />
-              </>
-            )}
-          </div>
-
-          {rightPanelOpen && (
-            <>
-              <Resizer onDrag={(dx) => {
-                if (dx === 0) rightPanelStartRef.current = rightPanelWidth;
-                setRightPanelWidth(Math.max(280, Math.min(600, rightPanelStartRef.current - dx)));
-              }} />
-              {/* Tab bar is built once and passed as a prop to whichever  */}
-              {/* tab's component is rendering — keeps the two tabs from   */}
-              {/* having to re-implement the chrome each time.             */}
-              {(() => {
-                const tabHeader = (
-                  <RightPanelTabs
-                    tab={rightPanelTab}
-                    onTab={setRightPanelTab}
-                    onClose={() => setRightPanelOpen(false)}
-                  />
-                );
-                if (rightPanelTab === 'prompts') {
-                  return (
-                    <PromptLibrary
-                      tabHeader={tabHeader}
-                      // Hide _virtual prompts — these are transient,
-                      // session-only contexts (e.g. notes-from-a-watch)
-                      // that get attached behind the scenes by features
-                      // like "Chat with notes". They're real in the
-                      // attached-prompts flow but shouldn't clutter the
-                      // user-visible library.
-                      prompts={prompts.filter((p) => !p._virtual)}
-                      selectedId={selectedPromptId}
-                      onSelect={setSelectedPromptId}
-                      onUse={togglePromptAttach}
-                      attachedIds={attachedPromptIds}
-                      onUpdate={updatePrompt}
-                      onCreate={createPrompt}
-                      onDelete={deletePrompt}
-                      onRefresh={refreshPrompts}
-                      onImport={importPromptFromFile}
-                      width={rightPanelWidth}
-                    />
-                  );
-                }
-                if (rightPanelTab === 'files') {
-                  return (
-                    <FilesPanel
-                      tabHeader={tabHeader}
-                      width={rightPanelWidth}
-                      chatId={activeTab}
-                      // Click a row → scroll the chat scroller to the
-                      // message that produced this save. Message divs in
-                      // chat.jsx carry id="ek-msg-{m.id}" so we can find
-                      // them without prop-drilling refs through ChatPane.
-                      onScrollToMessage={(messageId) => {
-                        const el = document.getElementById(`ek-msg-${messageId}`);
-                        if (el) {
-                          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                          // Brief amber pulse on the targeted message so the
-                          // user notices where the scroll landed.
-                          el.style.transition = 'background 0.6s ease';
-                          const prev = el.style.background;
-                          el.style.background = T.amber + '22';
-                          setTimeout(() => { el.style.background = prev; }, 900);
+              ) : (
+                <>
+                  <ChatPane
+                    // Pre-process so picked variants carry their unpicked
+                    // siblings as m.alternatives, then drop the unpicked
+                    // rows from the rendered list. Single-mode chats have
+                    // isPicked=null/undefined everywhere, so the pipeline
+                    // is a no-op for them (no group → no alternatives).
+                    //
+                    // The unpicked rows stay in the DB and in chat.messages
+                    // (we only filter at the render-site copy here), so a
+                    // future feature that wants them — re-comparing, picking
+                    // again, exporting variant history — can read from
+                    // chat.messages directly.
+                    chat={(() => {
+                      const raw = chat.messages || [];
+                      // Group unpicked siblings by variantGroupId. Keys
+                      // are stable opaque ids generated at send time;
+                      // O(N) build is fine since N is small.
+                      const unpickedByGroup = new Map();
+                      for (const m of raw) {
+                        if (m.isPicked === 0 && m.variantGroupId) {
+                          const list = unpickedByGroup.get(m.variantGroupId) || [];
+                          list.push(m);
+                          unpickedByGroup.set(m.variantGroupId, list);
                         }
-                      }}
-                    />
-                  );
-                }
-                return (
-                  <WatchPanel
-                    tabHeader={tabHeader}
-                    width={rightPanelWidth}
-                    prompts={prompts}
-                    onConfigure={() => {
-                      // "+ Configure" now opens the recipe picker first; the
-                      // chosen recipe pre-fills the WatchModal.
-                      setRecipePickerOpen(true);
-                    }}
-                    onPickRecipe={(recipe) => {
-                      setEditingWatch(null);
-                      setWatchTemplate(recipe && recipe.custom ? null : recipe);
-                      setWatchModalOpen(true);
-                    }}
-                    onChatAboutToday={chatAboutToday}
-                    onEdit={(w) => {
-                      setEditingWatch(w);
-                      setWatchTemplate(null);
-                      setWatchModalOpen(true);
-                    }}
-                    onChatWithNotes={chatWithNotes}
-                    refreshKey={watchPanelRefreshKey}
-                    focusFilter={watchFocusFilter}
+                      }
+                      const messages = raw
+                        .filter(m => m.isPicked !== 0)
+                        .map(m => {
+                          if (m.isPicked === 1 && m.variantGroupId) {
+                            const alts = unpickedByGroup.get(m.variantGroupId);
+                            if (alts?.length) return { ...m, alternatives: alts };
+                          }
+                          return m;
+                        });
+                      return { ...chat, messages };
+                    })()}
+                    model={tabModel}
+                    isStreaming={streaming}
+                    onRename={renameChat}
+                    // Propagate the sidebar search query so messages can highlight
+                    // matches in-place. Empty/whitespace queries are handled inside
+                    // ChatPane (regex becomes null, render is unchanged).
+                    searchQuery={query}
+                    // Edit + retry (Phase 3). Both go through truncateAndResend,
+                    // gated by streaming inside the handlers themselves so the UI
+                    // doesn't need to know.
+                    onEditMessage={handleEditAndResubmit}
+                    onRetryMessage={handleRetryAssistant}
+                    // Continue a reply the provider cut at the token/ctx
+                    // limit (doneReason 'length' on the last assistant
+                    // message — the chip renders only there).
+                    onContinue={handleContinue}
+                    // Resolved Space row for this chat (or null). Used by
+                    // ChatPane to render the Space badge in the header.
+                    // Resolved at the parent so ChatPane stays presentation-
+                    // only and doesn't need the spaces array.
+                    space={chat.spaceId ? (spaces || []).find(s => s.id === chat.spaceId) || null : null}
+                    // Progressive disclosure: when off (default), per-message
+                    // token/timing footers collapse to a quiet "Details" toggle.
+                    showDetails={tweaks.showDetails}
+                    // Bundled engine's context window, so the footer can show
+                    // input as a budget against it. Null on Ollama/BYO.
+                    engineCtx={engineCtx}
+                    // Empty-state starter cards attach a matching library
+                    // prompt (falling back to seeding example text).
+                    onStarter={handleStarterPrompt}
                   />
-                );
-              })()}
-            </>
-          )}
+                  <Composer
+                    model={tabModel}
+                    onModelChange={(id) => {
+                      setModelId(id);
+                      setTabs(ts => ts.map(t => t.id === activeTab ? { ...t, model: id } : t));
+                      // User explicitly picked a model — persist as the
+                      // stable default for future new chats. This is the
+                      // ONLY place we write to COMPOSER_MODEL_LS_KEY (no
+                      // auto-persist on modelId change), so opening an
+                      // old chat doesn't drift the default.
+                      persistComposerModel(id);
+                    }}
+                    onSend={handleSend}
+                    isStreaming={streaming}
+                    onStop={handleStop}
+                    attachedPrompts={attachedPrompts}
+                    onDetachPrompt={detachPrompt}
+                    // Locked-pin enforcement: for chats inside a Space,
+                    // resolve the set of slugs flagged `locked=true` in
+                    // `space_prompts`. The Composer hides the × on those
+                    // chips so the user can't detach a Space-mandated
+                    // prompt from one chat. Resolved at render time (not
+                    // snapshotted into the chat) — unlocking later flows
+                    // through to every open chat on the next render.
+                    lockedPromptSlugs={
+                      chat.spaceId
+                        ? (lockedSlugsBySpace[chat.spaceId] || EMPTY_LOCKED_SET)
+                        : EMPTY_LOCKED_SET
+                    }
+                    // Full library for the in-composer slash-command picker.
+                    // Filter out _virtual prompts (watch-notes carriers) per
+                    // the rule in CLAUDE.md — they're context blobs that
+                    // shouldn't appear as user-selectable presets.
+                    prompts={prompts.filter(p => !p._virtual)}
+                    onPickPrompt={togglePromptAttach}
+                    attachments={attachments}
+                    onAttachFile={onAttachFile}
+                    onAttachFolder={onAttachFolder}
+                    onDetachAttachment={onDetachAttachment}
+                    onReindexAttachment={onReindexAttachment}
+                    modelHasVision={activeModelHasVision}
+                    modelHasTools={activeModelHasTools}
+                    seedText={composerSeedText}
+                    seedKey={composerSeedKey}
+                    focusSignal={composerFocusKey}
+                    // Hide attach buttons in private mode — see Composer notes.
+                    ephemeral={!!chat.ephemeral}
+                    // When off (default), the capability chip collapses to a
+                    // quiet ⓘ tooltip beside the model picker.
+                    showDetails={tweaks.showDetails}
+                  />
+                </>
+              )}
+          </div>
         </div>
 
-        {tweaks.showStatusBar && (
-          <StatusBar
-            model={tabModel}
-            backendKind={backendKind}
-            onOllamaClick={() => setSetupGateOpen(true)}
-            warming={modelWarming}
-            // Flatten all chats' attachments and surface anything in
-            // 'indexing'. Aggregated across the whole window so a long
-            // folder index in chat A stays visible while the user works
-            // in chat B.
-            indexingAttachments={Object.values(chatAttachments)
-              .flat()
-              .filter((a) => a.status === 'indexing')}
-          />
+        {rightPanelOpen && (
+          <>
+            <Resizer onDrag={(dx) => {
+              if (dx === 0) rightPanelStartRef.current = rightPanelWidth;
+              setRightPanelWidth(Math.max(280, Math.min(600, rightPanelStartRef.current - dx)));
+            }} />
+            {/* Tab bar is built once and passed as a prop to whichever  */}
+            {/* tab's component is rendering — keeps the two tabs from   */}
+            {/* having to re-implement the chrome each time.             */}
+            {(() => {
+              const tabHeader = (
+                <RightPanelTabs
+                  tab={rightPanelTab}
+                  onTab={setRightPanelTab}
+                  onClose={() => setRightPanelOpen(false)}
+                />
+              );
+              if (rightPanelTab === 'prompts') {
+                return (
+                  <PromptLibrary
+                    tabHeader={tabHeader}
+                    // Hide _virtual prompts — these are transient,
+                    // session-only contexts (e.g. notes-from-a-watch)
+                    // that get attached behind the scenes by features
+                    // like "Chat with notes". They're real in the
+                    // attached-prompts flow but shouldn't clutter the
+                    // user-visible library.
+                    prompts={prompts.filter((p) => !p._virtual)}
+                    selectedId={selectedPromptId}
+                    onSelect={setSelectedPromptId}
+                    onUse={togglePromptAttach}
+                    attachedIds={attachedPromptIds}
+                    onUpdate={updatePrompt}
+                    onCreate={createPrompt}
+                    onDelete={deletePrompt}
+                    onRefresh={refreshPrompts}
+                    onImport={importPromptFromFile}
+                    width={rightPanelWidth}
+                  />
+                );
+              }
+              if (rightPanelTab === 'files') {
+                return (
+                  <FilesPanel
+                    tabHeader={tabHeader}
+                    width={rightPanelWidth}
+                    chatId={activeTab}
+                    // Click a row → scroll the chat scroller to the
+                    // message that produced this save. Message divs in
+                    // chat.jsx carry id="ek-msg-{m.id}" so we can find
+                    // them without prop-drilling refs through ChatPane.
+                    onScrollToMessage={(messageId) => {
+                      const el = document.getElementById(`ek-msg-${messageId}`);
+                      if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        // Brief amber pulse on the targeted message so the
+                        // user notices where the scroll landed.
+                        el.style.transition = 'background 0.6s ease';
+                        const prev = el.style.background;
+                        el.style.background = T.amber + '22';
+                        setTimeout(() => { el.style.background = prev; }, 900);
+                      }
+                    }}
+                  />
+                );
+              }
+              return (
+                <WatchPanel
+                  tabHeader={tabHeader}
+                  width={rightPanelWidth}
+                  prompts={prompts}
+                  onConfigure={() => {
+                    // "+ Configure" now opens the recipe picker first; the
+                    // chosen recipe pre-fills the WatchModal.
+                    setRecipePickerOpen(true);
+                  }}
+                  onPickRecipe={(recipe) => {
+                    setEditingWatch(null);
+                    setWatchTemplate(recipe && recipe.custom ? null : recipe);
+                    setWatchModalOpen(true);
+                  }}
+                  onChatAboutToday={chatAboutToday}
+                  onEdit={(w) => {
+                    setEditingWatch(w);
+                    setWatchTemplate(null);
+                    setWatchModalOpen(true);
+                  }}
+                  onChatWithNotes={chatWithNotes}
+                  refreshKey={watchPanelRefreshKey}
+                  focusFilter={watchFocusFilter}
+                />
+              );
+            })()}
+          </>
         )}
       </div>
     </>

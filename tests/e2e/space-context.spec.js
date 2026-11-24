@@ -120,17 +120,19 @@ async function mountSidebar(page, opts = {}) {
   }, opts);
 }
 
-test("Sidebar: private/lock button is visible when no Space is active", async ({ page }) => {
+test("Sidebar: a private chat can be started in General", async ({ page }) => {
   await mountSidebar(page, {
     spaces: [
       { id: "s1", name: "Novel", slug: "novel", color: "amber", sortIndex: 0, createdAt: 1, updatedAt: 1 },
     ],
     activeSpaceId: null,
   });
+  // It sits behind the arrow beside New chat.
+  await page.locator("[data-new-chat-more]").click();
   await expect(page.getByLabel("New private chat")).toBeVisible();
 });
 
-test("Sidebar: private/lock button is ALSO visible when a Space is active", async ({ page }) => {
+test("Sidebar: a private chat can ALSO be started inside a workspace", async ({ page }) => {
   // A private chat is ephemeral and Space-agnostic, so the affordance
   // stays available inside a Space too — starting one just opens a
   // scratch chat that doesn't inherit the Space.
@@ -140,5 +142,6 @@ test("Sidebar: private/lock button is ALSO visible when a Space is active", asyn
     ],
     activeSpaceId: "s1",
   });
+  await page.locator("[data-new-chat-more]").click();
   await expect(page.getByLabel("New private chat")).toBeVisible();
 });

@@ -1142,12 +1142,6 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               </Row>
 
               <SectionLabel label="Layout" />
-              <Row label="Show status bar">
-                <Toggle
-                  value={tweaks.showStatusBar}
-                  onChange={(v) => setTweak("showStatusBar", v)}
-                />
-              </Row>
               <Row label="Show technical details">
                 <Toggle
                   value={tweaks.showDetails}

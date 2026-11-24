@@ -60,6 +60,14 @@ const {
   restoreMathSegments,
   replyImageIsInline,
   externalLinkTarget,
+  chatsInWorkspace,
+  workspaceSummaries,
+  recentChatItems,
+  tabWorkspaceId,
+  unsavedTabsForWorkspace,
+  nextTabInWorkspace,
+  privacyStatus,
+  workspaceDocsLabel,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -1875,3 +1883,112 @@ test("externalLinkTarget: only http(s) and mailto are handed to the browser", ()
   assert.equal(externalLinkTarget(""), null);
   assert.equal(externalLinkTarget(undefined), null);
 });
+
+// ── Workspaces ──────────────────────────────────────────────────────────────
+
+const WS_ROWS = [
+  { id: "a", title: "A", spaceId: "s1", createdAt: 100, updatedAt: 500 },
+  { id: "b", title: "B", spaceId: "s1", createdAt: 200, updatedAt: 300 },
+  { id: "c", title: "C", spaceId: null, createdAt: 300, updatedAt: 900 },
+  { id: "d", title: "D", createdAt: 400, updatedAt: 400 },
+  { id: "e", title: "E", spaceId: "s2", createdAt: 50, updatedAt: 0,
+    tabType: "multi-pending", multiModels: '["m1","m2"]' },
+];
+
+test("chatsInWorkspace: a Space gets its own chats, General gets the unfiled ones", () => {
+  assert.deepEqual(chatsInWorkspace(WS_ROWS, "s1").map((c) => c.id), ["a", "b"]);
+  assert.deepEqual(chatsInWorkspace(WS_ROWS, null).map((c) => c.id), ["c", "d"]);
+  assert.deepEqual(chatsInWorkspace(WS_ROWS, undefined).map((c) => c.id), ["c", "d"]);
+  assert.deepEqual(chatsInWorkspace(WS_ROWS, "nope"), []);
+  assert.deepEqual(chatsInWorkspace(null, "s1"), []);
+});
+
+test("workspaceSummaries: counts and last activity per workspace, General under ''", () => {
+  const s = workspaceSummaries(WS_ROWS);
+  assert.deepEqual(s.s1, { chats: 2, lastActive: 500 });
+  assert.deepEqual(s[""], { chats: 2, lastActive: 900 });
+  // No updatedAt → falls back to createdAt.
+  assert.deepEqual(s.s2, { chats: 1, lastActive: 50 });
+  assert.deepEqual(workspaceSummaries(undefined), {});
+});
+
+test("recentChatItems: newest first across workspaces, in the sidebar's item shape", () => {
+  const items = recentChatItems(WS_ROWS, 3);
+  assert.deepEqual(items.map((i) => i.id), ["c", "a", "d"]);
+  assert.equal(items[0].spaceId, null);
+  assert.equal(items[1].spaceId, "s1");
+  assert.equal(typeof items[0].when, "string");
+  // A comparison keeps its model list so it reopens as a comparison.
+  const cmp = recentChatItems(WS_ROWS).find((i) => i.id === "e");
+  assert.equal(cmp.tabType, "multi-pending");
+  assert.deepEqual(cmp.models, ["m1", "m2"]);
+  assert.deepEqual(recentChatItems(null, 4), []);
+});
+
+test("tabWorkspaceId: a Space, else where a private chat was started, else General", () => {
+  assert.equal(tabWorkspaceId({ id: "t", spaceId: "s1" }), "s1");
+  assert.equal(tabWorkspaceId({ id: "t", ephemeral: true, homeSpaceId: "s2" }), "s2");
+  assert.equal(tabWorkspaceId({ id: "t" }), null);
+  assert.equal(tabWorkspaceId(null), null);
+});
+
+test("unsavedTabsForWorkspace: private chats started here, plus the unsent chat in front", () => {
+  const tabs = [
+    { id: "saved", spaceId: "s1" },
+    { id: "draft", spaceId: "s1" },
+    { id: "old-draft", spaceId: "s1" },
+    { id: "priv", ephemeral: true, homeSpaceId: "s1" },
+    { id: "priv-elsewhere", ephemeral: true },
+    { id: "general-draft" },
+  ];
+  const saved = new Set(["saved"]);
+  assert.deepEqual(
+    unsavedTabsForWorkspace(tabs, saved, "s1", "draft").map((t) => t.id),
+    ["draft", "priv"],
+  );
+  // A private chat stays listed when it is not in front; an unsent chat does not.
+  assert.deepEqual(
+    unsavedTabsForWorkspace(tabs, saved, "s1", "saved").map((t) => t.id),
+    ["priv"],
+  );
+  assert.deepEqual(
+    unsavedTabsForWorkspace(tabs, ["saved"], null, "general-draft").map((t) => t.id),
+    ["priv-elsewhere", "general-draft"],
+  );
+  assert.deepEqual(unsavedTabsForWorkspace(null, saved, "s1", "x"), []);
+});
+
+test("nextTabInWorkspace: stays in the workspace, prefers the remembered chat", () => {
+  const tabs = [{ id: "a", spaceId: "s1" }, { id: "b", spaceId: "s1" }, { id: "g" }];
+  assert.equal(nextTabInWorkspace(tabs, "s1", "a"), "a");
+  assert.equal(nextTabInWorkspace(tabs, "s1", "gone"), "b");
+  assert.equal(nextTabInWorkspace(tabs, null), "g");
+  // Nothing open here: the caller starts a new chat. Never another workspace's.
+  assert.equal(nextTabInWorkspace(tabs, "s2", "a"), null);
+  assert.equal(nextTabInWorkspace([], "s1"), null);
+});
+
+test("privacyStatus: local backends stay on this Mac, a remote server is named", () => {
+  assert.deepEqual(privacyStatus("engine", null), { kind: "local", text: "Chats stay on this Mac" });
+  assert.equal(privacyStatus("ollama", null).kind, "local");
+  assert.equal(privacyStatus("openai", "http://127.0.0.1:1234").kind, "local");
+  const remote = privacyStatus("openai", "https://office-mac.local:8080/v1");
+  assert.equal(remote.kind, "server");
+  assert.equal(remote.text, "Using server: office-mac.local");
+  assert.equal(privacyStatus("ollama", "192.168.1.50:11434").text, "Using server: 192.168.1.50");
+  // A custom backend with no address is not local, and has no host to name.
+  assert.equal(privacyStatus("openai", "").text, "Using another server");
+});
+
+test("workspaceDocsLabel: the folder's last two segments, else a file count", () => {
+  assert.equal(workspaceDocsLabel([{ kind: "folder", path: "/Users/x/Matters/Hartwell" }]), "Matters/Hartwell");
+  assert.equal(
+    workspaceDocsLabel([{ kind: "file", path: "/a/b.pdf" }, { kind: "folder", path: "/Users/x/Matters/Hartwell/" }]),
+    "Matters/Hartwell +1 more",
+  );
+  assert.equal(workspaceDocsLabel([{ kind: "file", path: "/a/b.pdf" }]), "1 file");
+  assert.equal(workspaceDocsLabel([{ kind: "file", path: "/a" }, { kind: "file", path: "/b" }]), "2 files");
+  assert.equal(workspaceDocsLabel([]), "");
+  assert.equal(workspaceDocsLabel(null), "");
+});
+

@@ -1,138 +1,76 @@
-// shell.jsx -- App chrome: TitleBar, Sidebar, ChatRow,
-//   MessageHitRow, TabBar, Tab, RightPanelTabs, StatusBar.
-// Depends on: tokens, atoms, icons, data (MODELS).
+// shell.jsx -- App chrome: window-drag helpers, Sidebar (one workspace),
+//   Space dialogs, ChatRow, MessageHitRow, RightPanelTabs, StatusLine, MoreMenu.
+// Depends on: tokens, atoms, icons, data (MODELS), utils.
 
-// ─── Title bar ──────────────────────────────────────────────
-// Window is configured with titleBarStyle: "Overlay" + hiddenTitle: true —
-// macOS draws native traffic lights overlaying our toolbar's top-left. We
-// leave an ~88px gutter for them so the Sidebar button has breathing room.
+// ─── Window chrome ──────────────────────────────────────────
+// The window is configured with titleBarStyle: "Overlay" + hiddenTitle:
+// true, so macOS draws its traffic lights over our top-left corner and
+// there is no native title bar to drag. Whatever sits at the top of the
+// window (the Home bar, the workspace sidebar's head, the strip above the
+// conversation) spreads WINDOW_DRAG onto itself and leaves
+// TRAFFIC_LIGHT_GUTTER clear where the lights sit.
 'use strict';
 const TRAFFIC_LIGHT_GUTTER = 88;
+// Height of the strip the traffic lights live in.
+const WINDOW_TOP_STRIP = 36;
 
-function TitleBar({
-  onToggleSidebar,
-  onTogglePrompts,
-  onToggleTweaks,
-  onToggleWatch,
-  onToggleFiles,
-  sidebarOpen,
-  // The right panel is shared between the Prompts / Watches / Files tabs.
-  // We get the open flag + the current tab so each button can render
-  // an accurate "active" state.
-  rightPanelOpen,
-  rightPanelTab,
-  model,
-}) {
-  // Drive dragging from JS instead of relying on data-tauri-drag-region:
-  // the attribute-based path was firing inconsistently (likely an interaction
-  // between withGlobalTauri injection timing and the cascade). Calling the
-  // OS drag API directly removes every variable.
-  const onTitleBarMouseDown = async (e) => {
-    if (e.button !== 0) return;
-    if (e.target.closest("button, a, input, textarea, select")) return;
-    const winApi = getWindowApi();
-    const current =
-      winApi?.getCurrentWindow?.() ??
-      winApi?.getCurrent?.() ??
-      winApi?.appWindow ??
-      null;
-    if (current?.startDragging) {
-      try {
-        await current.startDragging();
-      } catch {}
-    }
-  };
-
-  // Double-click on the title bar should zoom (matches native macOS behavior).
-  const onTitleBarDoubleClick = async (e) => {
-    if (e.target.closest("button, a, input, textarea, select")) return;
-    const winApi = getWindowApi();
-    const current =
-      winApi?.getCurrentWindow?.() ??
-      winApi?.getCurrent?.() ??
-      winApi?.appWindow ??
-      null;
-    if (current?.toggleMaximize) {
-      try {
-        await current.toggleMaximize();
-      } catch {}
-    }
-  };
-
+function ekCurrentWindow() {
+  const winApi = getWindowApi();
   return (
-    <div
-      onMouseDown={onTitleBarMouseDown}
-      onDoubleClick={onTitleBarDoubleClick}
-      style={{
-        height: 36,
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "center",
-        gap: 4,
-        paddingLeft: TRAFFIC_LIGHT_GUTTER,
-        paddingRight: 6,
-        borderBottom: `1px solid ${T.border}`,
-        background: T.bg1,
-      }}
-    >
-      <IconButton
-        icon={I.Sidebar}
-        onClick={onToggleSidebar}
-        active={sidebarOpen}
-        title={`Toggle history (${MOD_GLYPH}\\)`}
-      >
-        History
-      </IconButton>
-      <div style={{ flex: 1, alignSelf: "stretch" }} />
-      <IconButton
-        icon={I.Library}
-        onClick={onTogglePrompts}
-        active={rightPanelOpen && rightPanelTab === "prompts"}
-        title="Prompt library"
-        tint={T.purple}
-      >
-        Prompts
-      </IconButton>
-      <IconButton
-        icon={I.Eye}
-        onClick={onToggleWatch}
-        active={rightPanelOpen && rightPanelTab === "watches"}
-        title="Watches — folder→notes pipelines"
-        tint={T.amber}
-      >
-        Watch
-      </IconButton>
-      <IconButton
-        icon={I.File || I.Library}
-        onClick={onToggleFiles}
-        active={rightPanelOpen && rightPanelTab === "files"}
-        title="Files saved by this chat"
-        tint={T.blue}
-      >
-        Files
-      </IconButton>
-      <IconButton icon={I.Settings} onClick={onToggleTweaks} title="Settings">
-        Settings
-      </IconButton>
-    </div>
+    winApi?.getCurrentWindow?.() ??
+    winApi?.getCurrent?.() ??
+    winApi?.appWindow ??
+    null
   );
 }
 
+// Controls inside a drag area keep their own clicks.
+const WINDOW_DRAG_EXEMPT = "button, a, input, textarea, select, [role='menu'], [data-no-drag]";
+
+// Drive dragging from JS instead of relying on data-tauri-drag-region:
+// the attribute-based path fired inconsistently (likely an interaction
+// between withGlobalTauri injection timing and the cascade). Calling the
+// OS drag API directly removes every variable.
+async function ekWindowDragMouseDown(e) {
+  if (e.button !== 0) return;
+  if (e.target.closest(WINDOW_DRAG_EXEMPT)) return;
+  const current = ekCurrentWindow();
+  if (current?.startDragging) {
+    try {
+      await current.startDragging();
+    } catch {}
+  }
+}
+
+// Double-click zooms the window, as a native macOS title bar does.
+async function ekWindowDragDoubleClick(e) {
+  if (e.target.closest(WINDOW_DRAG_EXEMPT)) return;
+  const current = ekCurrentWindow();
+  if (current?.toggleMaximize) {
+    try {
+      await current.toggleMaximize();
+    } catch {}
+  }
+}
+
+const WINDOW_DRAG = {
+  onMouseDown: ekWindowDragMouseDown,
+  onDoubleClick: ekWindowDragDoubleClick,
+};
+
 // ─── Sidebar ────────────────────────────────────────────────
+// The left rail of the workspace window. It shows ONE workspace: a way
+// back to Home, the workspace's name, the New chat control, a search box
+// scoped to this workspace, and its chats.
 //
-// History layout (top → bottom):
-//   • Search box
-//   • New chat / private / compare buttons
-//   • Spaces section (with the "All chats" pseudo-row at the top and a
-//     "+ New Space" button below the Space rows)
-//   • Date sections (Today / Yesterday / Last 7 days / Last 30 days /
-//     Older) for chats in the current view — filtered upstream by the
-//     active Space
-//   • Message-content hits from full-text search (only when searching)
+// Switching workspaces is Home's job (home.jsx), so nothing here lists
+// them. A workspace is a Space; "General" (activeSpaceId null) is every
+// chat that has no Space.
 //
-// `chats` is the `{ dateSections }` shape from `bucketChatsByDate` in
-// utils.js. Filtering by the search query operates on the date-section
-// items only.
+// The chat list arrives pre-filtered to this workspace (main.jsx). Above
+// the saved chats sit `openTabs`: open chats the saved list cannot show —
+// private chats, which are never saved, and the unsent chat in front (see
+// unsavedTabsForWorkspace in utils.js).
 function Sidebar({
   chats,
   activeId,
@@ -145,29 +83,33 @@ function Sidebar({
   onNewPrivate,
   onNewCompare,
   width,
-  // Space management. `spaces` is the raw [{id, name, slug, color, …}]
-  // list from `space_list`. `activeSpaceId` is the currently-selected
-  // Space (or null for the "All chats" pseudo-row); the chat list is
-  // pre-filtered upstream in main.jsx, so the Sidebar only renders the
-  // section UI + dispatches actions. See ui/main.jsx for the filter.
+  // Back to the workspaces screen.
+  onHome,
+  // `spaces` is the raw [{id, name, slug, color, …}] list from
+  // `space_list`; `activeSpaceId` is the workspace on show (null = General).
   spaces = [],
   activeSpaceId = null,
-  onSelectSpace,
-  onCreateSpace,
-  onRenameSpace,
-  onRecolorSpace,
-  onDeleteSpace,
   onMoveChatToSpace,
-  // The Space settings modal needs the live prompts library so the user
-  // can pick which prompts to pin. List is shared with the prompt
-  // library panel — main.jsx owns the fetch, here it's just plumbing.
+  // The workspace settings dialog needs the live prompts library so the
+  // user can pick which prompts to pin. main.jsx owns the fetch.
   promptsLibrary = [],
   onEditSpaceSave,
-  // Full-text-search hits (from messages_fts MATCH bm25). Empty when no
-  // query is active. Owner: App in main.jsx, populated by a debounced
-  // invoke to the `search_chats` Rust command.
+  // Where this workspace's documents live, e.g. "Matters/Hartwell"
+  // (workspaceDocsLabel in utils.js). Empty when nothing is pinned.
+  docsLabel = "",
+  // Unsaved open chats to list above the saved ones: [{id, title,
+  // ephemeral}]. onPickOpen(id) brings one to the front; onCloseOpen(id)
+  // ends a private chat.
+  openTabs = [],
+  onPickOpen,
+  onCloseOpen,
+  // Full-text-search hits (from messages_fts MATCH bm25), already limited
+  // to this workspace's chats by main.jsx. Empty when no query is active.
   messageHits = [],
   onPickHit,
+  // The status line and settings menu, built once by main.jsx so Home and
+  // this rail show the same thing.
+  footer = null,
 }) {
   // ── Search filter ──
   // Apply the query to the date-section items. Empty sections are
@@ -185,20 +127,12 @@ function Sidebar({
     };
   }, [chats, query]);
 
-  // Lookup table for the per-chat sidebar dot. The dot color falls back
-  // to the chat's model color (via MODELS_BY_ID), but most user-installed
-  // models aren't in that curated list — they render as the muted fg3
-  // gray. When the chat is in a Space, the Space's color is a much more
-  // useful signal at a glance ("oh this chat is in Novel"), so we
-  // prefer it. Built once per render rather than per-row so a large
-  // sidebar doesn't re-scan the Spaces array N times.
+  // Lookup table for the per-chat sidebar dot: a chat in a coloured Space
+  // wears that colour, which says more than the model's.
   const spaceColorById = useMemo(() => {
     const m = new Map();
     const resolve = window.spaceColorHex;
     for (const s of (spaces || [])) {
-      // Only memoize Spaces that actually have a color set; an unset
-      // color would resolve to fg2 (the same muted fallback the model
-      // dot already uses), which adds no information.
       if (s.color && resolve) m.set(s.id, resolve(s.color));
     }
     return m;
@@ -212,35 +146,35 @@ function Sidebar({
 
   // ── Right-click context menu state ──
   // Single instance at a time — opening a new menu closes any prior.
-  // `chat` is the sidebar-item (with id, title, spaceId, …); `x`/`y` come
-  // from the right-click coords (viewport-relative for `position: fixed`).
   const [rowMenu, setRowMenu] = useState(null);
 
   // ── Chat rename + chat delete modal states ──
   // window.prompt() / window.confirm() are blocked in Tauri's WKWebView
   // (return null silently), so all naming + confirming goes through
-  // proper modals. `renameChatModal.chat` carries the chat row so the
-  // input pre-fills with its current title; `confirmDeleteChat.chat`
-  // carries the row so the body copy can name it.
+  // proper modals.
   const [renameChatModal, setRenameChatModal] = useState(null);
   const [confirmDeleteChat, setConfirmDeleteChat] = useState(null);
-
-  // ── Space modal states ──
-  // `createSpaceModal` is non-null when the create-Space modal is open
-  // (no payload needed — the modal owns its own name + color state).
-  // `renameSpaceModal.space` carries the row being renamed so the input
-  // can pre-fill with the current name.
-  // `recolorSpaceModal.space` carries the row whose color is being
-  // edited — the popover renders the palette anchored next to the row.
-  // `confirmDeleteSpace.space` carries the row being deleted so the
-  // confirm body can name it.
-  const [createSpaceModal, setCreateSpaceModal] = useState(null);
-  const [renameSpaceModal, setRenameSpaceModal] = useState(null);
-  const [recolorSpaceModal, setRecolorSpaceModal] = useState(null);
-  const [confirmDeleteSpace, setConfirmDeleteSpace] = useState(null);
-  // `editSpaceModal.space` is the row being edited; the modal owns its
-  // own draft state for every editable field so cancel reverts cleanly.
+  // `editSpaceModal.space` is the workspace being edited; the dialog owns
+  // its own draft state so cancel reverts cleanly.
   const [editSpaceModal, setEditSpaceModal] = useState(null);
+
+  // ── The New chat menu (the arrow beside the button) ──
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
+  const newMenuRef = useRef(null);
+  useEffect(() => {
+    if (!newMenuOpen) return undefined;
+    const onDown = (e) => {
+      if (newMenuRef.current && !newMenuRef.current.contains(e.target)) setNewMenuOpen(false);
+    };
+    const onKey = (e) => { if (e.key === "Escape") setNewMenuOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [newMenuOpen]);
+  const fromNewMenu = (fn) => () => { setNewMenuOpen(false); fn && fn(); };
 
   // ── Action handlers wired into the row context menu ──
   const handleMenuMoveToSpace = (spaceId) => {
@@ -284,24 +218,34 @@ function Sidebar({
     onDelete(m.chat.id);
   };
 
-  // Space ambient tint — while a Space filter is active, the rail wears
-  // a whisper wash of that Space's color at the top (where the Spaces
-  // section lives), so the browsing context reads ambiently and matches
-  // the chat pane's tinted glows. Same resolver + guards as the pane:
-  // dark themes only, colored Spaces only, else the flat bg1.
+  // Space ambient tint — in a coloured workspace the rail wears a whisper
+  // wash of that colour at the top, matching the chat pane's tinted glows.
+  // Dark themes only, coloured Spaces only, else the flat bg1.
   const activeSpaceRow = activeSpaceId
     ? (spaces || []).find((s) => s.id === activeSpaceId) || null
     : null;
   const railTint = window.spaceAmbientTint
     ? window.spaceAmbientTint(activeSpaceRow, window.SPACE_COLORS, T.isLight)
     : null;
+  const workspaceName = activeSpaceRow ? (activeSpaceRow.name || "Unnamed") : "General";
+  const metaLine = activeSpaceRow
+    ? (docsLabel || "No documents yet")
+    : "Chats that belong to no workspace";
+
+  const sectionLabelStyle = {
+    padding: "10px 16px 4px",
+    fontFamily: T.sans,
+    fontSize: 11.5,
+    fontWeight: 600,
+    color: T.fg2,
+  };
 
   return (
     <aside
       data-sidebar
       data-space-tint={railTint || undefined}
       style={{
-        width: width || 220,
+        width: width || 252,
         flexShrink: 0,
         background: railTint
           ? `radial-gradient(ellipse 130% 24% at 50% 0%, ${railTint}1a, transparent), ${T.bg1}`
@@ -310,191 +254,302 @@ function Sidebar({
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
+        fontFamily: T.sans,
       }}
     >
-      {/* Search box */}
-      <div style={{ padding: 8, borderBottom: `1px solid ${T.border}` }}>
+      {/* Head: the strip the traffic lights sit in, the way back to Home,
+          and the workspace's name. The whole head drags the window. */}
+      <div {...WINDOW_DRAG} data-sidebar-head style={{ padding: "0 12px", flexShrink: 0 }}>
+        <div style={{ height: WINDOW_TOP_STRIP }} />
+        {onHome && (
+          <button
+            type="button"
+            data-back-home
+            onClick={onHome}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 3,
+              padding: "2px 6px 2px 2px",
+              marginLeft: 2,
+              border: "none",
+              borderRadius: 5,
+              background: "transparent",
+              color: T.fg2,
+              fontFamily: T.sans,
+              fontSize: 12.5,
+              cursor: "pointer",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = T.fg; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = T.fg2; }}
+          >
+            <I.ChevronL size={12} />
+            <span>Workspaces</span>
+          </button>
+        )}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "4px 6px 0" }}>
+          <div
+            data-workspace-name
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 15,
+              fontWeight: 600,
+              lineHeight: 1.3,
+              color: T.fg,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {workspaceName}
+          </div>
+          {activeSpaceRow && (
+            <button
+              type="button"
+              data-workspace-settings
+              aria-label="Workspace settings"
+              title="Workspace settings"
+              onClick={() => setEditSpaceModal({ space: activeSpaceRow })}
+              style={{
+                width: 24,
+                height: 24,
+                marginTop: -2,
+                display: "grid",
+                placeItems: "center",
+                border: "none",
+                borderRadius: 6,
+                background: "transparent",
+                color: T.fg2,
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = T.fg; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = T.fg2; }}
+            >
+              <I.Settings size={14} />
+            </button>
+          )}
+        </div>
+        <div
+          data-workspace-meta
+          style={{
+            padding: "1px 6px 0",
+            fontSize: 12,
+            color: T.fg2,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {metaLine}
+        </div>
+      </div>
+
+      {/* New chat, with the two other kinds of chat behind the arrow. A
+          private chat is never saved and inherits nothing from the
+          workspace it is started in; a comparison asks two or three models
+          the same question. */}
+      <div ref={newMenuRef} style={{ margin: "12px 12px 8px", display: "flex", gap: 6, position: "relative" }}>
+        <button
+          type="button"
+          data-new-chat
+          onClick={onNew}
+          style={{
+            flex: 1,
+            height: 34,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 7,
+            background: T.bg0,
+            border: `1px solid ${T.border}`,
+            borderRadius: 8,
+            color: T.fg,
+            fontFamily: T.sans,
+            fontSize: 13,
+            fontWeight: 500,
+            cursor: "pointer",
+          }}
+        >
+          <I.Plus size={12} />
+          <span>New chat</span>
+        </button>
+        <button
+          type="button"
+          data-new-chat-more
+          aria-label="Other kinds of chat"
+          aria-haspopup="menu"
+          aria-expanded={newMenuOpen}
+          onClick={() => setNewMenuOpen((o) => !o)}
+          style={{
+            width: 34,
+            height: 34,
+            display: "grid",
+            placeItems: "center",
+            background: newMenuOpen ? T.bg3 : T.bg0,
+            border: `1px solid ${T.border}`,
+            borderRadius: 8,
+            color: T.fg1,
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          <I.Chevron size={12} />
+        </button>
+        {newMenuOpen && (
+          <div
+            role="menu"
+            data-new-chat-menu
+            style={{
+              position: "absolute",
+              top: "calc(100% + 6px)",
+              left: 0,
+              minWidth: 236,
+              padding: 4,
+              background: T.bg2,
+              border: `1px solid ${T.border}`,
+              borderRadius: 8,
+              boxShadow: T.shadowPop,
+              zIndex: 60,
+              fontSize: 13,
+            }}
+          >
+            <MenuItem onClick={fromNewMenu(onNew)} data-menu-new-chat>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <I.Chat size={13} />
+                <span style={{ flex: 1 }}>New chat</span>
+                <span style={{ color: T.fg3, fontSize: 11.5 }}>{MOD_GLYPH}N</span>
+              </span>
+            </MenuItem>
+            {onNewPrivate && (
+              <MenuItem onClick={fromNewMenu(onNewPrivate)} data-menu-new-private aria-label="New private chat">
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <I.Lock size={13} />
+                  <span style={{ flex: 1 }}>New private chat</span>
+                  <span style={{ color: T.fg3, fontSize: 11.5 }}>Not saved</span>
+                </span>
+              </MenuItem>
+            )}
+            {onNewCompare && <MenuDivider />}
+            {onNewCompare && (
+              <MenuItem onClick={fromNewMenu(onNewCompare)} data-new-compare aria-label="New comparison chat">
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <I.Columns size={13} />
+                  <span style={{ flex: 1 }}>Compare models…</span>
+                </span>
+              </MenuItem>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Search, scoped to this workspace */}
+      <div style={{ padding: "0 12px 8px" }}>
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 6,
-            background: T.bg2,
-            borderRadius: 5,
-            padding: "0 8px",
-            height: 26,
+            gap: 7,
+            background: T.bg0,
+            borderRadius: 8,
+            padding: "0 10px",
+            height: 32,
             border: `1px solid ${T.border}`,
           }}
         >
-          <I.Search size={11} style={{ color: T.fg3 }} />
+          <I.Search size={13} style={{ color: T.fg3 }} />
           <input
-            placeholder="Search chats…"
+            data-sidebar-search
+            placeholder="Search this workspace"
             value={query}
             onChange={(e) => onQuery(e.target.value)}
             style={{
               flex: 1,
+              minWidth: 0,
               border: "none",
               background: "transparent",
               color: T.fg,
-              fontFamily: T.mono,
-              fontSize: 11,
+              fontFamily: T.sans,
+              fontSize: 13,
               padding: 0,
             }}
           />
-          <span
-            style={{
-              fontFamily: T.mono,
-              fontSize: 9.5,
-              color: T.fg3,
-              letterSpacing: 0.5,
-            }}
-          >
-            {MOD_GLYPH}K
-          </span>
         </div>
       </div>
 
-      {/* New chat + Private chat. The private button is a smaller affordance
-          sharing the same row — discoverable but visually subordinate so it
-          doesn't compete with the primary action. */}
-      <div style={{ margin: 8, display: "flex", gap: 6 }}>
-        <button
-          className="ek-btn-primary"
-          onClick={onNew}
-          style={{
-            flex: 1,
-            padding: "6px 10px",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            background: T.amber + "14",
-            border: `1px solid ${T.amber}40`,
-            borderRadius: 5,
-            color: T.amber,
-            fontFamily: T.mono,
-            fontSize: 11.5,
-            cursor: "pointer",
-          }}
-        >
-          <I.Plus size={11} />
-          <span>New chat</span>
-          <span style={{ flex: 1 }} />
-          <span style={{ color: T.amber + "99", fontSize: 10 }}>{MOD_GLYPH}N</span>
-        </button>
-        {/* Private chat is ALWAYS available, including inside a Space.
-            A private chat is ephemeral — it never reaches the DB — so it
-            deliberately does NOT inherit the active Space's context
-            (system prompt, pinned attachments/prompts, memory). It's a
-            scratch conversation regardless of where you launch it from,
-            and starting one doesn't move you out of the Space you're in. */}
-        {onNewPrivate && (
-          <button
-            onClick={onNewPrivate}
-            title="Private chat — not saved to disk"
-            style={{
-              padding: "6px 8px",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              background: T.bg2,
-              border: `1px solid ${T.border}`,
-              borderRadius: 5,
-              color: T.fg2,
-              fontFamily: T.mono,
-              fontSize: 11.5,
-              cursor: "pointer",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = T.fg; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = T.fg2; }}
-            aria-label="New private chat"
-          >
-            <I.Lock size={11} />
-          </button>
-        )}
-        {onNewCompare && (
-          <button
-            onClick={onNewCompare}
-            title="Compare 2–3 models on the same prompt"
-            style={{
-              padding: "6px 8px",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              background: T.bg2,
-              border: `1px solid ${T.border}`,
-              borderRadius: 5,
-              color: T.fg2,
-              fontFamily: T.mono,
-              fontSize: 11.5,
-              cursor: "pointer",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = T.fg; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = T.fg2; }}
-            aria-label="New comparison chat"
-            data-new-compare
-          >
-            <I.Columns size={11} />
-          </button>
-        )}
-      </div>
-
-      {/* History scroll */}
+      {/* Chats */}
       <div
         style={{
           flex: 1,
           overflowY: "auto",
           minHeight: 0,
-          padding: "4px 0 12px",
+          padding: "0 0 12px",
         }}
       >
-        {/* ── Spaces (workspace bundles) ──
-            Always rendered above groups + date sections. The "All chats"
-            pseudo-row sits at the top; each Space row follows in
-            sort_index order. Clicking a row filters the chat list below
-            (the filter itself is applied upstream in main.jsx so the
-            Sidebar doesn't have to know about chats.spaceId). */}
-        {!searching && onSelectSpace && (
-          <SpacesSection
-            spaces={spaces}
-            activeSpaceId={activeSpaceId}
-            onSelect={onSelectSpace}
-            onRename={(s) => setRenameSpaceModal({ space: s })}
-            onRecolor={(s, anchorRect) => setRecolorSpaceModal({ space: s, anchorRect })}
-            onDelete={(s) => setConfirmDeleteSpace({ space: s })}
-            onEdit={(s) => setEditSpaceModal({ space: s })}
-            onCreate={() => setCreateSpaceModal({})}
-            // Drag-and-drop into a Space row reuses the existing
-            // `onMoveChatToSpace` writer. The Space row is the drop
-            // target; the chat row is already a drag source (the
-            // `text/x-ekorbia-chat-id` dataTransfer payload set by
-            // ChatRow's onDragStart). Passing null for spaceId unfiles
-            // the chat (handled by the "All chats" row).
-            onDropChat={(chatId, spaceId) =>
-              onMoveChatToSpace && onMoveChatToSpace(chatId, spaceId)
-            }
-          />
+        {/* Open chats the saved list cannot show. */}
+        {!searching && openTabs.length > 0 && (
+          <div data-open-chats style={{ padding: "2px 8px 0" }}>
+            {openTabs.map((t) => {
+              const active = t.id === activeId;
+              return (
+                <div
+                  key={t.id}
+                  data-open-chat-id={t.id}
+                  data-open-chat-private={t.ephemeral ? "" : undefined}
+                  data-active={active ? "true" : undefined}
+                  onClick={() => onPickOpen && onPickOpen(t.id)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    height: 30,
+                    padding: "0 8px",
+                    borderRadius: 7,
+                    background: active ? T.bg3 : "transparent",
+                    color: active ? T.fg : T.fg1,
+                    fontSize: 13,
+                    fontWeight: active ? 500 : 400,
+                    cursor: "pointer",
+                  }}
+                >
+                  {t.ephemeral
+                    ? <I.Lock size={12} style={{ color: T.purple }} />
+                    : <I.Chat size={12} style={{ color: T.fg2 }} />}
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {t.title || (t.ephemeral ? "Private chat" : "New chat")}
+                  </span>
+                  {t.ephemeral && onCloseOpen && (
+                    <button
+                      type="button"
+                      data-end-private
+                      aria-label="End this private chat"
+                      title="End this private chat. It is not saved."
+                      onClick={(e) => { e.stopPropagation(); onCloseOpen(t.id); }}
+                      style={{
+                        width: 20,
+                        height: 20,
+                        display: "grid",
+                        placeItems: "center",
+                        border: "none",
+                        borderRadius: 5,
+                        background: "transparent",
+                        color: T.fg2,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <I.X size={10} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
 
         {/* ── Date sections ──
-            Today / Yesterday / Last 7 days / Last 30 days / Older.
-            Chats arrive here already pre-filtered by the active Space
-            (the filter runs upstream in main.jsx before bucketChatsByDate),
-            so this is pure date-bucketing render. */}
+            Today / Yesterday / Last 7 days / Last 30 days / Older. */}
         {(filtered.dateSections || []).map((section) => (
-          <div key={section.section} style={{ marginBottom: 6 }}>
-            <div
-              style={{
-                padding: "8px 14px 4px",
-                fontFamily: T.mono,
-                fontSize: 10,
-                fontWeight: 500,
-                color: T.fg1,
-                textTransform: "uppercase",
-                letterSpacing: 0.6,
-              }}
-            >
-              {section.section}
-            </div>
+          <div key={section.section} style={{ marginBottom: 4 }}>
+            <div style={sectionLabelStyle}>{section.section}</div>
             {section.items.map((c) => {
               const active = c.id === activeId;
               const model = MODELS_BY_ID[c.model];
@@ -516,25 +571,11 @@ function Sidebar({
             })}
           </div>
         ))}
-        {/* Message-content hits (full-text search). Only rendered while a */}
-        {/* query is active. Sits below title-matched chats so the user can */}
-        {/* see the high-confidence matches (titles) first, then dig into   */}
-        {/* deeper content matches.                                         */}
+        {/* Message-content hits (full-text search). Only rendered while a
+            query is active, below the title matches. */}
         {searching && messageHits.length > 0 && (
-          <div style={{ marginTop: 6 }}>
-            <div
-              style={{
-                padding: "8px 14px 4px",
-                fontFamily: T.mono,
-                fontSize: 10,
-                fontWeight: 500,
-                color: T.fg1,
-                textTransform: "uppercase",
-                letterSpacing: 0.6,
-              }}
-            >
-              Messages
-            </div>
+          <div style={{ marginTop: 4 }}>
+            <div style={sectionLabelStyle}>Messages</div>
             {messageHits.map((hit) => (
               <MessageHitRow
                 key={hit.msgId}
@@ -544,50 +585,52 @@ function Sidebar({
             ))}
           </div>
         )}
-        {/* Unified empty-state: only show when BOTH title hits and message */}
-        {/* hits are empty AND the user is actually searching.              */}
         {searching && !anyResults && (
           <div
             style={{
-              padding: "20px 14px",
-              color: T.fg3,
-              fontSize: 11,
-              fontFamily: T.mono,
+              padding: "20px 16px",
+              color: T.fg2,
+              fontSize: 12.5,
               textAlign: "center",
             }}
           >
-            No chats match that search.
+            Nothing in this workspace matches.
           </div>
         )}
-        {/* No-chats-yet empty state: distinct from search-miss because it
-            fires when the user has never created a chat (or has deleted
-            them all). Shown only when not searching, so a typo-search on
-            a fresh install still gets the search-miss copy above. */}
+        {/* Nothing saved here yet. Distinct from a search miss. */}
         {!searching && totalItems === 0 && (
           <div
+            data-sidebar-empty
             style={{
-              padding: "24px 16px",
-              color: T.fg3,
-              fontFamily: T.sans,
-              fontSize: 12,
-              lineHeight: 1.6,
+              padding: "20px 16px",
+              color: T.fg2,
+              fontSize: 12.5,
+              lineHeight: 1.55,
               textAlign: "center",
             }}
           >
-            No conversations yet.
-            <div style={{ marginTop: 6, fontSize: 11 }}>
-              Hit{" "}
-              <span style={{ fontFamily: T.mono, color: T.fg2 }}>{MOD_GLYPH}N</span>{" "}
-              or click <span style={{ color: T.fg2 }}>New chat</span> above
-              to start one. Saved chats land here.
-            </div>
+            No chats here yet. A chat is saved when you send its first message.
           </div>
         )}
       </div>
 
-      {/* Right-click context menu — appears over everything (z-index 50).
-          The fixed positioning is anchored at the click coords; the menu
-          handles its own click-outside / Esc dismiss. */}
+      {footer && (
+        <div
+          data-sidebar-foot
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 10px 8px 16px",
+            borderTop: `1px solid ${T.border}`,
+            flexShrink: 0,
+          }}
+        >
+          {footer}
+        </div>
+      )}
+
+      {/* Right-click context menu — appears over everything (z-index 50). */}
       {rowMenu && (
         <ChatContextMenu
           x={rowMenu.x}
@@ -602,7 +645,6 @@ function Sidebar({
         />
       )}
 
-      {/* Chat-rename modal — replaces the Tauri-blocked window.prompt(). */}
       {renameChatModal && (
         <NameModal
           title="Rename chat"
@@ -614,8 +656,6 @@ function Sidebar({
         />
       )}
 
-      {/* Delete-chat confirm — destructive action, requires explicit
-          confirmation rather than firing on the bare menu click. */}
       {confirmDeleteChat && (
         <ConfirmModal
           title="Delete chat?"
@@ -634,63 +674,6 @@ function Sidebar({
         />
       )}
 
-      {/* ── Space modals ──
-          Create has its own modal class because it needs name + color
-          in one shot. Rename re-uses the NameModal pattern (name only;
-          changing a Space's color goes through the recolor popover). */}
-      {createSpaceModal && (
-        <SpaceCreateModal
-          onCancel={() => setCreateSpaceModal(null)}
-          onSubmit={async (name, color, andConfigure) => {
-            setCreateSpaceModal(null);
-            if (!onCreateSpace) return;
-            const created = await onCreateSpace(name, color);
-            if (!created) return;
-            // `created` is the new Space row when wired through main.jsx;
-            // older test fixtures may return just an id string. Accept
-            // both shapes so the test surface is forgiving.
-            const newId = typeof created === "object" ? created.id : created;
-            const newSpace = typeof created === "object" ? created : null;
-            // Newly-created Space becomes the active filter so the user
-            // lands inside the workspace they just made. selectSpace is
-            // the canonical activator (it owns the reload pipeline).
-            if (newId && onSelectSpace) onSelectSpace(newId);
-            // "Create & configure…" path: immediately open the settings
-            // dialog on the new Space. Requires the full row; the id
-            // alone isn't enough (the modal needs slug + timestamps to
-            // round-trip through space_update).
-            if (andConfigure && newSpace) {
-              setEditSpaceModal({ space: newSpace });
-            }
-          }}
-        />
-      )}
-      {renameSpaceModal && (
-        <NameModal
-          title="Rename Space"
-          confirmLabel="Save"
-          initial={renameSpaceModal.space.name}
-          placeholder="Space name"
-          onCancel={() => setRenameSpaceModal(null)}
-          onSubmit={(name) => {
-            const s = renameSpaceModal.space;
-            setRenameSpaceModal(null);
-            if (name && name !== s.name) onRenameSpace && onRenameSpace(s.id, name);
-          }}
-        />
-      )}
-      {recolorSpaceModal && (
-        <SpaceColorPickerPopover
-          anchorRect={recolorSpaceModal.anchorRect}
-          current={recolorSpaceModal.space.color || null}
-          onPick={(color) => {
-            const s = recolorSpaceModal.space;
-            setRecolorSpaceModal(null);
-            onRecolorSpace && onRecolorSpace(s.id, color);
-          }}
-          onClose={() => setRecolorSpaceModal(null)}
-        />
-      )}
       {editSpaceModal && (
         <SpaceSettingsModal
           space={editSpaceModal.space}
@@ -703,388 +686,7 @@ function Sidebar({
           }}
         />
       )}
-      {confirmDeleteSpace && (
-        <ConfirmModal
-          title="Delete Space?"
-          body={
-            <span>
-              The Space{" "}
-              <strong>{confirmDeleteSpace.space.name || "Unnamed"}</strong>{" "}
-              will be removed. Chats in this Space stay in your history —
-              they just move back to{" "}
-              <span style={{ fontFamily: T.mono, color: T.fg1 }}>All chats</span>.
-              This can't be undone.
-            </span>
-          }
-          cancelLabel="Cancel"
-          confirmLabel="Delete"
-          danger
-          onCancel={() => setConfirmDeleteSpace(null)}
-          onConfirm={() => {
-            const s = confirmDeleteSpace.space;
-            setConfirmDeleteSpace(null);
-            onDeleteSpace && onDeleteSpace(s.id);
-          }}
-        />
-      )}
     </aside>
-  );
-}
-
-// ─── SpacesSection ──────────────────────────────────────────
-//
-// Renders the "Spaces" sidebar section: a "SPACES" header, an
-// "All chats" pseudo-row (always present), one row per Space, and a
-// "+ New Space" button at the bottom.
-//
-// The active row gets a left-edge accent bar in the Space's color (or
-// fg2 for the "All chats" row). Hovering a Space row reveals an
-// overflow "⋯" button that opens a popover menu — Rename / Change
-// color / Delete — analogous to GroupOverflowMenu.
-//
-// Presentation-only: receives every state + handler from Sidebar. The
-// recolor handler takes an `anchorRect` so the color popover can
-// position itself next to the row that opened it (clicking "Change
-// color" inside the overflow menu).
-function SpacesSection({
-  spaces = [],
-  activeSpaceId = null,
-  onSelect,
-  onRename,
-  onRecolor,
-  onDelete,
-  onEdit,
-  onCreate,
-  onDropChat,
-}) {
-  return (
-    <div data-spaces-section style={{ marginBottom: 8 }}>
-      {/* Section header — same typographic treatment as the "Messages"
-          and date-section labels so it reads as a sidebar landmark. */}
-      <div
-        style={{
-          padding: "8px 14px 4px",
-          fontFamily: T.mono,
-          fontSize: 10,
-          fontWeight: 500,
-          color: T.fg1,
-          textTransform: "uppercase",
-          letterSpacing: 0.6,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
-        <span style={{ flex: 1 }}>Spaces</span>
-      </div>
-
-      {/* "All chats" pseudo-row — always rendered, always at the top.
-          Active when no Space is selected; clicking deactivates any
-          current Space filter. */}
-      <SpaceRow
-        label="All chats"
-        colorHex={T.fg2}
-        active={!activeSpaceId}
-        onClick={() => onSelect && onSelect(null)}
-        // Dropping a chat on "All chats" unfiles it from whatever Space
-        // it was in (space_id = NULL). Symmetric with the per-Space
-        // drop target below.
-        onDropChat={(chatId) => onDropChat && onDropChat(chatId, null)}
-        dataAll
-      />
-
-      {(spaces || []).map((s) => (
-        <SpaceRow
-          key={s.id}
-          space={s}
-          label={s.name}
-          colorHex={
-            window.spaceColorHex
-              ? window.spaceColorHex(s.color)
-              : s.color
-                ? T[s.color] || T.fg2
-                : T.fg2
-          }
-          active={activeSpaceId === s.id}
-          onClick={() => onSelect && onSelect(s.id)}
-          onRename={() => onRename && onRename(s)}
-          onRecolor={(anchorRect) => onRecolor && onRecolor(s, anchorRect)}
-          onEdit={() => onEdit && onEdit(s)}
-          onDelete={() => onDelete && onDelete(s)}
-          onDropChat={(chatId) => onDropChat && onDropChat(chatId, s.id)}
-        />
-      ))}
-
-      {/* [+ New Space] — dashed button mirroring the "[+ New group]"
-          affordance so the two sections feel parallel. Always visible
-          while not searching so the affordance is discoverable on
-          first launch. */}
-      {onCreate && (
-        <button
-          onClick={onCreate}
-          data-new-space
-          style={{
-            margin: "4px 8px 4px",
-            padding: "5px 10px",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            background: "transparent",
-            border: `1px dashed ${T.border}`,
-            borderRadius: 4,
-            color: T.fg3,
-            fontFamily: T.mono,
-            fontSize: 10.5,
-            cursor: "pointer",
-            width: "calc(100% - 16px)",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = T.fg1;
-            e.currentTarget.style.borderColor = T.borderStrong;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = T.fg3;
-            e.currentTarget.style.borderColor = T.border;
-          }}
-        >
-          <I.Plus size={9} />
-          <span>New Space</span>
-        </button>
-      )}
-
-      {/* Visual separator so the Spaces section reads as a distinct
-          band from the groups section below. Faint horizontal line —
-          the dashed [+ New group] right below already provides some
-          breathing room. */}
-      <div
-        style={{
-          margin: "6px 14px 2px",
-          borderBottom: `1px solid ${T.border}`,
-        }}
-      />
-    </div>
-  );
-}
-
-// ─── SpaceRow ───────────────────────────────────────────────
-//
-// One row in the Spaces section. Used for both the "All chats" pseudo-
-// row (no Space data, no overflow menu) and per-Space rows (with all
-// affordances). `dataAll` triggers a stable test selector for the All
-// row; `space` carries the row for Space rows so the overflow handlers
-// can address it.
-function SpaceRow({
-  label,
-  colorHex,
-  active,
-  onClick,
-  onRename,
-  onRecolor,
-  onEdit,
-  onDelete,
-  onDropChat,
-  space,
-  dataAll,
-}) {
-  const [hover, setHover] = useState(false);
-  const [dropHover, setDropHover] = useState(false);
-  // `menuOpen` is null when the overflow menu is closed, or `{x, y}`
-  // with viewport coordinates of the menu's desired top-left when open.
-  // Two open paths feed this:
-  //   • Clicking the ⋯ button — computes coords from the button's rect
-  //     (-130px on x to right-align the wider menu with the button).
-  //   • Right-clicking the row — uses the cursor coordinates directly.
-  const [menuOpen, setMenuOpen] = useState(null);
-  const menuBtnRef = useRef(null);
-  // Row ref is used by the "Change color…" handler to anchor the colour
-  // popover under the row regardless of how the overflow menu opened.
-  // Without this, a right-click open would lose its anchor when the
-  // menu closes (the original code read `menuBtnRef.current` which can
-  // be null if the ⋯ button never mounted because hover state lagged).
-  const rowRef = useRef(null);
-  const isAllChats = !!dataAll;
-  const showOverflow = !isAllChats && hover;
-
-  // Drop-target plumbing — same shape as GroupSection.onDragOver. We
-  // don't gate on dataTransfer.types here (WebKit hides custom MIME
-  // names during dragover for security); we accept any drag and then
-  // filter on the actual payload at drop time. Setting dropEffect to
-  // 'move' is what tells the browser to render the move cursor.
-  const onDragOver = (e) => {
-    if (!onDropChat) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    if (!dropHover) setDropHover(true);
-  };
-  const onDragLeave = () => setDropHover(false);
-  const onDrop = (e) => {
-    setDropHover(false);
-    const chatId = e.dataTransfer.getData("text/x-ekorbia-chat-id");
-    if (chatId && onDropChat) {
-      e.preventDefault();
-      onDropChat(chatId);
-    }
-  };
-
-  // Right-click on a Space row opens the same overflow menu as the ⋯
-  // button — symmetric with the chat-row "Move to Space" right-click.
-  // Skipped on the "All chats" pseudo-row because that row has no
-  // edit / rename / recolor / delete actions to expose.
-  const onContextMenu = isAllChats
-    ? undefined
-    : (e) => {
-        e.preventDefault();
-        setMenuOpen({ x: e.clientX, y: e.clientY });
-      };
-
-  return (
-    <div
-      ref={rowRef}
-      data-space-row={isAllChats ? undefined : ""}
-      data-space-id={space?.id}
-      data-all-chats-row={isAllChats ? "" : undefined}
-      data-active={active ? "true" : "false"}
-      data-drop-hover={dropHover ? "true" : "false"}
-      onClick={onClick}
-      onContextMenu={onContextMenu}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      style={{
-        margin: "0 8px",
-        padding: "5px 8px",
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        // Drop-hover wins over hover wins over active when both apply
-        // — the strongest feedback for the most-recent user action. The
-        // amber tint matches the GroupSection drop-target tint so the
-        // two organizational concepts feel cohesive in this transitional
-        // release (groups will be removed entirely in Phase 2).
-        background: dropHover
-          ? `${T.amber}33`
-          : active
-            ? T.bg3
-            : hover
-              ? T.bg2
-              : "transparent",
-        // Amber border on drop-hover doubles down on the affordance; a
-        // 1px border avoids any layout shift relative to the transparent
-        // default. Plain hover gets the quieter border-reveal treatment
-        // shared with ChatRow (site .v-row recipe).
-        border: dropHover
-          ? `1px solid ${T.amber}`
-          : hover && !active
-            ? `1px solid ${T.border}`
-            : "1px solid transparent",
-        borderRadius: 7,
-        cursor: "pointer",
-        userSelect: "none",
-        position: "relative",
-        // Left-edge accent bar in the Space color when active. Plain
-        // box-shadow inset is cheaper than a border that would shift
-        // the layout.
-        boxShadow: active
-          ? `inset 2px 0 0 0 ${colorHex}`
-          : "none",
-      }}
-    >
-      <span
-        aria-hidden="true"
-        style={{
-          display: "inline-block",
-          width: 8,
-          height: 8,
-          borderRadius: "50%",
-          background: colorHex,
-          flexShrink: 0,
-        }}
-      />
-      <span
-        style={{
-          flex: 1,
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          fontFamily: T.mono,
-          fontSize: 11.5,
-          color: active ? T.fg : T.fg1,
-        }}
-      >
-        {label}
-      </span>
-      {showOverflow && (
-        <button
-          ref={menuBtnRef}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (menuOpen) {
-              setMenuOpen(null);
-              return;
-            }
-            // Anchor below the button + offset left so the wider menu's
-            // right edge roughly aligns with the button. Preserves the
-            // pre-right-click positioning.
-            const r = e.currentTarget.getBoundingClientRect();
-            setMenuOpen({ x: r.left - 130, y: r.bottom + 4 });
-          }}
-          title="Space actions"
-          data-space-menu-btn
-          style={{
-            width: 16,
-            height: 16,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "none",
-            background: "transparent",
-            color: T.fg3,
-            cursor: "pointer",
-            padding: 0,
-            fontSize: 12,
-            lineHeight: 1,
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
-          onMouseLeave={(e) => (e.currentTarget.style.color = T.fg3)}
-        >
-          ⋯
-        </button>
-      )}
-      {menuOpen && (
-        <SpaceOverflowMenu
-          x={menuOpen.x}
-          y={menuOpen.y}
-          onEdit={() => {
-            setMenuOpen(null);
-            onEdit && onEdit();
-          }}
-          onRename={() => {
-            setMenuOpen(null);
-            onRename && onRename();
-          }}
-          onRecolor={() => {
-            // Anchor the colour popover to the row itself rather than to
-            // the ⋯ button. Works the same whether the menu opened from
-            // the button (button rect → menu rect) or from a right-click
-            // (cursor coords → menu rect), AND survives the case where
-            // the ⋯ button isn't currently mounted (e.g. right-click
-            // before hover state propagated).
-            const rect = rowRef.current?.getBoundingClientRect()
-              || { bottom: menuOpen.y, left: menuOpen.x };
-            setMenuOpen(null);
-            onRecolor && onRecolor(rect);
-          }}
-          onDelete={() => {
-            setMenuOpen(null);
-            onDelete && onDelete();
-          }}
-          onClose={() => setMenuOpen(null)}
-        />
-      )}
-    </div>
   );
 }
 
@@ -1147,10 +749,10 @@ function SpaceOverflowMenu({ x, y, onEdit, onRename, onRecolor, onDelete, onClos
         }}
       >
         <MenuItem onClick={onEdit}>Edit settings…</MenuItem>
-        <MenuItem onClick={onRename}>Rename Space</MenuItem>
+        <MenuItem onClick={onRename}>Rename workspace</MenuItem>
         <MenuItem onClick={onRecolor}>Change color…</MenuItem>
         <MenuItem onClick={onDelete} danger>
-          Delete Space
+          Delete workspace
         </MenuItem>
       </div>
     </Fragment>
@@ -1202,7 +804,7 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
       />
       <div
         role="dialog"
-        aria-label="Create Space"
+        aria-label="Create workspace"
         data-space-create-modal
         style={{
           position: "fixed",
@@ -1227,7 +829,7 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
             marginBottom: 14,
           }}
         >
-          New Space
+          New workspace
         </div>
 
         <input
@@ -1818,7 +1420,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
               color: T.fg,
             }}
           >
-            Space settings — {space.name}
+            Workspace settings — {space.name}
           </div>
           <div
             style={{
@@ -1829,7 +1431,7 @@ function SpaceSettingsModal({ space, promptsLibrary = [], onCancel, onSave }) {
               lineHeight: 1.4,
             }}
           >
-            Everything below is optional — a Space with just a name works fine as a folder.
+            Everything below is optional — a workspace with just a name works fine as a folder.
           </div>
         </div>
 
@@ -2721,14 +2323,14 @@ function ChatContextMenu({
       {onMoveToSpace && spaces.length > 0 && (
         <Fragment>
           <MenuDivider />
-          <MenuLabel>Move to Space</MenuLabel>
+          <MenuLabel>Move to workspace</MenuLabel>
           <MenuItem
             onClick={() => onMoveToSpace(null)}
             selected={!chat.spaceId}
             indent
             data-move-to-space="none"
           >
-            (none)
+            General
           </MenuItem>
           {spaces.map((s) => (
             <MenuItem
@@ -3362,231 +2964,6 @@ function ChatRow({
   );
 }
 
-// ─── Tab Bar ────────────────────────────────────────────────
-function TabBar({ tabs, activeId, onSelect, onClose, onNew, attachmentCounts = {} }) {
-  const scrollerRef = useRef(null);
-
-  // Auto-scroll active tab into view
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    const idx = tabs.findIndex((t) => t.id === activeId);
-    if (idx < 0) return;
-    const tabEl = el.children[idx];
-    if (tabEl && tabEl.scrollIntoView) {
-      const tabRect = tabEl.getBoundingClientRect();
-      const elRect = el.getBoundingClientRect();
-      if (tabRect.left < elRect.left) {
-        el.scrollLeft += tabRect.left - elRect.left - 8;
-      } else if (tabRect.right > elRect.right) {
-        el.scrollLeft += tabRect.right - elRect.right + 8;
-      }
-    }
-  }, [activeId, tabs.length]);
-
-  const navTab = (delta) => {
-    const idx = tabs.findIndex((t) => t.id === activeId);
-    if (idx < 0) return;
-    const next = tabs[(idx + delta + tabs.length) % tabs.length];
-    if (next) onSelect(next.id);
-  };
-
-  const arrowBtn = (icon, click, title) => (
-    <button
-      onClick={click}
-      title={title}
-      style={{
-        width: 28,
-        border: "none",
-        background: "transparent",
-        color: T.fg2,
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        borderRight: `1px solid ${T.border}`,
-        flexShrink: 0,
-      }}
-    >
-      {icon}
-    </button>
-  );
-
-  return (
-    <div
-      style={{
-        height: 32,
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "stretch",
-        borderBottom: `1px solid ${T.border}`,
-        background: T.bg1,
-        overflow: "hidden",
-      }}
-    >
-      {arrowBtn(<I.ChevronL size={13} />, () => navTab(-1), "Previous tab")}
-      {arrowBtn(<I.ChevronR size={13} />, () => navTab(1), "Next tab")}
-      <div
-        ref={scrollerRef}
-        style={{
-          flex: 1,
-          display: "flex",
-          alignItems: "stretch",
-          overflowX: "auto",
-          overflowY: "hidden",
-          scrollbarWidth: "none",
-        }}
-      >
-        {tabs.map((tab) => {
-          const active = tab.id === activeId;
-          const model = MODELS_BY_ID[tab.model];
-          return (
-            <Tab
-              key={tab.id}
-              tab={tab}
-              active={active}
-              model={model}
-              attachmentCount={attachmentCounts[tab.id] || 0}
-              onSelect={() => onSelect(tab.id)}
-              onClose={(e) => {
-                e.stopPropagation();
-                onClose(tab.id);
-              }}
-            />
-          );
-        })}
-      </div>
-      <button
-        onClick={onNew}
-        title="New tab"
-        style={{
-          width: 32,
-          border: "none",
-          background: "transparent",
-          color: T.fg2,
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          borderLeft: `1px solid ${T.border}`,
-          flexShrink: 0,
-        }}
-      >
-        <I.Plus size={12} />
-      </button>
-    </div>
-  );
-}
-
-function Tab({ tab, active, model, attachmentCount = 0, onSelect, onClose }) {
-  const [hover, setHover] = useState(false);
-  return (
-    <div
-      // Test hooks (tests/e2e/private-chats-window-close.spec.js drives the
-      // real tab strip): the tab's chat id, and whether it is private/active.
-      data-tab-id={tab.id}
-      data-tab-private={tab.ephemeral ? "" : undefined}
-      data-tab-active={active ? "" : undefined}
-      onClick={onSelect}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        position: "relative",
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        padding: "0 10px 0 12px",
-        maxWidth: 220,
-        minWidth: 120,
-        background: active ? T.bg0 : "transparent",
-        borderRight: `1px solid ${T.border}`,
-        cursor: "pointer",
-      }}
-    >
-      {active && (
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 2,
-            // Ephemeral tabs get a distinct accent on the active-tab
-            // top bar (cool slate instead of amber) so the user can see
-            // at a glance which tab is the private one.
-            background: tab.ephemeral ? T.teal : T.amber,
-          }}
-        />
-      )}
-      {tab.ephemeral ? (
-        // Replace the model dot with a lock for private chats. Keeps the
-        // tab the same width / layout while making the privacy state
-        // visible without hovering. Tooltip lets you double-check.
-        <span title="Private chat — not saved" style={{ display: "inline-flex", color: T.teal }}>
-          <I.Lock size={11} />
-        </span>
-      ) : (
-        <ModelDot color={model?.color || T.fg3} size={6} glow={false} />
-      )}
-      <span
-        style={{
-          flex: 1,
-          fontFamily: T.sans,
-          fontSize: 11.5,
-          color: active ? T.fg : T.fg2,
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          fontStyle: tab.ephemeral ? "italic" : "normal",
-        }}
-      >
-        {tab.title}
-      </span>
-      {attachmentCount > 0 && (
-        // Small paperclip + count indicator next to the title — fades on
-        // inactive tabs so it doesn't clutter, brightens on hover/active.
-        // Useful when you've got context attached to a tab you're not
-        // currently looking at.
-        <span
-          title={`${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}`}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 2,
-            color: active || hover ? T.amber : T.fg3,
-            fontFamily: T.mono,
-            fontSize: 9.5,
-            flexShrink: 0,
-          }}
-        >
-          <I.Attach size={10} />
-          {attachmentCount}
-        </span>
-      )}
-      <button
-        onClick={onClose}
-        data-tab-close
-        aria-label="Close tab"
-        style={{
-          width: 16,
-          height: 16,
-          border: "none",
-          borderRadius: 3,
-          background: hover ? T.bg3 : "transparent",
-          color: T.fg2,
-          cursor: "pointer",
-          padding: 0,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          opacity: hover || active ? 1 : 0,
-        }}
-      >
-        <I.X size={9} />
-      </button>
-    </div>
-  );
-}
 // ─── Right-panel tab switcher ───────────────────────────────
 // Header that sits at the top of the right panel and switches between
 // the Prompts view and the Watches view. Rendered inside each tab's
@@ -3665,233 +3042,173 @@ function RightPanelTabs({ tab, onTab, onClose }) {
     </div>
   );
 }
-function StatusBar({ model, onOllamaClick, warming, indexingAttachments = [], backendKind: backendKindProp }) {
-  const [ollamaUp, setOllamaUp] = useState(false);
-  // Active backend kind ('ollama' | 'openai' | 'engine') — drives the
-  // down-state label, the backend glyph, and whether clicking the pill opens
-  // the setup gate. PREFER the App's authoritative value (set once by the
-  // first-run decision effect); only self-read as a fallback when it isn't
-  // supplied — a self-read races the fresh-install engine switch and would
-  // otherwise show a stale "ollama" on first launch.
-  const [selfBackend, setSelfBackend] = useState("ollama");
-  // Whether inference runs on THIS machine — drives the "Local · Private" vs
-  // "Remote" caption. Derived from the backend config's base URL (loopback =
-  // local). Defaults to local: both default backends (bundled engine,
-  // localhost Ollama) are.
-  const [endpointLocal, setEndpointLocal] = useState(true);
-  useEffect(() => {
-    const inv = getInvoke();
-    if (!inv) return;
-    inv("llm_backend_config_get")
-      .then((c) => {
-        // backendKind stays App-authoritative (prop); we self-read it only as
-        // a fallback. The base URL is read purely for the local/remote label.
-        if (!backendKindProp) setSelfBackend(c?.backend || "ollama");
-        setEndpointLocal(
-          isLocalEndpoint(backendKindProp || c?.backend || "ollama", c?.baseUrl)
-        );
-      })
-      .catch(() => {});
-  }, [backendKindProp]);
-  const backendKind = backendKindProp || selfBackend;
-  const [pulled, setPulled] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-
-  // Tauri IPC handle. The poll loop below routes its Ollama status
-  // probes through Rust commands (Phase B.1) so they don't hit the
-  // WebView2 PNA gate on Windows.
+// ─── Status line ────────────────────────────────────────────
+// One line that states the privacy position, shown on Home and at the
+// foot of the workspace sidebar. It replaces the old status bar and keeps
+// the two things that bar was needed for: a backend that cannot answer
+// (the line turns into a warning that opens the setup gate) and folders
+// still being indexed.
+//
+// The privacy text comes from privacyStatus (utils.js): a local backend
+// keeps chats on this Mac; a custom server on another machine is named.
+function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttachments = [] }) {
+  const [baseUrl, setBaseUrl] = useState(null);
+  const [up, setUp] = useState(true);
+  const [present, setPresent] = useState(true);
   const invoke = getInvoke();
+  const modelId = (model && model.id) || "";
+  const modelName = (model && (model.name || model.id)) || "The model";
 
   useEffect(() => {
+    if (!invoke) return;
+    invoke("llm_backend_config_get")
+      .then((c) => setBaseUrl((c && c.baseUrl) || null))
+      .catch(() => {});
+  }, [backendKind]);
+
+  useEffect(() => {
+    if (!invoke) return undefined;
     let cancelled = false;
-    const matchesModel = (n) =>
-      n === model.id || n.startsWith(model.id.split(":")[0]);
+    const matches = (n) => !!modelId && (n === modelId || n.startsWith(modelId.split(":")[0]));
     const check = async () => {
-      // No Tauri runtime (Playwright-mocked tests / dev preview):
-      // surface "not running" rather than crash. Matches the old
-      // fetch-fails-with-throw branch.
-      if (!invoke) {
-        if (!cancelled) {
-          setOllamaUp(false);
-          setPulled(false);
-          setLoaded(false);
-        }
-        return;
-      }
-      // Two Rust-side proxies (Phase B.1) — see ollama.rs. An IPC throw
-      // from `llm_list_models` is the canonical "Ollama unreachable" signal
-      // now; we don't need a separate `.ok` check the way the old
-      // fetch path did.
       try {
-        const tagsData = await invoke('llm_list_models');
+        const data = await invoke("llm_list_models");
         if (cancelled) return;
-        setOllamaUp(true);
-        setPulled((tagsData.models || []).some((m) => matchesModel(m.name)));
+        setUp(true);
+        setPresent(!modelId || ((data && data.models) || []).some((m) => matches(m.name)));
       } catch {
-        if (!cancelled) {
-          setOllamaUp(false);
-          setPulled(false);
-          setLoaded(false);
-        }
-        return;
-      }
-      try {
-        // /api/ps is the only honest source for "loaded into memory".
-        const psData = await invoke('llm_loaded_models');
-        if (cancelled) return;
-        setLoaded((psData.models || []).some((m) => matchesModel(m.name)));
-      } catch {
-        // /api/ps failing doesn't invalidate /api/tags success — Ollama
-        // is up but we can't read the running set. Treat as "not
-        // loaded" rather than "not running".
-        if (!cancelled) setLoaded(false);
+        if (!cancelled) setUp(false);
       }
     };
     check();
-    // Poll fast while warming so the loaded transition shows up promptly;
-    // otherwise the user could click Send before we've noticed the model is hot.
     const iv = setInterval(check, warming ? 1000 : 5000);
     return () => {
       cancelled = true;
       clearInterval(iv);
     };
-  }, [model.id, warming]);
+  }, [modelId, warming, backendKind]);
 
-  const byo = backendKind === "openai";
-  const engineB = backendKind === "engine";
-  // Plain-language backend caption (replaces the raw "engine / ollama /
-  // endpoint" jargon). A loopback backend is private; a remote endpoint is
-  // labeled honestly, with no privacy claim.
-  const backendLabel = endpointLocal ? "Local · Private" : "Remote";
-  let dotColor, label, dim;
-  if (!ollamaUp) {
-    dotColor = T.fg3;
-    label = engineB
-      ? "engine unavailable — check Settings → Backend"
-      : byo
-        ? "endpoint unreachable — check Settings → Backend"
-        : "ollama not running";
-    dim = true;
-  } else if (!pulled) {
-    dotColor = T.amber;
-    label = engineB
-      ? `${model.name} not in the models folder`
-      : byo
-        ? `${model.name} not on the endpoint`
-        : `${model.name} not pulled`;
-    dim = true;
-  } else if (warming) {
-    // `warming` MUST be checked before `loaded`: /api/ps flips to loaded
-    // the moment weights are resident, but our warmup is still running a
-    // real one-token generation to compile kernels and allocate the KV
-    // cache. Showing "loaded" before warmup completes would mislead the
-    // user into clicking Send and eating the cold-kernel penalty anyway.
-    dotColor = T.amber;
-    label = `${model.name} loading…`;
-    dim = false;
-  } else if (loaded) {
-    dotColor = T.green;
-    label = `${model.name} loaded`;
-    dim = false;
-  } else {
-    dotColor = T.amber;
-    label = `${model.name} cold`;
-    dim = true;
+  const privacy = privacyStatus(backendKind, baseUrl);
+  const indexing = indexingAttachments.length;
+  let kind = privacy.kind; // 'local' | 'server'
+  let text = privacy.text;
+  let color = privacy.kind === "local" ? T.green : T.blue;
+  if (!up) {
+    kind = "problem";
+    color = T.amber;
+    text = backendKind === "engine"
+      ? "The engine is not responding"
+      : backendKind === "openai"
+        ? "The server is not responding"
+        : "Ollama is not running";
+  } else if (!present) {
+    kind = "problem";
+    color = T.amber;
+    text = `${modelName} is not installed`;
+  } else if (indexing > 0) {
+    kind = "indexing";
+    color = T.amber;
+    text = indexing === 1 ? "Reading 1 attachment…" : `Reading ${indexing} attachments…`;
   }
-  // Pill chrome follows the state (site status-pill ladder): loaded glows
-  // green, warming pulses amber, cold/missing states stay quiet gray.
-  const pillTint = ollamaUp && (loaded || warming) ? dotColor : null;
-
+  const clickable = kind === "problem" && !!onProblemClick;
   return (
-    <div
+    <button
+      type="button"
+      data-status-line
+      data-status-kind={kind}
+      onClick={clickable ? onProblemClick : undefined}
+      title={clickable ? "Open setup" : text}
       style={{
-        height: 28,
-        flexShrink: 0,
         display: "flex",
         alignItems: "center",
-        gap: 16,
-        padding: "0 14px",
-        background: T.bg1,
-        borderTop: `1px solid ${T.border}`,
-        fontFamily: T.mono,
-        fontSize: 12,
+        gap: 7,
+        minWidth: 0,
+        padding: 0,
+        border: "none",
+        background: "transparent",
         color: T.fg2,
+        fontFamily: T.sans,
+        fontSize: 12,
+        cursor: clickable ? "pointer" : "default",
+        textAlign: "left",
       }}
     >
-      <span
-        // The click-through to OllamaGate only makes sense when Ollama
-        // IS the backend — the gate's install/start flow is a dead end
-        // on the engine and custom-endpoint backends.
-        onClick={!ollamaUp && !byo && !engineB ? onOllamaClick : undefined}
+      <I.Shield size={14} style={{ color }} />
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {text}
+      </span>
+    </button>
+  );
+}
+
+// ─── More menu ──────────────────────────────────────────────
+// The control beside the status line. Settings is its lasting job. The
+// three panel entries are a stop-gap: the title-bar buttons that opened
+// the Prompts, Watches and Files panels are gone, and those panels move
+// into Settings (Templates, Watches) or go away (Files) in later steps of
+// the redesign. Until then this is how they are reached.
+function MoreMenu({ onSettings, onPanel }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  const run = (fn) => () => { setOpen(false); fn && fn(); };
+  return (
+    <div ref={ref} style={{ position: "relative", flexShrink: 0 }}>
+      <button
+        type="button"
+        data-more-menu-button
+        aria-label="Settings and more"
+        title="Settings and more"
+        onClick={() => setOpen((o) => !o)}
         style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-          cursor: ollamaUp || byo || engineB ? "default" : "pointer",
+          width: 28,
+          height: 28,
+          display: "grid",
+          placeItems: "center",
+          border: "none",
+          borderRadius: 7,
+          background: open ? T.bg3 : "transparent",
+          color: T.fg1,
+          cursor: "pointer",
         }}
       >
-        <ModelDot color={dotColor} size={6} glow={false} />
-        {backendLabel}
-      </span>
-      <span
-        data-status-model-pill
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 5,
-          padding: "1px 9px 1px 7px",
-          borderRadius: 999,
-          background: T.bg2,
-          border: `1px solid ${pillTint ? pillTint + "4d" : T.border}`,
-          color: pillTint ? pillTint : dim ? T.fg3 : T.fg2,
-          fontSize: 11,
-        }}
-      >
-        <span className={warming ? "watch-pulse-dot" : undefined} style={{ display: "inline-flex" }}>
-          <ModelDot color={dotColor} size={6} glow={!!pillTint} />
-        </span>
-        {label}
-      </span>
-      {indexingAttachments.length > 0 && (
-        // Aggregated indexing line across ALL chats. When one folder is
-        // indexing we show its name + progress; with multiple, we collapse
-        // to a count so the bar doesn't overflow on a slow run with several
-        // queued. The animated dot mirrors the Composer chip's indicator.
-        (() => {
-          const first = indexingAttachments[0];
-          const more = indexingAttachments.length - 1;
-          const isFolder = first.kind === "folder";
-          // Match the chip's label progression: "walking…" while the
-          // walker is still enumerating, then "N/M" once embedding starts.
-          const progress = isFolder
-            ? (first.phase === "walking" || typeof first.progressTotal !== "number"
-                ? " — walking…"
-                : ` — ${first.fileCount ?? 0}/${first.progressTotal}`)
-            : "";
-          const label =
-            indexingAttachments.length === 1
-              ? `Indexing ${first.label}${progress}`
-              : `Indexing ${first.label}${progress} (+${more} more)`;
-          return (
-            <span
-              title={indexingAttachments.map((a) => a.label).join("\n")}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                color: T.amber,
-              }}
-            >
-              <span
-                className="typing-dot"
-                style={{ color: T.amber, fontSize: 9 }}
-              >
-                ●
-              </span>
-              {label}
-            </span>
-          );
-        })()
+        <I.Settings size={15} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          data-more-menu
+          style={{
+            position: "absolute",
+            right: 0,
+            bottom: "calc(100% + 6px)",
+            minWidth: 190,
+            padding: 4,
+            background: T.bg2,
+            border: `1px solid ${T.border}`,
+            borderRadius: 8,
+            boxShadow: T.shadowPop,
+            zIndex: 60,
+          }}
+        >
+          <MenuItem onClick={run(onSettings)} data-more-settings>Settings…</MenuItem>
+          <MenuDivider />
+          <MenuItem onClick={run(() => onPanel && onPanel("prompts"))} data-more-panel="prompts">Prompt library</MenuItem>
+          <MenuItem onClick={run(() => onPanel && onPanel("watches"))} data-more-panel="watches">Watches</MenuItem>
+          <MenuItem onClick={run(() => onPanel && onPanel("files"))} data-more-panel="files">Saved files</MenuItem>
+        </div>
       )}
     </div>
   );
