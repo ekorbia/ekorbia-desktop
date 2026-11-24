@@ -4,6 +4,24 @@
 <meta charset="utf-8" />
 <title>Ekorbia — Local AI Desktop</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Content-security policy: the interface may load its own files and
+     nothing else. No remote image, script, style, font, frame or request,
+     whatever ends up in the page. This is the second lock behind the reply
+     cleaner in markdown.jsx: a reply that links a remote image must not be
+     able to make the app fetch it.
+     - script-src needs 'unsafe-inline' and 'unsafe-eval' because
+       Babel-standalone compiles the .jsx files in the page. Scripts can
+       still only come from the app's own origin.
+     - style-src needs 'unsafe-inline' for React's style attributes, KaTeX
+       and the styles inside mermaid's SVG.
+     - connect-src lists Tauri's IPC endpoints; 'self' covers Babel reading
+       the .jsx files.
+     It is a meta tag, not tauri.conf.json's `csp` (left null on purpose),
+     so the same policy is in force in the app and in the Playwright suite,
+     which loads this file and a fixture carrying an identical tag
+     (tests/e2e/fixtures/playwright.html; offline-boot.spec.js pins that
+     they match). Change both together. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'self'" />
 <!-- Anti-flash: paint the persisted theme's background before first paint.
      React applies the full theme only after mount; without this, a
      light-theme user saw the dark CSS default for a frame (and vice
@@ -237,6 +255,9 @@
     text-underline-offset: 2px;
   }
   .ek-md a:hover { color: var(--ek-accent-hover); }
+  /* A remote image a reply linked to: shown as a link, never fetched
+     (neutraliseRemoteContent in markdown.jsx). */
+  .ek-md .ek-remote-image::before { content: "Image: "; }
   .ek-md blockquote {
     margin: 8px 0;
     padding: 4px 12px;

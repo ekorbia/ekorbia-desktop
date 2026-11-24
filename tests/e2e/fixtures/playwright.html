@@ -4,6 +4,10 @@
 <meta charset="utf-8" />
 <title>Ekorbia — Playwright test harness</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- The same content-security policy as ui/index.html, so every spec runs
+     under the policy the app ships with. offline-boot.spec.js fails if the
+     two tags differ. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'self'" />
 <!-- Path note: this file lives at /tests/e2e/fixtures/playwright.html and
      is served by Playwright's webserver rooted at the repo root, so every
      resource reference uses an absolute path (/ui/*, /tests/e2e/*). -->

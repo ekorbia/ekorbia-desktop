@@ -58,6 +58,8 @@ const {
   describeContextOverflow,
   extractMathSegments,
   restoreMathSegments,
+  replyImageIsInline,
+  externalLinkTarget,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -1838,4 +1840,38 @@ test("chatIdOfMessage: finds the chat a reply is streaming into, wherever the fr
   assert.equal(chatIdOfMessage(chats, "nope"), null);
   assert.equal(chatIdOfMessage(chats, null), null);
   assert.equal(chatIdOfMessage(null, "asst-1"), null);
+});
+
+test("replyImageIsInline: only an image whose bytes are in the reply may be shown", () => {
+  assert.equal(replyImageIsInline("data:image/png;base64,iVBORw0KGgo="), true);
+  assert.equal(replyImageIsInline("  data:image/JPEG;base64,/9j/4AAQ"), true);
+  // Everything that would make the webview fetch something.
+  assert.equal(replyImageIsInline("https://collector.example/p.png?d=secret"), false);
+  assert.equal(replyImageIsInline("http://collector.example/p.png"), false);
+  assert.equal(replyImageIsInline("//collector.example/p.png"), false);
+  assert.equal(replyImageIsInline("/ui/vendor/x.png"), false);
+  assert.equal(replyImageIsInline("file:///etc/passwd"), false);
+  assert.equal(replyImageIsInline("asset://localhost/x.png"), false);
+  // SVG can reference other resources; a non-image data: URL is not an image.
+  assert.equal(replyImageIsInline("data:image/svg+xml;base64,PHN2Zz4="), false);
+  assert.equal(replyImageIsInline("data:text/html;base64,PGI+"), false);
+  assert.equal(replyImageIsInline(""), false);
+  assert.equal(replyImageIsInline(null), false);
+});
+
+test("externalLinkTarget: only http(s) and mailto are handed to the browser", () => {
+  assert.equal(externalLinkTarget("https://example.org/a?b=1#c"), "https://example.org/a?b=1#c");
+  assert.equal(externalLinkTarget(" HTTP://Example.org "), "HTTP://Example.org");
+  assert.equal(externalLinkTarget("//example.org/a.png"), "https://example.org/a.png");
+  assert.equal(externalLinkTarget("mailto:someone@example.org"), "mailto:someone@example.org");
+  // Never followed: script, local files, the app's own scheme and origin.
+  assert.equal(externalLinkTarget("javascript:alert(1)"), null);
+  assert.equal(externalLinkTarget("file:///Users/x/secret.txt"), null);
+  assert.equal(externalLinkTarget("tauri://localhost/index.html"), null);
+  assert.equal(externalLinkTarget("/ui/index.html"), null);
+  assert.equal(externalLinkTarget("index.html"), null);
+  assert.equal(externalLinkTarget("#footnote-1"), null);
+  assert.equal(externalLinkTarget("https://"), null);
+  assert.equal(externalLinkTarget(""), null);
+  assert.equal(externalLinkTarget(undefined), null);
 });
