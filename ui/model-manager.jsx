@@ -7,9 +7,8 @@
 //     pulls and render the same progress.
 //   • ModelManagerPanel — installed-model list + download box. Embedded by
 //     the Settings → Models tab and by ModelManagerModal.
-//   • ModelManagerModal — fullscreen overlay wrapper, opened from the
-//     composer ModelPicker / OllamaGate via window.ekOpenModelManager()
-//     (registered in main.jsx, same pattern as window.ekOpenOnboarding).
+//   • ModelManagerModal — fullscreen overlay wrapper, opened from
+//     OllamaGate via window.ekOpenModelManager() (registered in main.jsx).
 //
 // Depends on: tokens (T), utils.js (getInvoke, getChannel, genId,
 // formatBytes, accumulatePullProgress), overlays.jsx (ConfirmDialog),

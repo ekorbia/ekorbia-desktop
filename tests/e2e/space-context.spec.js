@@ -117,7 +117,6 @@ async function mountSidebar(page, opts = {}) {
         onSelectSpace: () => {},
         onCreateSpace: () => Promise.resolve("s-new"),
         onRenameSpace: () => {},
-        onRecolorSpace: () => {},
         onDeleteSpace: () => {},
         onMoveChatToSpace: () => {},
         messageHits: [],

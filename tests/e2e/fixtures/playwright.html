@@ -79,7 +79,7 @@
       // EngineMigrationOffer (Phase 5) handlers
       "onKeepOllama", "onSwitchToEngine",
       // Watch recipes / Today digest handlers
-      "onPick", "onPickRecipe", "onChatAboutToday", "onConfigure",
+      "onPick", "onPickRecipe", "onChatAboutToday", "onConfigure", "onCreated",
       // Voice dictation
       "onInsert",
       // Empty-state starter cards (Phase 4) — attach a prompt / seed text
@@ -143,7 +143,6 @@
 <script src="/ui/vendor/highlight.min.js"></script>
 <script src="/ui/vendor/purify.min.js"></script>
 <script src="/ui/vendor/katex.min.js"></script>
-<script src="/ui/vendor/mermaid.min.js"></script>
 
 <!-- ─── Production code under test, in the same order as /ui/index.html ─
      data-presets="react" mirrors production (JSX-only transpile, real
@@ -163,14 +162,12 @@
 <script type="text/babel" data-presets="react" src="/ui/model-manager.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/voice.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/watch.jsx"></script>
-<script type="text/babel" data-presets="react" src="/ui/files.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/home.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/templates.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/privacy.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/settings.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/onboarding.jsx"></script>
 <script type="text/babel" data-presets="react" src="/ui/toast.jsx"></script>
-<script type="text/babel" data-presets="react" src="/ui/command-palette.jsx"></script>
 <!-- overlay.jsx self-mounts ONLY in the window labelled "overlay"; the mock
      exposes no window API, so its bottom-of-file gate returns early here and
      QuickQuery is simply available on window for __TEST_MOUNT. -->

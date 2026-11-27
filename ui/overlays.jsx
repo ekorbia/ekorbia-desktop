@@ -1,6 +1,6 @@
 // overlays.jsx -- Floating overlays:
-//   MODEL_COLORS + modelColor, ModelPicker (composer dropdown),
-//   CommandPalette (Cmd+K), OllamaGate (warm-up modal).
+//   MODEL_COLORS + modelColor, CompareModelPickerModal, ConfirmDialog,
+//   the first-run gates (OllamaGate, EngineGate, EngineMigrationOffer).
 // Depends on: tokens, atoms, icons. Byte formatting comes from
 // utils.js `formatBytes` (formerly a local `fmt_size` here).
 
@@ -25,281 +25,8 @@ function modelColor(name) {
   return MODEL_COLORS[h % MODEL_COLORS.length];
 }
 
-function ModelPicker({ active, onPick, onClose, modelHasTools = false, modelHasVision = false }) {
-  const [models, setModels] = useState(null); // null = loading
-  const [error, setError] = useState("");
-  // Whether the active backend runs on this machine — drives the group
-  // header ("Local models" vs "Models"). Defaults local (the common case);
-  // a remote BYO endpoint must not claim "Local".
-  const [local, setLocal] = useState(true);
-  const invoke = getInvoke();
-
-  useEffect(() => {
-    // Rust-side `llm_list_models` (Phase B.1 proxy) — see ollama.rs for why.
-    if (!invoke) { setModels([]); setError("Ollama not running"); return; }
-    invoke('llm_list_models')
-      .then((data) => {
-        // Sort alphabetically by name. /api/tags returns modified_at DESC
-        // which is unstable across launches and surprising in a picker
-        // (the active model's relative position would shift just from
-        // re-pulling it). localeCompare gives a deterministic, case-
-        // insensitive order.
-        const sorted = (data.models || []).slice().sort((a, b) =>
-          (a.name || "").localeCompare(b.name || "", undefined, {
-            sensitivity: "base",
-          }),
-        );
-        setModels(sorted);
-      })
-      .catch(() => {
-        setModels([]);
-        setError("Ollama not running");
-      });
-  }, []);
-
-  useEffect(() => {
-    if (!invoke) return;
-    invoke("llm_backend_config_get")
-      .then((c) => setLocal(isLocalEndpoint(c?.backend || "ollama", c?.baseUrl)))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    const onClick = (e) => {
-      if (!e.target.closest("[data-model-picker]")) onClose();
-    };
-    setTimeout(() => document.addEventListener("click", onClick), 0);
-    return () => document.removeEventListener("click", onClick);
-  }, [onClose]);
-
-  // Capability labels for the ACTIVE model (the only one whose caps we know
-  // here — a per-model probe would be a separate feature). Rendered on the
-  // active row's subtitle; empty string when the model reports neither.
-  const capsStr = [modelHasTools && "Tool use", modelHasVision && "Vision"]
-    .filter(Boolean)
-    .join(" • ");
-
-  return (
-    <div
-      data-model-picker
-      style={{
-        position: "absolute",
-        bottom: "calc(100% + 6px)",
-        right: 0,
-        width: 400,
-        background: T.bg1,
-        border: `1px solid ${T.borderStrong}`,
-        borderRadius: 6,
-        boxShadow: T.shadowPop,
-        padding: 4,
-        zIndex: 100,
-        maxHeight: 360,
-        overflowY: "auto",
-      }}
-    >
-      <div
-        style={{
-          padding: "6px 10px 4px",
-          fontFamily: T.sans,
-          fontSize: 12,
-          color: T.fg3,
-        }}
-      >
-        {local ? "Local models" : "Models"}
-      </div>
-
-      {models === null && (
-        <div
-          style={{
-            padding: "12px 10px",
-            fontFamily: T.sans,
-            fontSize: 12.5,
-            color: T.fg3,
-          }}
-        >
-          <span className="typing-dot">●</span>{" "}
-          <span className="typing-dot">●</span>{" "}
-          <span className="typing-dot">●</span>
-        </div>
-      )}
-
-      {error && (
-        <div
-          style={{
-            padding: "10px",
-            fontFamily: T.sans,
-            fontSize: 12.5,
-            color: T.fg3,
-          }}
-        >
-          {error}
-        </div>
-      )}
-
-      {models && models.length === 0 && !error && (
-        <div style={{ padding: "10px" }}>
-          <div style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3, marginBottom: 8 }}>
-            No models pulled yet.
-          </div>
-          <button
-            onClick={() => {
-              window.ekOpenModelManager?.();
-              onClose();
-            }}
-            style={{
-              padding: "6px 12px",
-              borderRadius: 6,
-              border: "none",
-              background: T.amber,
-              boxShadow: `0 5px 16px -6px ${T.amber}66, inset 0 1px 0 rgba(255,255,255,0.25)`,
-              color: T.bg0,
-              fontFamily: T.sans,
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Download a model…
-          </button>
-        </div>
-      )}
-
-      {(models || []).map((m) => {
-        const isActive = m.name === active;
-        const color = modelColor(m.name);
-        const size = m.details?.parameter_size || "";
-        const quant = m.details?.quantization_level || "";
-        const sizeOnDisk = formatBytes(m.size);
-        return (
-          <div
-            key={m.name}
-            onClick={() => {
-              onPick(m.name);
-              onClose();
-            }}
-            style={{
-              padding: "7px 10px",
-              borderRadius: 4,
-              cursor: "pointer",
-              background: isActive ? T.bg4 : "transparent",
-              display: "grid",
-              gridTemplateColumns: "auto 1fr auto",
-              gap: 8,
-              alignItems: "center",
-            }}
-            onMouseEnter={(e) =>
-              !isActive && (e.currentTarget.style.background = T.bg3)
-            }
-            onMouseLeave={(e) =>
-              !isActive && (e.currentTarget.style.background = "transparent")
-            }
-          >
-            <ModelDot color={color} size={7} />
-            <div style={{ minWidth: 0 }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  gap: 6,
-                  flexWrap: "wrap",
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: T.sans,
-                    fontSize: 12.5,
-                    color: T.fg,
-                    fontWeight: 500,
-                  }}
-                >
-                  {m.name}
-                </span>
-                {size && (
-                  <span
-                    style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2 }}
-                  >
-                    {size}
-                  </span>
-                )}
-                {quant && (
-                  <span
-                    style={{ fontFamily: T.sans, fontSize: 12, color: T.fg3 }}
-                  >
-                    {quant}
-                  </span>
-                )}
-              </div>
-              {sizeOnDisk && (
-                <div
-                  style={{
-                    fontFamily: T.sans,
-                    fontSize: 12,
-                    color: T.fg1,
-                    marginTop: 1,
-                  }}
-                >
-                  {sizeOnDisk} on disk
-                </div>
-              )}
-              {isActive && capsStr && (
-                <div
-                  style={{
-                    fontFamily: T.sans,
-                    fontSize: 12,
-                    color: T.fg1,
-                    marginTop: 1,
-                  }}
-                >
-                  Supports: {capsStr}
-                </div>
-              )}
-            </div>
-            {isActive && (
-              <span
-                style={{
-                  fontFamily: T.sans,
-                  fontSize: 12,
-                  padding: "1px 5px",
-                  borderRadius: 8,
-                  background: T.green + "26",
-                  color: T.green,
-                }}
-              >
-                active
-              </span>
-            )}
-          </div>
-        );
-      })}
-
-      {models && models.length > 0 && (
-        <div
-          onClick={() => {
-            window.ekOpenModelManager?.();
-            onClose();
-          }}
-          style={{
-            padding: "7px 10px",
-            marginTop: 4,
-            borderTop: `1px solid ${T.border}`,
-            borderRadius: 4,
-            cursor: "pointer",
-            fontFamily: T.sans,
-            fontSize: 12,
-            color: T.fg2,
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = T.bg3)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          Manage models…
-        </div>
-      )}
-    </div>
-  );
-}
 // Centered modal for picking the 2 or 3 models that will populate a
-// compare-mode tab's columns. Distinct from ModelPicker (popover, single-
-// select). Lifecycle: parent passes `open` to mount it; on `Done` the modal
+// compare-mode tab's columns. Lifecycle: parent passes `open` to mount it; on `Done` the modal
 // calls `onConfirm(selected)` with a 2- or 3-entry string array of model
 // ids; on Cancel/backdrop click it calls `onClose()`. The compose-mode
 // column-count cap (2 or 3) is enforced inside this component: a Done
@@ -324,8 +51,7 @@ function CompareModelPickerModal({ open, onClose, onConfirm, nameOfModel, sequen
     if (!invoke) { setModels([]); setError("Ollama not running"); return; }
     invoke('llm_list_models')
       .then((data) => {
-        // Same alphabetical sort as the single-model ModelPicker so
-        // both pickers feel consistent. The model that reads documents
+        // Alphabetical, like every other model list. The model that reads documents
         // for search cannot answer a question, so it is not offered
         // (same rule as the workspace settings model list).
         const sorted = (data.models || []).filter((m) => !/embed/i.test((m && m.name) || "")).sort((a, b) =>
@@ -516,125 +242,6 @@ function CompareModelPickerModal({ open, onClose, onConfirm, nameOfModel, sequen
           >
             Start comparing
           </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CommandPalette({ open, onClose, chats, onPick }) {
-  const [q, setQ] = useState("");
-  const inputRef = useRef(null);
-  useEffect(() => {
-    if (open && inputRef.current) inputRef.current.focus();
-  }, [open]);
-
-  const flat = useMemo(
-    () =>
-      chats.flatMap((s) => s.items.map((c) => ({ ...c, section: s.section }))),
-    [chats],
-  );
-  const filtered = q.trim()
-    ? flat.filter((c) => c.title.toLowerCase().includes(q.toLowerCase()))
-    : flat.slice(0, 8);
-
-  if (!open) return null;
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.45)",
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        paddingTop: 100,
-        zIndex: 1000,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 560,
-          maxHeight: "60vh",
-          background: panelGrad(),
-          border: `1px solid ${T.borderStrong}`,
-          borderRadius: 8,
-          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "10px 14px",
-            borderBottom: `1px solid ${T.border}`,
-          }}
-        >
-          <I.Search size={13} style={{ color: T.fg2 }} />
-          <input
-            ref={inputRef}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search chats, prompts, or run a command…"
-            style={{
-              flex: 1,
-              border: "none",
-              background: "transparent",
-              color: T.fg,
-              fontFamily: T.sans,
-              fontSize: 14,
-              padding: 0,
-            }}
-          />
-          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}>
-            esc
-          </span>
-        </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: 6, minHeight: 0 }}>
-          {filtered.map((c, i) => {
-            const m = MODELS_BY_ID[c.model];
-            return (
-              <div
-                key={c.id}
-                onClick={() => {
-                  onPick(c);
-                  onClose();
-                }}
-                style={{
-                  padding: "7px 10px",
-                  borderRadius: 5,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  background: i === 0 ? T.bg3 : "transparent",
-                }}
-              >
-                <ModelDot color={m?.color} size={6} glow={false} />
-                <span
-                  style={{
-                    flex: 1,
-                    fontFamily: T.sans,
-                    fontSize: 13,
-                    color: T.fg,
-                  }}
-                >
-                  {c.title}
-                </span>
-                <span
-                  style={{ fontFamily: T.mono, fontSize: 10, color: T.fg3 }}
-                >
-                  {c.section}
-                </span>
-              </div>
-            );
-          })}
         </div>
       </div>
     </div>
@@ -1411,12 +1018,10 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
   if (!open || phase === "checking") return null;
 
   const titles = {
-    recommend: "Let's get you a model",
-    pulling: "Setting things up…",
-    "no-binary": "Engine unavailable",
+    recommend: "Choose a model",
+    pulling: "Downloading",
+    "no-binary": "The built-in engine is missing",
   };
-  const subtitle =
-    phase === "no-binary" ? "Bundled engine" : "Local AI setup";
 
   return (
     <div
@@ -1424,141 +1029,118 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
         position: "fixed",
         inset: 0,
         zIndex: 9999,
-        background: "rgba(0,0,0,0.7)",
+        background: "rgba(0,0,0,0.55)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        backdropFilter: "blur(4px)",
+        backdropFilter: "blur(3px)",
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ek-model-choice-title"
+        data-engine-gate
+        data-phase={phase}
         style={{
-          width: 420,
+          width: 460,
+          maxWidth: "92vw",
           background: panelGrad(),
           border: `1px solid ${T.borderStrong}`,
           borderRadius: 12,
-          padding: "28px 28px 24px",
+          padding: "22px 24px 20px",
           boxShadow: `${T.shadowPop}, ${T.insetHi}`,
           display: "flex",
           flexDirection: "column",
-          gap: 16,
+          gap: 14,
         }}
       >
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 26 }}>✨</span>
-          <div>
-            <div style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.fg }}>
-              {titles[phase] || phase}
-            </div>
-            <div style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3, marginTop: 2 }}>
-              {subtitle}
-            </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <BrandMark size={20} />
+          <div id="ek-model-choice-title" style={{ fontFamily: T.sans, fontSize: 17, fontWeight: 600, color: T.fg }}>
+            {titles[phase] || phase}
           </div>
         </div>
 
-        {/* Body */}
         {phase === "recommend" && rec && (
           <>
             {errorMsg && (
-              <div
-                style={{
-                  background: "rgba(200,80,80,0.1)",
-                  border: "1px solid rgba(200,80,80,0.3)",
-                  borderRadius: 6,
-                  padding: "8px 12px",
-                  fontFamily: T.sans,
-                  fontSize: 12,
-                  color: T.red,
-                  lineHeight: 1.5,
-                }}
-              >
+              <div data-engine-gate-error style={ekHint({ color: T.red })}>
                 {errorMsg}
               </div>
             )}
-            <div style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2, lineHeight: 1.6 }}>
-              Ekorbia runs models right on your Mac — no separate install. Here's
-              one sized for your machine; Ekorbia will download it for you.
+            <div style={ekHint()}>
+              Ekorbia answers with a model that runs on this Mac. This one fits your Mac's memory. It downloads
+              once.
             </div>
-            {/* Recommended model card */}
+            {/* The model on offer. */}
             <div
+              data-engine-gate-model
               style={{
-                background: T.bg2,
-                border: `1px solid ${T.borderStrong}`,
-                borderRadius: 8,
+                background: T.isLight ? T.bg0 : T.bg2,
+                border: `1px solid ${T.fg}`,
+                boxShadow: `0 0 0 1px ${T.fg}`,
+                borderRadius: 10,
                 padding: "12px 14px",
                 display: "flex",
                 flexDirection: "column",
-                gap: 4,
+                gap: 3,
               }}
             >
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
                 <span style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, color: T.fg, flex: 1 }}>
                   {rec.label}
                 </span>
-                {rec.vision && (
-                  <span
-                    style={{
-                      fontFamily: T.sans,
-                      fontSize: 10,
-                      color: T.blue,
-                      background: T.blue + "26",
-                      borderRadius: 4,
-                      padding: "1px 6px",
-                    }}
-                  >
-                    👁 vision
-                  </span>
-                )}
-                <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg3 }}>{rec.approx}</span>
+                <span style={ekHint()}>{rec.approx}</span>
               </div>
-              <div style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5 }}>
+              <div style={ekHint()}>
                 {rec.reason}
+                {rec.vision ? " Reads images." : ""}
               </div>
               {rec.lowRam && (
-                <div style={{ fontFamily: T.sans, fontSize: 11.5, color: T.amber, marginTop: 2 }}>
-                  ⚠ Limited memory — responses may be slow. A smaller model may feel better.
+                <div data-engine-gate-low-memory style={ekHint({ color: T.amber, marginTop: 2 })}>
+                  Limited memory: replies may be slow. A smaller model may feel better.
                 </div>
               )}
             </div>
-            {/* Embedding model opt-in */}
+            {/* The small model that searches documents. */}
             <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
               <input
                 type="checkbox"
+                data-engine-gate-search-model
                 checked={alsoEmbed}
                 onChange={(e) => setAlsoEmbed(e.target.checked)}
-                style={{ marginTop: 2 }}
+                style={{ marginTop: 3 }}
               />
-              <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2, lineHeight: 1.5 }}>
-                Also download the search model{" "}
-                <code style={{ fontFamily: T.mono, color: T.fg }}>nomic-embed-text</code>{" "}
-                <span style={{ color: T.fg3 }}>(274 MB)</span> — needed for attaching folders and searching files.
+              <span style={ekHint()}>
+                <span style={{ color: T.fg }}>Also download the model that searches your documents</span> (274 MB).
+                Attached folders need it.
               </span>
             </label>
           </>
         )}
         {phase === "pulling" && (
           <>
-            <div style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2, lineHeight: 1.6 }}>
+            <div style={ekHint()}>
               {alsoEmbed
-                ? `Downloading ${pullStep === "embed" ? "the search model" : "your model"} — step ${pullStep === "embed" ? "2" : "1"} of 2`
-                : "Downloading your model…"}
+                ? pullStep === "embed"
+                  ? "Step 2 of 2: the model that searches your documents."
+                  : "Step 1 of 2: your model."
+                : "Your model is on its way."}
             </div>
             {(() => {
               const target = pullStep === "embed" ? "nomic-embed-text" : (rec ? rec.id : null);
-              const label = pullStep === "embed" ? "nomic-embed-text" : (rec ? rec.label : "…");
+              const label = pullStep === "embed" ? "Search model" : (rec ? rec.label : "…");
               const prog = target ? ekGetPull(target) : null;
               const pct = prog && prog.pct !== null ? prog.pct : null;
               return (
-                <div>
+                <div data-engine-gate-progress>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
-                    <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.fg, fontWeight: 500, flex: 1 }}>
-                      {label}
-                    </span>
-                    <span style={{ fontFamily: T.sans, fontSize: 12, color: T.fg2 }}>
+                    <span style={ekHeading({ flex: 1 })}>{label}</span>
+                    <span style={ekHint()}>
                       {pct !== null
-                        ? `${pct}% · ${formatBytes(prog.completedBytes)} / ${formatBytes(prog.totalBytes)}`
-                        : (prog && prog.statusLine) || "starting…"}
+                        ? `${pct}% · ${formatBytes(prog.completedBytes)} of ${formatBytes(prog.totalBytes)}`
+                        : (prog && prog.statusLine) || "Starting…"}
                     </span>
                   </div>
                   <div style={{ height: 4, borderRadius: 2, background: T.bg3, overflow: "hidden" }}>
@@ -1566,7 +1148,7 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
                       style={{
                         height: "100%",
                         width: pct !== null ? `${pct}%` : "30%",
-                        background: T.amber,
+                        background: T.fg,
                         borderRadius: 2,
                         transition: "width 200ms linear",
                         animation: pct === null ? "blink 1.1s steps(2) infinite" : "none",
@@ -1579,55 +1161,51 @@ function EngineGate({ open, modelId, onReady, onDismiss, onModelInstalled }) {
           </>
         )}
         {phase === "no-binary" && (
-          <div style={{ fontFamily: T.sans, fontSize: 13, color: T.fg2, lineHeight: 1.6 }}>
-            The bundled engine isn't available in this build.
+          <div style={ekHint()}>
+            This copy of Ekorbia was built without its engine.
             {binaryError && (
               <div
                 style={{
                   marginTop: 8,
-                  background: T.bg2,
+                  background: T.isLight ? T.bg0 : T.bg2,
                   border: `1px solid ${T.border}`,
                   borderRadius: 8,
                   padding: "8px 12px",
-                  fontFamily: T.sans,
-                  fontSize: 12.5,
-                  color: T.fg3,
+                  overflowWrap: "anywhere",
                 }}
               >
                 {binaryError}
               </div>
             )}
             <div style={{ marginTop: 8 }}>
-              You can point Ekorbia at Ollama or a custom endpoint under{" "}
-              <span style={{ color: T.fg }}>Settings → Backend</span>.
+              Ekorbia can use Ollama or another server instead: Settings → Advanced.
             </div>
           </div>
         )}
 
-        {/* Actions */}
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
-          {(phase === "recommend" || phase === "no-binary") && (
-            <button
-              onClick={onDismiss}
-              style={ekBtn("secondary")}
-            >
-              {phase === "no-binary" ? "Continue" : "Skip for now"}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
+          {phase === "recommend" && (
+            <button data-engine-gate-skip onClick={onDismiss} style={ekBtn("quiet")}>
+              Skip for now
+            </button>
+          )}
+          <span style={{ flex: 1 }} />
+          {phase === "no-binary" && (
+            <button onClick={onDismiss} style={ekBtn("primary")}>
+              Continue
             </button>
           )}
           {phase === "recommend" && (
             <>
               <button
+                data-engine-gate-other
                 onClick={() => { onDismiss?.(); window.ekOpenModelManager?.(); }}
                 style={ekBtn("secondary")}
               >
-                Choose a different model
+                Choose another
               </button>
-              <button
-                className="ek-btn-primary"
-                onClick={downloadAndSetup}
-                style={ekBtn("primary")}
-              >
-                Download and set up
+              <button data-engine-gate-download onClick={downloadAndSetup} style={ekBtn("primary")}>
+                Download
               </button>
             </>
           )}
@@ -1691,7 +1269,7 @@ function EngineMigrationOffer({ open, onKeepOllama, onSwitchToEngine, onDismiss 
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 26 }}>✨</span>
+          <BrandMark size={20} />
           <div style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, color: T.fg }}>
             Ekorbia can run models itself now
           </div>
@@ -1700,7 +1278,7 @@ function EngineMigrationOffer({ open, onKeepOllama, onSwitchToEngine, onDismiss 
           You're all set up with Ollama, and it'll keep working. Ekorbia can
           now download and run models on its own too — no Ollama needed. Switch
           to the bundled engine, or keep your current setup. You can change
-          this any time under <span style={{ color: T.fg }}>Settings → Backend</span>.
+          this any time under <span style={{ color: T.fg }}>Settings → Advanced</span>.
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
           <button

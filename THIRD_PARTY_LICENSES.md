@@ -23,12 +23,13 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 
 ## License overview
 
-- **Apache License 2.0** (Apache-2.0) — 388 crates
-- **MIT License** (MIT) — 146 crates
+- **Apache License 2.0** (Apache-2.0) — 385 crates
+- **MIT License** (MIT) — 137 crates
 - **Unicode License v3** (Unicode-3.0) — 19 crates
-- **Mozilla Public License 2.0** (MPL-2.0) — 7 crates
-- **BSD 3-Clause "New" or "Revised" License** (BSD-3-Clause) — 6 crates
-- **ISC License** (ISC) — 5 crates
+- **BSD 3-Clause "New" or "Revised" License** (BSD-3-Clause) — 7 crates
+- **Mozilla Public License 2.0** (MPL-2.0) — 5 crates
+- **ISC License** (ISC) — 4 crates
+- **The Unlicense** (Unlicense) — 2 crates
 - **Community Data License Agreement Permissive 2.0** (CDLA-Permissive-2.0) — 1 crate
 - **zlib License** (Zlib) — 1 crate
 
@@ -40,7 +41,7 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 
 - [`adler2` 2.0.1](https://github.com/oyvindln/adler2)
 - [`ahash` 0.8.12](https://github.com/tkaitchuck/ahash)
-- [`android_system_properties` 0.1.5](https://github.com/nical/android_system_properties)
+- [`alsa` 0.9.1](https://github.com/diwic/alsa-rs)
 - [`anyhow` 1.0.102](https://github.com/dtolnay/anyhow)
 - [`async-broadcast` 0.7.2](https://github.com/smol-rs/async-broadcast)
 - [`async-channel` 2.5.0](https://github.com/smol-rs/async-channel)
@@ -69,15 +70,19 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`cargo_toml` 0.22.3](https://gitlab.com/lib.rs/cargo_toml)
 - [`cc` 1.2.61](https://github.com/rust-lang/cc-rs)
 - [`cesu8` 1.1.0](https://github.com/emk/cesu8-rs)
+- [`cexpr` 0.6.0](https://github.com/jethrogb/rust-cexpr)
 - [`cfg-expr` 0.15.8](https://github.com/EmbarkStudios/cfg-expr)
 - [`cfg-if` 1.0.4](https://github.com/rust-lang/cfg-if)
-- [`chrono` 0.4.44](https://github.com/chronotope/chrono)
+- [`clang-sys` 1.8.1](https://github.com/KyleMayes/clang-sys)
+- [`cmake` 0.1.58](https://github.com/rust-lang/cmake-rs)
 - [`concurrent-queue` 2.5.0](https://github.com/smol-rs/concurrent-queue)
 - [`cookie` 0.18.1](https://github.com/SergioBenitez/cookie-rs)
 - [`core-foundation` 0.10.1](https://github.com/servo/core-foundation-rs)
 - [`core-foundation-sys` 0.8.7](https://github.com/servo/core-foundation-rs)
 - [`core-graphics` 0.25.0](https://github.com/servo/core-foundation-rs)
 - [`core-graphics-types` 0.2.0](https://github.com/servo/core-foundation-rs)
+- [`coreaudio-rs` 0.11.3](https://github.com/RustAudio/coreaudio-rs.git)
+- [`cpal` 0.15.3](https://github.com/rustaudio/cpal)
 - [`cpufeatures` 0.2.17](https://github.com/RustCrypto/utils)
 - [`crc32fast` 1.5.0](https://github.com/srijs/rust-crc32fast)
 - [`crossbeam-channel` 0.5.15](https://github.com/crossbeam-rs/crossbeam)
@@ -85,6 +90,7 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`crypto-common` 0.1.7](https://github.com/RustCrypto/traits)
 - [`ctor` 0.8.0](https://github.com/mmastrac/rust-ctor)
 - [`ctor-proc-macro` 0.0.7](https://github.com/mmastrac/rust-ctor)
+- [`dasp_sample` 0.11.0](https://github.com/rustaudio/sample.git)
 - [`dbus` 0.9.11](https://github.com/diwic/dbus-rs)
 - [`deranged` 0.5.8](https://github.com/jhpratt/deranged)
 - [`digest` 0.10.7](https://github.com/RustCrypto/traits)
@@ -98,6 +104,7 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`dtoa` 1.0.11](https://github.com/dtolnay/dtoa)
 - [`dunce` 1.0.5](https://gitlab.com/kornelski/dunce)
 - [`dyn-clone` 1.0.20](https://github.com/dtolnay/dyn-clone)
+- [`either` 1.16.0](https://github.com/rayon-rs/either)
 - [`embed_plist` 1.2.2](https://github.com/nvzqz/embed-plist-rs)
 - [`encoding_rs` 0.8.35](https://github.com/hsivonen/encoding_rs)
 - [`enumflags2` 0.7.12](https://github.com/meithecatte/enumflags2)
@@ -120,7 +127,6 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`foreign-types-macros` 0.2.3](https://github.com/sfackler/foreign-types)
 - [`foreign-types-shared` 0.3.1](https://github.com/sfackler/foreign-types)
 - [`form_urlencoded` 1.2.2](https://github.com/servo/rust-url)
-- [`futf` 0.1.5](https://github.com/servo/futf)
 - [`futures-channel` 0.3.32](https://github.com/rust-lang/futures-rs)
 - [`futures-core` 0.3.32](https://github.com/rust-lang/futures-rs)
 - [`futures-executor` 0.3.32](https://github.com/rust-lang/futures-rs)
@@ -130,9 +136,7 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`futures-sink` 0.3.32](https://github.com/rust-lang/futures-rs)
 - [`futures-task` 0.3.32](https://github.com/rust-lang/futures-rs)
 - [`futures-util` 0.3.32](https://github.com/rust-lang/futures-rs)
-- [`fxhash` 0.2.1](https://github.com/cbreeden/fxhash)
 - [`gethostname` 1.1.0](https://codeberg.org/swsnr/gethostname.rs.git)
-- [`getopts` 0.2.24](https://github.com/rust-lang/getopts)
 - [`getrandom` 0.2.17](https://github.com/rust-random/getrandom)
 - [`getrandom` 0.3.4](https://github.com/rust-random/getrandom)
 - [`getrandom` 0.4.2](https://github.com/rust-random/getrandom)
@@ -146,24 +150,23 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`heck` 0.5.0](https://github.com/withoutboats/heck)
 - [`hermit-abi` 0.5.2](https://github.com/hermit-os/hermit-rs)
 - [`hex` 0.4.3](https://github.com/KokaKiwi/rust-hex)
-- [`html5ever` 0.27.0](https://github.com/servo/html5ever)
 - [`html5ever` 0.38.0](https://github.com/servo/html5ever)
 - [`http` 1.4.0](https://github.com/hyperium/http)
 - [`httparse` 1.10.1](https://github.com/seanmonstar/httparse)
 - [`hyper-rustls` 0.27.9](https://github.com/rustls/hyper-rustls)
-- [`iana-time-zone` 0.1.65](https://github.com/strawlab/iana-time-zone)
-- [`iana-time-zone-haiku` 0.1.2](https://github.com/strawlab/iana-time-zone)
 - [`ident_case` 1.0.1](https://github.com/TedDriggs/ident_case)
 - [`idna` 1.1.0](https://github.com/servo/rust-url/)
 - [`idna_adapter` 1.2.2](https://github.com/hsivonen/idna_adapter)
 - [`indexmap` 1.9.3](https://github.com/bluss/indexmap)
 - [`indexmap` 2.14.0](https://github.com/indexmap-rs/indexmap)
 - [`ipnet` 2.12.0](https://github.com/krisprice/ipnet)
+- [`itertools` 0.13.0](https://github.com/rust-itertools/itertools)
 - [`itoa` 1.0.18](https://github.com/dtolnay/itoa)
 - [`jni` 0.21.1](https://github.com/jni-rs/jni-rs)
 - [`jni-sys` 0.3.1](https://github.com/jni-rs/jni-sys)
 - [`jni-sys` 0.4.1](https://github.com/jni-rs/jni-sys)
 - [`jni-sys-macros` 0.4.1](https://github.com/jni-rs/jni-sys)
+- [`jobserver` 0.1.34](https://github.com/rust-lang/jobserver-rs)
 - [`js-sys` 0.3.97](https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys)
 - [`json-patch` 3.0.1](https://github.com/idubrov/json-patch)
 - [`jsonptr` 0.6.3](https://github.com/chanced/jsonptr)
@@ -173,19 +176,22 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`linux-raw-sys` 0.12.1](https://github.com/sunfishcode/linux-raw-sys)
 - [`lock_api` 0.4.14](https://github.com/Amanieu/parking_lot)
 - [`log` 0.4.29](https://github.com/rust-lang/log)
-- [`mac` 0.1.1](https://github.com/reem/rust-mac.git)
 - [`mac-notification-sys` 0.6.12](https://github.com/h4llow3En/mac-notification-sys)
-- [`markup5ever` 0.12.1](https://github.com/servo/html5ever)
+- [`mach2` 0.4.3](https://github.com/JohnTitor/mach2)
 - [`markup5ever` 0.38.0](https://github.com/servo/html5ever)
 - [`md-5` 0.10.6](https://github.com/RustCrypto/hashes)
 - [`mime` 0.3.17](https://github.com/hyperium/mime)
 - [`minimal-lexical` 0.2.1](https://github.com/Alexhuszagh/minimal-lexical)
 - [`miniz_oxide` 0.8.9](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
 - [`muda` 0.19.1](https://github.com/tauri-apps/muda)
+- [`ndk` 0.8.0](https://github.com/rust-mobile/ndk)
 - [`ndk` 0.9.0](https://github.com/rust-mobile/ndk)
+- [`ndk-context` 0.1.1](https://github.com/rust-windowing/android-ndk-rs)
+- [`ndk-sys` 0.5.0+25.2.9519653](https://github.com/rust-mobile/ndk)
 - [`ndk-sys` 0.6.0+11769913](https://github.com/rust-mobile/ndk)
 - [`notify-rust` 4.17.0](https://github.com/hoodie/notify-rust)
 - [`num-conv` 0.2.1](https://github.com/jhpratt/num-conv)
+- [`num-derive` 0.4.2](https://github.com/rust-num/num-derive)
 - [`num-traits` 0.2.19](https://github.com/rust-num/num-traits)
 - [`num_enum` 0.7.6](https://github.com/illicitonion/num_enum)
 - [`num_enum_derive` 0.7.6](https://github.com/illicitonion/num_enum)
@@ -202,6 +208,8 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`objc2-ui-kit` 0.3.2](https://github.com/madsmtm/objc2)
 - [`objc2-user-notifications` 0.3.2](https://github.com/madsmtm/objc2)
 - [`objc2-web-kit` 0.3.2](https://github.com/madsmtm/objc2)
+- [`oboe` 0.6.1](https://github.com/katyo/oboe-rs)
+- [`oboe-sys` 0.6.1](https://github.com/katyo/oboe-rs)
 - [`once_cell` 1.21.4](https://github.com/matklad/once_cell)
 - [`ordered-stream` 0.2.0](https://github.com/danieldg/ordered-stream)
 - [`parking` 2.2.1](https://github.com/smol-rs/parking)
@@ -218,6 +226,7 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`postscript` 0.14.1](https://github.com/bodoni/postscript)
 - [`powerfmt` 0.2.0](https://github.com/jhpratt/powerfmt)
 - [`ppv-lite86` 0.2.21](https://github.com/cryptocorrosion/cryptocorrosion)
+- [`prettyplease` 0.2.37](https://github.com/dtolnay/prettyplease)
 - [`proc-macro-crate` 1.3.1](https://github.com/bkchr/proc-macro-crate)
 - [`proc-macro-crate` 2.0.2](https://github.com/bkchr/proc-macro-crate)
 - [`proc-macro-crate` 3.5.0](https://github.com/bkchr/proc-macro-crate)
@@ -227,11 +236,8 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`quote` 1.0.45](https://github.com/dtolnay/quote)
 - [`r-efi` 5.3.0](https://github.com/r-efi/r-efi)
 - [`r-efi` 6.0.0](https://github.com/r-efi/r-efi)
-- [`rand` 0.8.6](https://github.com/rust-random/rand)
 - [`rand` 0.9.4](https://github.com/rust-random/rand)
-- [`rand_chacha` 0.3.1](https://github.com/rust-random/rand)
 - [`rand_chacha` 0.9.0](https://github.com/rust-random/rand)
-- [`rand_core` 0.6.4](https://github.com/rust-random/rand)
 - [`rand_core` 0.9.5](https://github.com/rust-random/rand)
 - [`rangemap` 1.7.1](https://github.com/jeffparsons/rangemap)
 - [`raw-window-handle` 0.6.2](https://github.com/rust-windowing/raw-window-handle)
@@ -265,22 +271,17 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`serde_yaml` 0.9.34+deprecated](https://github.com/dtolnay/serde-yaml)
 - [`serialize-to-javascript` 0.1.2](https://github.com/chippers/serialize-to-javascript)
 - [`serialize-to-javascript-impl` 0.1.2](https://github.com/chippers/serialize-to-javascript)
-- [`servo_arc` 0.3.0](https://github.com/servo/servo)
 - [`servo_arc` 0.4.3](https://github.com/servo/stylo)
 - [`sha2` 0.10.9](https://github.com/RustCrypto/hashes)
 - [`shlex` 1.3.0](https://github.com/comex/rust-shlex)
 - [`signal-hook` 0.3.18](https://github.com/vorner/signal-hook)
 - [`signal-hook-registry` 1.4.8](https://github.com/vorner/signal-hook)
-- [`similar` 2.7.0](https://github.com/mitsuhiko/similar)
-- [`siphasher` 0.3.11](https://github.com/jedisct1/rust-siphash)
 - [`siphasher` 1.0.3](https://github.com/jedisct1/rust-siphash)
 - [`smallvec` 1.15.1](https://github.com/servo/rust-smallvec)
 - [`socket2` 0.6.3](https://github.com/rust-lang/socket2)
 - [`softbuffer` 0.4.8](https://github.com/rust-windowing/softbuffer)
 - [`stable_deref_trait` 1.2.1](https://github.com/storyyeller/stable_deref_trait)
-- [`string_cache` 0.8.9](https://github.com/servo/string-cache)
 - [`string_cache` 0.9.0](https://github.com/servo/string-cache)
-- [`string_cache_codegen` 0.5.4](https://github.com/servo/string-cache)
 - [`string_cache_codegen` 0.6.1](https://github.com/servo/string-cache)
 - [`swift-rs` 1.0.7](https://github.com/Brendonovich/swift-rs)
 - [`syn` 1.0.109](https://github.com/dtolnay/syn)
@@ -305,7 +306,6 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`tauri-utils` 2.9.1](https://github.com/tauri-apps/tauri)
 - [`tauri-winrt-notification` 0.7.2](https://github.com/tauri-apps/winrt-notification)
 - [`tempfile` 3.27.0](https://github.com/Stebalien/tempfile)
-- [`tendril` 0.4.3](https://github.com/servo/tendril)
 - [`tendril` 0.5.0](https://github.com/servo/html5ever)
 - [`thiserror` 1.0.69](https://github.com/dtolnay/thiserror)
 - [`thiserror` 2.0.18](https://github.com/dtolnay/thiserror)
@@ -338,7 +338,6 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`unicode-ident` 1.0.24](https://github.com/dtolnay/unicode-ident)
 - [`unicode-normalization` 0.1.25](https://github.com/unicode-rs/unicode-normalization)
 - [`unicode-segmentation` 1.13.2](https://github.com/unicode-rs/unicode-segmentation)
-- [`unicode-width` 0.2.2](https://github.com/unicode-rs/unicode-width)
 - [`url` 2.5.8](https://github.com/servo/rust-url)
 - [`utf-8` 0.7.6](https://github.com/SimonSapin/rust-utf8)
 - [`utf8_iter` 1.0.4](https://github.com/hsivonen/utf8_iter)
@@ -361,21 +360,20 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`winapi-i686-pc-windows-gnu` 0.4.0](https://github.com/retep998/winapi-rs)
 - [`winapi-x86_64-pc-windows-gnu` 0.4.0](https://github.com/retep998/winapi-rs)
 - [`window-vibrancy` 0.6.0](https://github.com/tauri-apps/tauri-plugin-vibrancy)
-- [`window-vibrancy` 0.7.1](https://github.com/tauri-apps/tauri-plugin-vibrancy)
+- [`windows` 0.54.0](https://github.com/microsoft/windows-rs)
 - [`windows` 0.61.3](https://github.com/microsoft/windows-rs)
 - [`windows-collections` 0.2.0](https://github.com/microsoft/windows-rs)
+- [`windows-core` 0.54.0](https://github.com/microsoft/windows-rs)
 - [`windows-core` 0.61.2](https://github.com/microsoft/windows-rs)
-- [`windows-core` 0.62.2](https://github.com/microsoft/windows-rs)
 - [`windows-future` 0.2.1](https://github.com/microsoft/windows-rs)
 - [`windows-implement` 0.60.2](https://github.com/microsoft/windows-rs)
 - [`windows-interface` 0.59.3](https://github.com/microsoft/windows-rs)
 - [`windows-link` 0.1.3](https://github.com/microsoft/windows-rs)
 - [`windows-link` 0.2.1](https://github.com/microsoft/windows-rs)
 - [`windows-numerics` 0.2.0](https://github.com/microsoft/windows-rs)
+- [`windows-result` 0.1.2](https://github.com/microsoft/windows-rs)
 - [`windows-result` 0.3.4](https://github.com/microsoft/windows-rs)
-- [`windows-result` 0.4.1](https://github.com/microsoft/windows-rs)
 - [`windows-strings` 0.4.2](https://github.com/microsoft/windows-rs)
-- [`windows-strings` 0.5.1](https://github.com/microsoft/windows-rs)
 - [`windows-sys` 0.45.0](https://github.com/microsoft/windows-rs)
 - [`windows-sys` 0.48.0](https://github.com/microsoft/windows-rs)
 - [`windows-sys` 0.52.0](https://github.com/microsoft/windows-rs)
@@ -641,6 +639,7 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 
 - [`adobe-cmap-parser` 0.4.1](https://github.com/jrmuizel/adobe-cmap-parser)
 - [`aho-corasick` 1.1.4](https://github.com/BurntSushi/aho-corasick)
+- [`alsa-sys` 0.3.1](https://github.com/diwic/alsa-sys)
 - [`atk` 0.18.2](https://github.com/gtk-rs/gtk3-rs)
 - [`atk-sys` 0.18.2](https://github.com/gtk-rs/gtk3-rs)
 - [`block2` 0.6.2](https://github.com/madsmtm/objc2)
@@ -652,20 +651,20 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`cargo_metadata` 0.19.2](https://github.com/oli-obk/cargo_metadata)
 - [`cfb` 0.7.3](https://github.com/mdsteele/rust-cfb)
 - [`combine` 4.6.7](https://github.com/Marwes/combine)
+- [`coreaudio-sys` 0.2.18](https://github.com/RustAudio/coreaudio-sys.git)
 - [`darling` 0.23.0](https://github.com/TedDriggs/darling)
 - [`darling_core` 0.23.0](https://github.com/TedDriggs/darling)
 - [`darling_macro` 0.23.0](https://github.com/TedDriggs/darling)
-- [`derive_more` 0.99.20](https://github.com/JelteF/derive_more)
 - [`derive_more` 2.1.1](https://github.com/JelteF/derive_more)
 - [`derive_more-impl` 2.1.1](https://github.com/JelteF/derive_more)
 - [`dlopen2` 0.8.2](https://github.com/OpenByteDev/dlopen2)
 - [`dlopen2_derive` 0.4.3](https://github.com/OpenByteDev/dlopen2)
 - [`dom_query` 0.27.0](https://github.com/niklak/dom_query)
 - [`dpi` 0.1.2](https://github.com/rust-windowing/winit)
-- [`ekorbia` 0.1.0](https://github.com/ekorbia/ekorbia-desktop)
+- [`ekorbia` 0.8.0](https://github.com/ekorbia/ekorbia-desktop)
 - [`embed-resource` 3.0.9](https://github.com/nabijaczleweli/rust-embed-resource)
 - [`endi` 1.1.1](https://github.com/zeenix/endi)
-- [`feed-rs` 2.3.1](https://github.com/feed-rs/feed-rs.git)
+- [`fs_extra` 1.3.0](https://github.com/webdesus/fs_extra)
 - [`gdk` 0.18.2](https://github.com/gtk-rs/gtk3-rs)
 - [`gdk-pixbuf` 0.18.5](https://github.com/gtk-rs/gtk-rs-core)
 - [`gdk-pixbuf-sys` 0.18.0](https://github.com/gtk-rs/gtk-rs-core)
@@ -696,7 +695,6 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`libredox` 0.1.16](https://gitlab.redox-os.org/redox-os/libredox.git)
 - [`libsqlite3-sys` 0.28.0](https://github.com/rusqlite/rusqlite)
 - [`lopdf` 0.34.0](https://github.com/J-F-Liu/lopdf.git)
-- [`mediatype` 0.19.20](https://github.com/picoHz/mediatype)
 - [`memchr` 2.8.0](https://github.com/BurntSushi/memchr)
 - [`memoffset` 0.9.1](https://github.com/Gilnaa/memoffset)
 - [`mio` 1.2.0](https://github.com/tokio-rs/mio)
@@ -710,19 +708,10 @@ collected in [`ui/vendor/THIRD_PARTY_LICENSES.md`](ui/vendor/THIRD_PARTY_LICENSE
 - [`pango` 0.18.3](https://github.com/gtk-rs/gtk-rs-core)
 - [`pango-sys` 0.18.0](https://github.com/gtk-rs/gtk-rs-core)
 - [`pdf-extract` 0.7.12](https://github.com/jrmuizel/pdf-extract)
-- [`phf` 0.10.1](https://github.com/sfackler/rust-phf)
-- [`phf` 0.11.3](https://github.com/rust-phf/rust-phf)
 - [`phf` 0.13.1](https://github.com/rust-phf/rust-phf)
-- [`phf_codegen` 0.10.0](https://github.com/sfackler/rust-phf)
-- [`phf_codegen` 0.11.3](https://github.com/rust-phf/rust-phf)
 - [`phf_codegen` 0.13.1](https://github.com/rust-phf/rust-phf)
-- [`phf_generator` 0.10.0](https://github.com/sfackler/rust-phf)
-- [`phf_generator` 0.11.3](https://github.com/rust-phf/rust-phf)
 - [`phf_generator` 0.13.1](https://github.com/rust-phf/rust-phf)
-- [`phf_macros` 0.11.3](https://github.com/rust-phf/rust-phf)
 - [`phf_macros` 0.13.1](https://github.com/rust-phf/rust-phf)
-- [`phf_shared` 0.10.0](https://github.com/sfackler/rust-phf)
-- [`phf_shared` 0.11.3](https://github.com/rust-phf/rust-phf)
 - [`phf_shared` 0.13.1](https://github.com/rust-phf/rust-phf)
 - [`plist` 1.9.0](https://github.com/ebarnard/rust-plist/)
 - [`pom` 1.1.0](https://github.com/J-F-Liu/pom.git)
@@ -884,14 +873,59 @@ authorization of the copyright holder.
 
 </details>
 
+### BSD 3-Clause "New" or "Revised" License (`BSD-3-Clause`)
+
+- [`alloc-no-stdlib` 2.0.4](https://github.com/dropbox/rust-alloc-no-stdlib)
+- [`alloc-stdlib` 0.2.2](https://github.com/dropbox/rust-alloc-no-stdlib)
+- [`bindgen` 0.72.1](https://github.com/rust-lang/rust-bindgen)
+- [`brotli` 8.0.2](https://github.com/dropbox/rust-brotli)
+- [`brotli-decompressor` 5.0.0](https://github.com/dropbox/rust-brotli-decompressor)
+- [`encoding_rs` 0.8.35](https://github.com/hsivonen/encoding_rs)
+- [`subtle` 2.6.1](https://github.com/dalek-cryptography/subtle)
+
+<details>
+<summary>License text</summary>
+
+```
+BSD 3-Clause License
+
+Copyright (c) 2013, Jyun-Yan You
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+</details>
+
 ### Mozilla Public License 2.0 (`MPL-2.0`)
 
-- [`cssparser` 0.31.2](https://github.com/servo/rust-cssparser)
 - [`cssparser` 0.36.0](https://github.com/servo/rust-cssparser)
 - [`cssparser-macros` 0.6.1](https://github.com/servo/rust-cssparser)
 - [`dtoa-short` 0.3.5](https://github.com/upsuper/dtoa-short)
 - [`option-ext` 0.2.0](https://github.com/soc/option-ext.git)
-- [`selectors` 0.25.0](https://github.com/servo/servo)
 - [`selectors` 0.36.1](https://github.com/servo/stylo)
 
 <details>
@@ -1275,41 +1309,11 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
 </details>
 
-### BSD 3-Clause "New" or "Revised" License (`BSD-3-Clause`)
-
-- [`alloc-no-stdlib` 2.0.4](https://github.com/dropbox/rust-alloc-no-stdlib)
-- [`alloc-stdlib` 0.2.2](https://github.com/dropbox/rust-alloc-no-stdlib)
-- [`brotli` 8.0.2](https://github.com/dropbox/rust-brotli)
-- [`brotli-decompressor` 5.0.0](https://github.com/dropbox/rust-brotli-decompressor)
-- [`encoding_rs` 0.8.35](https://github.com/hsivonen/encoding_rs)
-- [`subtle` 2.6.1](https://github.com/dalek-cryptography/subtle)
-
-<details>
-<summary>License text</summary>
-
-```
-Copyright (c) 2016 Dropbox, Inc.
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-```
-
-</details>
-
 ### ISC License (`ISC`)
 
-- [`ego-tree` 0.6.3](https://github.com/rust-scraper/ego-tree)
+- [`libloading` 0.8.9](https://github.com/nagisa/rust_libloading/)
 - [`ring` 0.17.14](https://github.com/briansmith/ring)
 - [`rustls-webpki` 0.103.13](https://github.com/rustls/webpki)
-- [`scraper` 0.20.0](https://github.com/causal-agent/scraper)
 - [`untrusted` 0.9.0](https://github.com/briansmith/untrusted)
 
 <details>
@@ -1329,6 +1333,43 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 // WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 // ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
+
+</details>
+
+### The Unlicense (`Unlicense`)
+
+- [`whisper-rs` 0.16.0](https://codeberg.org/tazz4843/whisper-rs)
+- [`whisper-rs-sys` 0.15.0](https://codeberg.org/tazz4843/whisper-rs)
+
+<details>
+<summary>License text</summary>
+
+```
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <https://unlicense.org>
 ```
 
 </details>

@@ -1,5 +1,5 @@
 // shell.jsx -- App chrome: window-drag helpers, Sidebar (one workspace),
-//   Space dialogs, ChatRow, MessageHitRow, RightPanelTabs, StatusLine, MoreMenu.
+//   Space dialogs, ChatRow, MessageHitRow, StatusLine, MoreMenu.
 // Depends on: tokens, atoms, icons, data (MODELS), utils.
 
 // ─── Window chrome ──────────────────────────────────────────
@@ -139,16 +139,6 @@ function Sidebar({
     };
   }, [chats, query]);
 
-  // Lookup table for the per-chat sidebar dot: a chat in a coloured Space
-  // wears that colour, which says more than the model's.
-  const spaceColorById = useMemo(() => {
-    const m = new Map();
-    const resolve = window.spaceColorHex;
-    for (const s of (spaces || [])) {
-      if (s.color && resolve) m.set(s.id, resolve(s.color));
-    }
-    return m;
-  }, [spaces]);
   const searching = !!query.trim();
   const totalItems = (filtered.dateSections || []).reduce(
     (n, s) => n + s.items.length,
@@ -231,14 +221,8 @@ function Sidebar({
     onDelete(m.chat.id);
   };
 
-  // Space ambient tint — in a coloured workspace the rail wears a whisper
-  // wash of that colour at the top, matching the chat pane's tinted glows.
-  // Dark themes only, coloured Spaces only, else the flat bg1.
   const activeSpaceRow = activeSpaceId
     ? (spaces || []).find((s) => s.id === activeSpaceId) || null
-    : null;
-  const railTint = window.spaceAmbientTint
-    ? window.spaceAmbientTint(activeSpaceRow, window.SPACE_COLORS, T.isLight)
     : null;
   const workspaceName = activeSpaceRow ? (activeSpaceRow.name || "Unnamed") : "General";
   const countLabel = documentCount && documentCount.documents > 0
@@ -261,13 +245,10 @@ function Sidebar({
   return (
     <aside
       data-sidebar
-      data-space-tint={railTint || undefined}
       style={{
         width: width || 252,
         flexShrink: 0,
-        background: railTint
-          ? `radial-gradient(ellipse 130% 24% at 50% 0%, ${railTint}1a, transparent), ${T.bg1}`
-          : T.bg1,
+        background: T.bg1,
         borderRight: `1px solid ${T.border}`,
         display: "flex",
         flexDirection: "column",
@@ -576,7 +557,6 @@ function Sidebar({
                   key={c.id}
                   chat={c}
                   model={model}
-                  spaceColor={c.spaceId ? spaceColorById.get(c.spaceId) : undefined}
                   active={active}
                   onClick={() => onPick(c)}
                   onDelete={() => onDelete(c.id)}
@@ -743,13 +723,13 @@ function Sidebar({
 // either the ⋯ button (which passes its rect's bottom-left offset by
 // -130 so the right edges roughly align) or a right-click on the row
 // (which passes the cursor coords directly). Four items: Edit settings,
-// Rename, Change color, Delete.
+// Rename, Delete.
 //
 // Clamps to the viewport internally so a near-edge open doesn't render
 // off-screen. Mirrors the dismissal pattern from ChatContextMenu: a
 // transparent full-viewport backdrop at the layer below catches outside
 // clicks; Esc dismisses via the keydown effect.
-function SpaceOverflowMenu({ x, y, onEdit, onRename, onRecolor, onDelete, onClose }) {
+function SpaceOverflowMenu({ x, y, onEdit, onRename, onDelete, onClose }) {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") onClose();
@@ -798,7 +778,6 @@ function SpaceOverflowMenu({ x, y, onEdit, onRename, onRecolor, onDelete, onClos
       >
         <MenuItem onClick={onEdit}>Edit settings…</MenuItem>
         <MenuItem onClick={onRename}>Rename workspace</MenuItem>
-        <MenuItem onClick={onRecolor}>Change color…</MenuItem>
         <MenuItem onClick={onDelete} danger>
           Delete workspace
         </MenuItem>
@@ -809,18 +788,13 @@ function SpaceOverflowMenu({ x, y, onEdit, onRename, onRecolor, onDelete, onClos
 
 // ─── SpaceCreateModal ───────────────────────────────────────
 //
-// Modal for creating a new Space — name input + color palette grid.
-// Distinct from NameModal because we need to capture both pieces in
-// one user gesture; rename re-uses NameModal (color stays put).
-//
-// Color defaults to the first palette key so a user who just hits
-// Enter still gets a sensibly-tinted Space. Selecting "no color" is
-// also valid (the dot falls back to fg2 in the sidebar).
+// Modal for creating a new workspace — a name, and a choice between
+// creating it and creating it then opening its settings. A workspace has
+// no colour any more; `onSubmit` still takes one (always null) because the
+// row has the column.
 function SpaceCreateModal({ onCancel, onSubmit }) {
   const [name, setName] = useState("");
-  const palette = window.SPACE_COLORS || {};
-  const paletteKeys = Object.keys(palette);
-  const [color, setColor] = useState(paletteKeys[0] || null);
+  const color = null;
   const inputRef = useRef(null);
 
   // Autofocus the name input on mount + Esc dismiss / Enter submit.
@@ -899,81 +873,6 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
           }}
         />
 
-        <div
-          style={{
-            marginTop: 16,
-            marginBottom: 8,
-            fontFamily: T.sans,
-            fontSize: 12,
-            color: T.fg2,
-          }}
-        >
-          Color
-        </div>
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 8,
-            alignItems: "center",
-          }}
-        >
-          {paletteKeys.map((k) => {
-            const selected = color === k;
-            return (
-              <button
-                key={k}
-                onClick={() => setColor(k)}
-                title={k}
-                data-color-swatch={k}
-                aria-pressed={selected}
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: "50%",
-                  background: palette[k],
-                  border: selected
-                    ? `2px solid ${T.fg}`
-                    : `2px solid transparent`,
-                  cursor: "pointer",
-                  padding: 0,
-                  outline: "none",
-                  flexShrink: 0,
-                }}
-              />
-            );
-          })}
-          {/* "No color" option — falls through to the muted fg2 in the
-              sidebar dot. Useful for visually-noisy users who don't want
-              tinting at all. */}
-          <button
-            onClick={() => setColor(null)}
-            title="No color"
-            data-color-swatch="none"
-            aria-pressed={!color}
-            style={{
-              width: 22,
-              height: 22,
-              borderRadius: "50%",
-              background: "transparent",
-              border: !color
-                ? `2px solid ${T.fg}`
-                : `2px dashed ${T.border}`,
-              cursor: "pointer",
-              padding: 0,
-              outline: "none",
-              flexShrink: 0,
-              color: T.fg3,
-              fontFamily: T.sans,
-              fontSize: 12,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            ∅
-          </button>
-        </div>
 
         <div
           style={{
@@ -1007,121 +906,6 @@ function SpaceCreateModal({ onCancel, onSubmit }) {
             Create
           </button>
         </div>
-      </div>
-    </Fragment>
-  );
-}
-
-// ─── SpaceColorPickerPopover ────────────────────────────────
-//
-// Small popover anchored next to a Space row, opened from the Change-
-// color overflow item. Clicking a swatch immediately calls onPick + closes;
-// clicking outside cancels (no Change button — there's nothing to confirm
-// because the only state is the picked color).
-function SpaceColorPickerPopover({ anchorRect, current, onPick, onClose }) {
-  const palette = window.SPACE_COLORS || {};
-  const paletteKeys = Object.keys(palette);
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  // Anchor below the row's overflow button. If anchorRect isn't supplied
-  // (defensive), center on the viewport.
-  const rect = anchorRect || {
-    bottom: window.innerHeight / 2,
-    left: window.innerWidth / 2 - 100,
-  };
-
-  return (
-    <Fragment>
-      <div
-        onClick={onClose}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          onClose();
-        }}
-        style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 65,
-          background: "transparent",
-        }}
-      />
-      <div
-        data-space-color-popover
-        style={{
-          position: "fixed",
-          top: rect.bottom + 6,
-          left: Math.max(8, rect.left - 60),
-          background: T.bg1,
-          border: `1px solid ${T.borderStrong}`,
-          borderRadius: 6,
-          padding: 10,
-          zIndex: 66,
-          boxShadow: T.shadowPop,
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 8,
-          maxWidth: 180,
-        }}
-      >
-        {paletteKeys.map((k) => {
-          const selected = current === k;
-          return (
-            <button
-              key={k}
-              onClick={() => onPick(k)}
-              title={k}
-              data-color-swatch={k}
-              aria-pressed={selected}
-              style={{
-                width: 22,
-                height: 22,
-                borderRadius: "50%",
-                background: palette[k],
-                border: selected
-                  ? `2px solid ${T.fg}`
-                  : `2px solid transparent`,
-                cursor: "pointer",
-                padding: 0,
-                outline: "none",
-                flexShrink: 0,
-              }}
-            />
-          );
-        })}
-        <button
-          onClick={() => onPick(null)}
-          title="No color"
-          data-color-swatch="none"
-          aria-pressed={!current}
-          style={{
-            width: 22,
-            height: 22,
-            borderRadius: "50%",
-            background: "transparent",
-            border: !current
-              ? `2px solid ${T.fg}`
-              : `2px dashed ${T.border}`,
-            cursor: "pointer",
-            padding: 0,
-            outline: "none",
-            flexShrink: 0,
-            color: T.fg3,
-            fontFamily: T.sans,
-            fontSize: 12,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          ∅
-        </button>
       </div>
     </Fragment>
   );
@@ -1974,20 +1758,6 @@ function ChatContextMenu({
               indent
               data-move-to-space={s.id}
             >
-              <span
-                aria-hidden="true"
-                style={{
-                  display: "inline-block",
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: window.spaceColorHex
-                    ? window.spaceColorHex(s.color)
-                    : (s.color ? T[s.color] || T.fg2 : T.fg2),
-                  marginRight: 8,
-                  verticalAlign: "middle",
-                }}
-              />
               {s.name}
             </MenuItem>
           ))}
@@ -2374,7 +2144,6 @@ function ChatRow({
   // would otherwise render as a meaningless muted gray dot; the Space
   // color is far more informative at a glance ("oh this chat is in
   // Novel").
-  spaceColor,
   active,
   onClick,
   onDelete,
@@ -2454,7 +2223,7 @@ function ChatRow({
       )}
       <span style={{ marginTop: 3, flexShrink: 0 }}>
         <ModelDot
-          color={spaceColor || model?.color || T.fg3}
+          color={model?.color || T.fg3}
           size={6}
           glow={false}
         />
@@ -2561,82 +2330,6 @@ function ChatRow({
   );
 }
 
-// ─── Right-panel tab switcher ───────────────────────────────
-// Header that sits at the top of the right panel and switches between
-// the Prompts view and the Watches view. Rendered inside each tab's
-// component (passed in as `tabHeader` prop) so the panel never has to
-// know what tab it's currently showing — the tab's own component does.
-function RightPanelTabs({ tab, onTab, onClose }) {
-  const TabButton = ({ id, label }) => {
-    const active = tab === id;
-    return (
-      <button
-        onClick={() => onTab(id)}
-        style={{
-          flex: 1,
-          height: "100%",
-          background: active ? T.bg2 : "transparent",
-          // Bottom border doubles as the "you are here" indicator. The
-          // 2px solid amber on the active tab visually replaces the
-          // panel's own bottom border line for that one tab cell.
-          border: "none",
-          borderBottom: active
-            ? `2px solid ${T.amber}`
-            : "2px solid transparent",
-          color: active ? T.fg : T.fg2,
-          fontFamily: T.sans,
-          fontSize: 12.5,
-          fontWeight: active ? 600 : 500,
-          textTransform: "capitalize",
-          cursor: "pointer",
-        }}
-        onMouseEnter={(e) => {
-          if (!active) e.currentTarget.style.color = T.fg1;
-        }}
-        onMouseLeave={(e) => {
-          if (!active) e.currentTarget.style.color = T.fg2;
-        }}
-      >
-        {label}
-      </button>
-    );
-  };
-
-  return (
-    <div
-      style={{
-        height: 36,
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "stretch",
-        gap: 0,
-        borderBottom: `1px solid ${T.border}`,
-      }}
-    >
-      <TabButton id="watches" label="Watches" />
-      <TabButton id="files" label="Files" />
-      <button
-        onClick={onClose}
-        title="Close panel"
-        style={{
-          width: 32,
-          background: "transparent",
-          border: "none",
-          borderBottom: "2px solid transparent",
-          color: T.fg3,
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
-        onMouseLeave={(e) => (e.currentTarget.style.color = T.fg3)}
-      >
-        <I.X size={12} />
-      </button>
-    </div>
-  );
-}
 // ─── Status line ────────────────────────────────────────────
 // One line that states the privacy position, shown on Home and at the
 // foot of the workspace sidebar. It replaces the old status bar and keeps
@@ -2650,6 +2343,10 @@ function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttac
   const [baseUrl, setBaseUrl] = useState(null);
   const [up, setUp] = useState(true);
   const [present, setPresent] = useState(true);
+  // Whether any model that can answer is installed (the one that only
+  // searches documents does not count). False on a first run until the
+  // download finishes: the line then says so instead of naming a model.
+  const [anyModel, setAnyModel] = useState(true);
   const invoke = getInvoke();
   const modelId = (model && model.id) || "";
   const modelName = (model && (model.name || model.id)) || "The model";
@@ -2670,7 +2367,9 @@ function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttac
         const data = await invoke("llm_list_models");
         if (cancelled) return;
         setUp(true);
-        setPresent(!modelId || ((data && data.models) || []).some((m) => matches(m.name)));
+        const names = ((data && data.models) || []).map((m) => (m && m.name) || "");
+        setPresent(!modelId || names.some(matches));
+        setAnyModel(names.some((n) => n && !/embed/i.test(n)));
       } catch {
         if (!cancelled) setUp(false);
       }
@@ -2699,7 +2398,7 @@ function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttac
   } else if (!present) {
     kind = "problem";
     color = T.amber;
-    text = `${modelName} is not installed`;
+    text = anyModel ? `${modelName} is not installed` : "No model is installed yet";
   } else if (indexing > 0) {
     kind = "indexing";
     color = T.amber;
@@ -2746,7 +2445,7 @@ function StatusLine({ model, backendKind, onProblemClick, warming, indexingAttac
 // the Prompts, Watches and Files panels are gone, and those panels move
 // into Settings (Templates, Watches) or go away (Files) in later steps of
 // the redesign. Until then this is how they are reached.
-function MoreMenu({ onSettings, onPanel, onTemplates }) {
+function MoreMenu({ onSettings, onTemplates, onWatches }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -2805,8 +2504,7 @@ function MoreMenu({ onSettings, onPanel, onTemplates }) {
           <MenuItem onClick={run(onSettings)} data-more-settings>Settings…</MenuItem>
           <MenuDivider />
           <MenuItem onClick={run(onTemplates)} data-more-templates>Templates…</MenuItem>
-          <MenuItem onClick={run(() => onPanel && onPanel("watches"))} data-more-panel="watches">Watches</MenuItem>
-          <MenuItem onClick={run(() => onPanel && onPanel("files"))} data-more-panel="files">Saved files</MenuItem>
+          <MenuItem onClick={run(onWatches)} data-more-watches>Watches…</MenuItem>
         </div>
       )}
     </div>

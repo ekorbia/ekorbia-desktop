@@ -5,9 +5,7 @@
 
 use crate::db::DbState;
 use crate::watch::cancel::cancel_watch;
-use crate::watch::http::{fetch_url_html, html_to_text_with_selector};
 use crate::watch::pipeline::{run_all_watches_inner, run_watch};
-use crate::watch::rss::fetch_rss_feed;
 use crate::watch::{default_interval_for_kind, map_watch_row, Watch, WatchEvent, WATCH_COLUMNS};
 use tauri::Manager;
 
@@ -39,6 +37,11 @@ pub(crate) fn watch_create(state: tauri::State<'_, DbState>, watch: Watch) -> Re
     } else {
         watch.kind.clone()
     };
+    // Only folders are watched. A feed or page watch cannot be created,
+    // and one left by an older version cannot be re-saved (only deleted).
+    if kind != "folder" {
+        return Err("Only folders can be watched.".to_string());
+    }
     let interval = if watch.interval_secs < 10 {
         default_interval_for_kind(&kind)
     } else {
@@ -288,44 +291,6 @@ pub(crate) async fn watch_run_one(app: tauri::AppHandle, id: String) -> Result<(
     // mark_watch_polled, etc).
     run_watch(&app, &watch).await;
     Ok(())
-}
-
-/// Probe a candidate watch source without persisting anything. Used by
-/// the "Test" button in WatchModal so the user can validate a URL before
-/// saving. Returns a short human-readable status string on success; an
-/// error string with the underlying failure on failure.
-#[tauri::command]
-pub(crate) async fn watch_test_source(kind: String, source_url: String) -> Result<String, String> {
-    match kind.as_str() {
-        "rss" => {
-            let feed = fetch_rss_feed(&source_url).await?;
-            let count = feed.entries.len();
-            let title = feed
-                .title
-                .as_ref()
-                .map(|t| t.content.clone())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "(untitled feed)".to_string());
-            let plural = if count == 1 { "entry" } else { "entries" };
-            Ok(format!("OK — {count} {plural} in \"{title}\""))
-        }
-        "url" => {
-            // For URL kind we fetch the page (no selector — testing the
-            // selector deserves its own field-test if/when we expose it)
-            // and report extracted-text length so the user can sanity-
-            // check that the page actually has body content. A page that
-            // returns 0 chars usually means the content is JS-rendered.
-            let html = fetch_url_html(&source_url).await?;
-            let extracted = html_to_text_with_selector(&html, None);
-            let chars = extracted.chars().count();
-            if chars == 0 {
-                Err("OK fetch but 0 characters extracted (JS-rendered page?)".to_string())
-            } else {
-                Ok(format!("OK — {chars} characters extracted"))
-            }
-        }
-        other => Err(format!("Unsupported kind '{other}'")),
-    }
 }
 
 /// Read a watch's notes file. Returns an empty string when the file doesn't

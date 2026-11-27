@@ -1,30 +1,64 @@
 // chat.jsx -- ChatPane, message rendering helpers, SourcesFooter,
 //   Message, StreamingIndicator, Composer.
 // Depends on: tokens, atoms, icons, data (FAVORITE_COLORS),
-//             overlays.jsx (ModelPicker, modelColor).
-
-// ─── Fenced-block parser (heuristic file-save fallback) ─────
-//
-// For models that don't actually use the write_file tool (or for users who
-// just want to save snippets out of any chat), we scan assistant messages
-// for ```lang ... ``` blocks and offer Save buttons via window.ekSaveModelFile.
-//
-// The pure helpers (parseFencedBlocks, inferFilename, uniquifyFilename) +
-// their lookup tables (LANG_DEFAULT_NAME, FILENAME_HINT_PATTERNS) live in
-// `ui/utils.js` so they can be unit-tested under node:test. They're on
-// `window` by the time this file's components render, so the bare-name
-// references below resolve normally.
+//             overlays.jsx (modelColor).
 
 // Single row inside the chat-header export dropdown. Defined at module
 // scope (not inside ChatPane) so its identity is stable across renders —
 // per CLAUDE.md, components-inside-render-functions cause focus loss /
 // re-mount churn. Trivial styling so the menu reads as a quiet OS list.
 'use strict';
-function ExportMenuItem({ label, onClick }) {
+// A chat's title as a file name: lowercased, runs of anything but letters
+// and digits become hyphens. An empty title gives "chat".
+function chatFileSlug(title) {
+  const slug = String(title || '')
+    .toLowerCase()
+    .replace(/[^\w]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return slug || 'chat';
+}
+
+// Save Markdown as a Word document, at a place the person chooses. The
+// document's parts are built here from the same tokens the chat view
+// renders (`docxParts`, utils.js); Rust packages and writes them. Resolves
+// true when a file was written.
+async function ekSaveAsWord(markdown, name) {
+  const dialogApi = getDialogApi();
+  const tauriInvoke = getInvoke();
+  if (!dialogApi || !tauriInvoke) return false;
+  let path;
+  try {
+    path = await dialogApi.save({
+      title: 'Save as Word',
+      defaultPath: `${name || 'chat'}.docx`,
+      filters: [{ name: 'Word document', extensions: ['docx'] }],
+    });
+  } catch (e) {
+    console.error('Save dialog failed:', e);
+    return false;
+  }
+  if (!path) return false; // cancelled: not an error
+  try {
+    const parts = docxParts(markdown, (src) => marked.lexer(src), {
+      letter: docxUsesLetter(typeof navigator !== 'undefined' ? navigator.language : ''),
+    });
+    await tauriInvoke('docx_save', { path, parts });
+    window.ekToast?.({ kind: 'success', title: 'Saved as Word', body: path });
+    return true;
+  } catch (e) {
+    console.error('Save as Word failed:', e);
+    window.ekToast?.({ kind: 'error', title: 'Could not save the Word document', body: String(e?.message || e) });
+    return false;
+  }
+}
+
+function ExportMenuItem({ label, onClick, testId }) {
   const [hover, setHover] = useState(false);
   return (
     <button
       role="menuitem"
+      data-export={testId}
       onClick={onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -111,18 +145,23 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
     };
   }, [exportMenuOpen]);
 
-  // Build a sensible default filename from the chat title — lowercased,
-  // non-word chars to hyphens, trimmed. Empty title → "chat". The dialog
-  // plugin appends the right extension based on the active filter when the
-  // user doesn't type one, but we still suggest the full name so the
-  // typical "press Save" path produces a tidy result.
-  const slugifyTitle = (title) => {
-    const slug = String(title || '')
-      .toLowerCase()
-      .replace(/[^\w]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 60);
-    return slug || 'chat';
+  const slugifyTitle = chatFileSlug;
+
+  // The whole chat as a Word document: the same text the Markdown export
+  // writes, read back from Rust and converted here.
+  const handleExportWord = async () => {
+    setExportMenuOpen(false);
+    const tauriInvoke = getInvoke();
+    if (!tauriInvoke) return;
+    let markdown;
+    try {
+      markdown = await tauriInvoke('chat_export_markdown', { chatId: chat.id });
+    } catch (e) {
+      console.error('Export failed:', e);
+      window.ekToast?.({ kind: 'error', title: 'Export failed', body: String(e) });
+      return;
+    }
+    await ekSaveAsWord(markdown, chatFileSlug(chat.title));
   };
 
   const handleExport = async (format) => {
@@ -138,16 +177,13 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
       return;
     }
     const slug = slugifyTitle(chat.title);
-    const ext = format === 'json' ? 'json' : 'md';
-    const defaultPath = `${slug}.${ext}`;
+    const defaultPath = `${slug}.md`;
     let path;
     try {
       path = await dialogApi.save({
-        title: `Export chat as ${format === 'json' ? 'JSON' : 'Markdown'}`,
+        title: 'Save chat as Markdown',
         defaultPath,
-        filters: format === 'json'
-          ? [{ name: 'JSON', extensions: ['json'] }]
-          : [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+        filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
       });
     } catch (e) {
       console.error('Save dialog failed:', e);
@@ -222,35 +258,21 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
     [searchQuery],
   );
 
-  // Space ambient tint — when this chat lives in a colored Space, the
-  // pane's ambient glows take that color so the whole room reads as
-  // "inside {Space}", not just the badge. Resolver handles the guards
-  // (light themes, no Space, no/unknown color → null = default duo).
-  const spaceTint = window.spaceAmbientTint
-    ? window.spaceAmbientTint(space, window.SPACE_COLORS, T.isLight)
-    : null;
-
   return (
     <div
       data-chat-pane
-      data-space-tint={spaceTint || undefined}
       style={{
         flex: 1,
         minWidth: 0,
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
-        // Whisper-level ambient tints (site hero glow, heavily muted) —
-        // warm top-left, cool bottom-right by default; both take the
-        // Space's color (slightly stronger up top, so the shift is
-        // perceptible when switching tabs) when the chat is in a colored
-        // Space. Dark themes only: on light surfaces the same tints read
-        // as stains, so they collapse to the flat bg0.
+        // Whisper-level ambient glow in the dark look (warm top-left, cool
+        // bottom-right). On a light surface the same tints read as stains,
+        // so the light look is flat.
         background: T.isLight
           ? T.bg0
-          : spaceTint
-            ? `radial-gradient(ellipse 55% 45% at 18% -5%, ${spaceTint}1f, transparent), radial-gradient(ellipse 55% 45% at 88% 108%, ${spaceTint}10, transparent), ${T.bg0}`
-            : `radial-gradient(ellipse 55% 45% at 18% -5%, ${T.amber}0d, transparent), radial-gradient(ellipse 55% 45% at 88% 108%, ${T.blue}0a, transparent), ${T.bg0}`,
+          : `radial-gradient(ellipse 55% 45% at 18% -5%, ${T.amber}0d, transparent), radial-gradient(ellipse 55% 45% at 88% 108%, ${T.blue}0a, transparent), ${T.bg0}`,
       }}
     >
       {/* Header */}
@@ -437,13 +459,11 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                     zIndex: 10,
                   }}
                 >
+                  <ExportMenuItem label="Save as Word…" testId="word" onClick={handleExportWord} />
                   <ExportMenuItem
-                    label="Export as Markdown"
+                    label="Save as Markdown…"
+                    testId="markdown"
                     onClick={() => handleExport('markdown')}
-                  />
-                  <ExportMenuItem
-                    label="Export as JSON"
-                    onClick={() => handleExport('json')}
                   />
                 </div>
               )}
@@ -545,6 +565,7 @@ function ChatPane({ chat, model, onSendDemo, onRename, isStreaming, searchQuery,
                 m={m}
                 highlightRegex={highlightRegex}
                 chatId={chat.id}
+                fileName={chatFileSlug(chat.title)}
                 isStreaming={isStreaming}
                 onEditMessage={onEditMessage}
                 onRetryMessage={isLastAssistant ? onRetryMessage : null}
@@ -748,8 +769,11 @@ function SourcesFooter({ sources, imagesSkipped }) {
   };
   return (
     <div
+      data-message-sources
       style={{
         marginTop: 6,
+        // In line with the reply's text, which is indented.
+        marginLeft: 14,
         display: "flex",
         flexDirection: "column",
         gap: 4,
@@ -760,7 +784,7 @@ function SourcesFooter({ sources, imagesSkipped }) {
           style={{
             fontFamily: T.sans,
             fontSize: 12,
-            color: T.fg3,
+            color: T.fg2,
             marginRight: 4,
           }}
         >
@@ -909,197 +933,17 @@ function SourcesFooter({ sources, imagesSkipped }) {
   );
 }
 
-// File-saved chip strip on assistant messages. m.toolResults is populated by
-// handleSend at live-write time and re-hydrated by openChatInTab from
-// chat_files_list on reload. Each entry: { relPath, bytes, version, absPath?,
-// fileId? }. Clicking "Reveal" opens the parent folder in Finder; "Open"
-// hands the file to the OS default app. Reveal/Open both resolve absPath
-// lazily via chat_file_path when only fileId is present (i.e. on reload).
-function ToolResultsStrip({ results }) {
-  if (!results?.length) return null;
-  const tauriInvoke = getInvoke();
-  // Use native Tauri commands instead of tauri-plugin-shell — the shell
-  // plugin's `open` API rejects bare filesystem paths via its default
-  // scope regex. chat_file_reveal / chat_file_open spawn the platform
-  // opener directly. Falls back to no-op when neither absPath nor fileId
-  // is present (shouldn't happen for live or reloaded saves).
-  const reveal = async (chip, action) => {
-    if (!tauriInvoke) return;
-    if (!chip.fileId) {
-      window.ekToast?.({
-        kind: 'warn',
-        title: 'No file id on this chip',
-        body: 'Cannot reveal / open without a chat_files row.',
-      });
-      return;
-    }
-    try {
-      const cmd = action === 'reveal' ? 'chat_file_reveal' : 'chat_file_open';
-      await tauriInvoke(cmd, { fileId: chip.fileId });
-    } catch (e) {
-      console.error(`${action} failed for fileId=${chip.fileId}:`, e);
-      window.ekToast?.({
-        kind: 'warn',
-        title: `Could not ${action}`,
-        body: String(e),
-      });
-    }
-  };
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 6,
-        marginBottom: 8,
-      }}
-    >
-      {results.map((r) => (
-        <div
-          key={r.callId || r.fileId || r.relPath}
-          title={`${r.relPath} · ${r.bytes ?? '?'} bytes · v${r.version ?? 1}`}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '4px 8px',
-            borderRadius: 8,
-            background: T.green + '15',
-            border: `1px solid ${T.green}33`,
-            fontFamily: T.sans,
-            fontSize: 12.5,
-            color: T.fg1,
-          }}
-        >
-          <span style={{ color: T.green, fontSize: 10 }}>●</span>
-          <span style={{ color: T.fg }}>{r.relPath}</span>
-          {r.version > 1 && (
-            <span style={{ color: T.fg3, fontSize: 9 }}>v{r.version}</span>
-          )}
-          <button
-            onClick={() => reveal(r, 'reveal')}
-            title="Reveal in Finder"
-            style={{
-              background: 'none',
-              border: 'none',
-              color: T.fg2,
-              cursor: 'pointer',
-              padding: 0,
-              fontSize: 10,
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
-            onMouseLeave={(e) => (e.currentTarget.style.color = T.fg2)}
-          >Reveal</button>
-          <button
-            onClick={() => reveal(r, 'open')}
-            title="Open file"
-            style={{
-              background: 'none',
-              border: 'none',
-              color: T.fg2,
-              cursor: 'pointer',
-              padding: 0,
-              fontSize: 10,
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = T.fg)}
-            onMouseLeave={(e) => (e.currentTarget.style.color = T.fg2)}
-          >Open</button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Heuristic-fallback Save strip for assistant messages that contain
-// fenced code blocks the model didn't already save via the write_file
-// tool. Each chip = one inferred file the user can save with one click.
-// Falls back to a renamable input on the chip if they want to override.
-// Hidden when:
-//   - the message already has toolResults (tool-use path covered it)
-//   - the message has no fenced blocks
-//   - the message is still streaming (parsing mid-stream gives flicker)
-function HeuristicSaveStrip({ messageId, chatId, content, streaming }) {
-  const blocks = useMemo(
-    () => (streaming ? [] : parseFencedBlocks(content)),
-    [content, streaming]
-  );
-  const [saved, setSaved] = useState({}); // filename → true after save
-  if (!blocks.length) return null;
-
-  const save = async (block) => {
-    if (!window.ekSaveModelFile) return;
-    try {
-      const r = await window.ekSaveModelFile({
-        chatId,
-        messageId,
-        path: block.filename,
-        contents: block.content,
-      });
-      if (r?.ok) setSaved((s) => ({ ...s, [block.filename]: true }));
-    } catch (e) {
-      // ekSaveModelFile handles its own toasts; nothing else to do here.
-    }
-  };
-
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-      {blocks.map((b) => {
-        const isSaved = !!saved[b.filename];
-        return (
-          <button
-            key={`${b.ordinal}-${b.filename}`}
-            onClick={() => save(b)}
-            disabled={isSaved}
-            title={
-              isSaved
-                ? `Saved · ${b.filename}`
-                : `Save as ${b.filename} (${b.content.length} chars)`
-            }
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '4px 8px',
-              background: isSaved ? T.green + '15' : T.bg2,
-              border: `1px dashed ${isSaved ? T.green + '55' : T.border}`,
-              borderRadius: 8,
-              color: isSaved ? T.fg2 : T.fg1,
-              fontFamily: T.sans,
-              fontSize: 12.5,
-              cursor: isSaved ? 'default' : 'pointer',
-              opacity: isSaved ? 0.7 : 1,
-            }}
-            onMouseEnter={(e) => {
-              if (!isSaved) e.currentTarget.style.borderColor = T.borderStrong;
-            }}
-            onMouseLeave={(e) => {
-              if (!isSaved) e.currentTarget.style.borderColor = T.border;
-            }}
-          >
-            <span style={{ color: isSaved ? T.green : T.amber, fontSize: 10 }}>
-              {isSaved ? '✓' : '↓'}
-            </span>
-            <span style={{ color: T.fg }}>{b.filename}</span>
-            {b.language && (
-              <span style={{ color: T.fg3, fontSize: 9 }}>{b.language}</span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // Hover-revealed action chip used by the Message component for Edit /
 // Retry affordances. Defined at module scope (not inside Message) per
 // CLAUDE.md's component-identity gotcha — nesting it inside Message would
 // give it a new identity on every render and any focus / animation state
 // would reset on each keystroke.
-function MessageActionButton({ icon, label, title, onClick }) {
+function MessageActionButton({ icon, label, title, onClick, testId }) {
   const [hover, setHover] = useState(false);
   return (
     <button
       type="button"
+      data-message-action={testId}
       title={title}
       onClick={onClick}
       onMouseEnter={() => setHover(true)}
@@ -1112,7 +956,7 @@ function MessageActionButton({ icon, label, title, onClick }) {
         background: hover ? T.bg2 : 'transparent',
         border: `1px solid ${hover ? T.border : 'transparent'}`,
         borderRadius: 8,
-        color: hover ? T.fg : T.fg3,
+        color: hover ? T.fg : T.fg2,
         fontFamily: T.sans,
         fontSize: 12,
         cursor: 'pointer',
@@ -1163,7 +1007,7 @@ function TokenFooter({ tokens, engineCtx = null }) {
   );
 }
 
-function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetryMessage, onContinue, showDetails = false, engineCtx = null, nameOfModel }) {
+function Message({ m, highlightRegex, chatId, fileName = 'chat', isStreaming, onEditMessage, onRetryMessage, onContinue, showDetails = false, engineCtx = null, nameOfModel }) {
   const isUser = m.role === "user";
   // Per-message reveal for the token/timing footer when the global
   // "Show technical details" pref is off. Keeps the details one click away
@@ -1176,13 +1020,6 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
   // v1; users who want to switch start a new compare chat.
   const [altsOpen, setAltsOpen] = useState(false);
   const hasAlternatives = !isUser && m.alternatives?.length > 0;
-  // Heuristic strip only renders when the tool-use path hasn't already
-  // claimed this message. Models that DID call write_file get green chips
-  // via ToolResultsStrip and shouldn't also be nagged with dashed Save
-  // buttons for the same files.
-  const showHeuristic =
-    !isUser && !m.streaming && !(m.toolResults?.length) && !!chatId;
-
   // ── Edit-and-resubmit (Phase 3) ─────────────────────────────────────────
   // Pencil icon on hover for user messages opens an inline textarea seeded
   // with the message content. Save (or ⌘/Ctrl+Enter) calls onEditMessage,
@@ -1229,36 +1066,34 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
     }
   };
 
-  // Show-hovered icons: pencil for user messages, refresh for the last
-  // assistant message (parent passes onRetryMessage only when this is the
-  // case). Suppressed while streaming OR editing OR while the message has
-  // no id (transient/pending). The action row reserves space even when
-  // dimmed so message heights don't jump on hover.
+  // The row under a message. A message of yours: Edit. A finished reply:
+  // Copy, Try again (the last reply only: the parent passes onRetryMessage
+  // just for it) and Save as Word. The row shows on hover, and stays shown
+  // under the last reply so the actions can be found. Hidden while a reply
+  // streams, while editing, and on a message with no id yet.
   const canEdit = isUser && !!onEditMessage && !!m.id && !isStreaming && !isEditing;
   const canRetry = !isUser && !!onRetryMessage && !!m.id && !isStreaming && !m.streaming;
-  const showActions = canEdit || canRetry;
+  const canKeep = !isUser && !!(m.content && m.content.trim()) && !isStreaming && !m.streaming;
+  const showActions = canEdit || canRetry || canKeep;
+  const actionsShown = hover || (!isUser && !!onRetryMessage);
+  const [copied, setCopied] = useState(false);
+  const copyReply = async () => {
+    try {
+      await navigator.clipboard.writeText(m.content || '');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (e) {
+      console.error('Copy failed:', e);
+    }
+  };
 
   return (
-    // id is used by FilesPanel's onScrollToMessage to scroll-into-view the
-    // message that produced a saved file. Stable across re-renders since
-    // m.id is the persisted message id.
     <div
       id={m.id ? `ek-msg-${m.id}` : undefined}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{ marginBottom: 16, position: 'relative' }}
     >
-      {!isUser && m.toolResults?.length > 0 && (
-        <ToolResultsStrip results={m.toolResults} />
-      )}
-      {showHeuristic && (
-        <HeuristicSaveStrip
-          messageId={m.id}
-          chatId={chatId}
-          content={m.content}
-          streaming={m.streaming}
-        />
-      )}
       {isUser && m.prompts?.length > 0 && (
         <div
           style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 5, marginBottom: 6 }}
@@ -1655,42 +1490,62 @@ function Message({ m, highlightRegex, chatId, isStreaming, onEditMessage, onRetr
           )}
         </div>
       )}
-      {/* Hover-revealed actions: pencil for user messages, refresh for the
-          last assistant message. Positioned absolute to the message row so
-          it doesn't take up layout space. Opacity transitions on hover so
-          static reading isn't cluttered. */}
+      {/* What the reply drew on comes straight after it; the actions last. */}
+      {!isUser && (m.sources?.length > 0 || m.imagesSkipped) && (
+        <SourcesFooter sources={m.sources} imagesSkipped={m.imagesSkipped} />
+      )}
       {showActions && (
         <div
+          data-message-actions
           style={{
             display: 'flex',
             justifyContent: isUser ? 'flex-end' : 'flex-start',
             gap: 4,
             marginTop: 4,
-            opacity: hover ? 1 : 0,
+            // A reply's text is indented 14px; a button's own padding is 8.
+            marginLeft: isUser ? 0 : 6,
+            opacity: actionsShown ? 1 : 0,
             transition: 'opacity 0.12s',
-            pointerEvents: hover ? 'auto' : 'none',
+            pointerEvents: actionsShown ? 'auto' : 'none',
           }}
         >
           {canEdit && (
             <MessageActionButton
               icon={<I.Edit size={11} />}
               label="Edit"
-              title="Edit message and re-run from here"
+              testId="edit"
+              title="Change this message and ask again from here"
               onClick={startEdit}
+            />
+          )}
+          {canKeep && (
+            <MessageActionButton
+              icon={copied ? <I.Check size={11} /> : <I.Copy size={11} />}
+              label={copied ? "Copied" : "Copy"}
+              testId="copy"
+              title="Copy this reply"
+              onClick={copyReply}
             />
           )}
           {canRetry && (
             <MessageActionButton
               icon={<I.Refresh size={11} />}
-              label="Retry"
-              title="Re-run the previous message"
+              label="Try again"
+              testId="retry"
+              title="Ask the same thing again"
               onClick={onRetryMessage}
             />
           )}
+          {canKeep && (
+            <MessageActionButton
+              icon={<I.File size={11} />}
+              label="Save as Word"
+              testId="save-word"
+              title="Save this reply as a Word document"
+              onClick={() => ekSaveAsWord(m.content, fileName)}
+            />
+          )}
         </div>
-      )}
-      {!isUser && (m.sources?.length > 0 || m.imagesSkipped) && (
-        <SourcesFooter sources={m.sources} imagesSkipped={m.imagesSkipped} />
       )}
     </div>
   );
@@ -2086,16 +1941,12 @@ function Composer({
   //   onReindexAttachment — re-runs the embedding pipeline (retry on error)
   //   modelHasVision    — gates the small "vision" badge on image chips so
   //                       the user knows the model will actually look at it
-  //   modelHasTools     — drives the "TOOL" chip next to the model selector;
-  //                       also signals that write_file tool calls will be
-  //                       wired into this chat's outbound /api/chat requests
   attachments = [],
   onAttachFile,
   onAttachFolder,
   onDetachAttachment,
   onReindexAttachment,
   modelHasVision = false,
-  modelHasTools = false,
   // Progressive disclosure (Phase 2 UX polish): when off (default), the
   // green "TOOL" capability chip collapses to a quiet ⓘ beside the model
   // picker whose tooltip lists what the model supports. The capability

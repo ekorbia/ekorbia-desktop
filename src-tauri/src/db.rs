@@ -1007,35 +1007,6 @@ pub(crate) fn ensure_chat_row(db: &Connection, chat_id: &str, now: i64) -> Resul
     .map_err(|e| e.to_string())
 }
 
-/// Read a chat's configured output_dir.
-///
-/// Return shape (matches `chats.output_dir` sentinel semantics in CLAUDE.md):
-///   - `Ok(Some("/abs/path"))` — user has allowed; auto-write inside it
-///   - `Ok(Some(""))` — user has blocked; tool calls return `user_blocked`
-///   - `Ok(None)` — never asked OR row missing; permission modal should fire
-///   - `Err(_)` — genuine DB error (NOT row-missing, which folds into `Ok(None)`)
-///
-/// **Sandbox boundary**: this helper returns the directory *only*. Callers
-/// MUST route any user/model-provided filename through
-/// `crate::files::sandbox::resolve_within(dir, requested)` before touching the
-/// filesystem. Do NOT add a `with_filename` variant here — that would bypass
-/// the sandbox chokepoint. Every file-handling tool path goes through
-/// `sandbox::resolve_within`; this stays a pure read.
-pub(crate) fn get_chat_output_dir(
-    db: &Connection,
-    chat_id: &str,
-) -> Result<Option<String>, String> {
-    match db.query_row(
-        "SELECT output_dir FROM chats WHERE id = ?",
-        rusqlite::params![chat_id],
-        |r| r.get::<_, Option<String>>(0),
-    ) {
-        Ok(v) => Ok(v),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
 /// Slugify a display string into `[a-z0-9-]+`. Collapses runs of non-alphanum
 /// to single dashes; trims leading/trailing dashes. Returns the empty string
 /// if nothing alphanumeric survives — callers pick their own fallback

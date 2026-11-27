@@ -1,31 +1,27 @@
 // SPDX-License-Identifier: MIT
 
-//! Watch pipeline: ambient background work that turns sources (folders, RSS
-//! feeds, URLs) into appended notes via Ollama summarisation.
+//! Watch pipeline: background work that summarises new files in a folder
+//! into a notes file, with the model that answers chats.
 //!
-//! Each watch is one of **three kinds** — `folder`, `rss`, or `url`. All
-//! three share the same processing tail (extract → process_item → summarise
-//! → append to notes file → emit `watch:event_changed` event). They differ
-//! only in how items are enumerated.
+//! A watch follows a **folder**. (Feeds and web pages could be watched too
+//! until the redesign; they were the app's only background network traffic
+//! and were removed. A row of kind `rss` or `url` left in the table by an
+//! older version is listed, never run, and can only be deleted.)
+//!
+//! The processing tail: extract → process_item → summarise → append to the
+//! notes file → emit `watch:event_changed`.
 //!
 //! Module layout:
 //! - `mod`       — shared types (`Watch`, `WatchEvent`) + cadence defaults + commands
-//! - `commands`  — public Tauri commands (watch_list/create/delete/set_enabled/events_list/run_once/test_source/notes_read)
+//! - `commands`  — public Tauri commands (watch_list/create/delete/set_enabled/events_list/run_once/notes_read)
 //! - `pipeline`  — shared infra: `process_item`, dispatcher (`run_watch`),
 //!   poller, event log helpers, prompt body fetch, notes append
 //! - `folder`    — `run_folder_watch` + `process_file` + supported extensions
-//! - `http`      — shared HTTP/HTML helpers (`http_client`, `html_to_text`,
-//!   `fetch_url_html`, selector extraction, byte caps)
-//! - `rss`       — `run_rss_watch` + `fetch_rss_feed`
-//! - `url`       — `run_url_watch` + diff payload + snapshot truncation
 
 pub(crate) mod cancel;
 pub(crate) mod commands;
 pub(crate) mod folder;
-pub(crate) mod http;
 pub(crate) mod pipeline;
-pub(crate) mod rss;
-pub(crate) mod url;
 
 use serde::{Deserialize, Serialize};
 
@@ -173,15 +169,10 @@ pub(crate) fn map_watch_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Watch> 
     })
 }
 
-/// Default poll interval for a given kind. Used when a new watch is being
-/// created on the JS side without an explicit cadence — Rust normalises so
-/// folder kinds get 30s, RSS gets 10 minutes, URL gets 30 minutes.
-pub(crate) fn default_interval_for_kind(kind: &str) -> i64 {
-    match kind {
-        "rss" => 600,
-        "url" => 1800,
-        _ => 30,
-    }
+/// Default poll interval, in seconds, when a watch is created without one.
+/// (The parameter is kept for the callers; only folders are watched now.)
+pub(crate) fn default_interval_for_kind(_kind: &str) -> i64 {
+    30
 }
 
 #[derive(Debug, Serialize, Deserialize)]

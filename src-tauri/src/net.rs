@@ -62,10 +62,6 @@ pub(crate) enum Purpose {
     ModelLookup,
     /// The dictation (speech-to-text) model being downloaded.
     DictationModel,
-    /// A feed a Watch follows.
-    WatchFeed,
-    /// A web page a Watch follows, or an article a feed links to.
-    WatchPage,
     /// A chat sent to a server on another machine.
     Chat,
     /// Document text sent to a server on another machine to be indexed.
@@ -81,8 +77,6 @@ impl Purpose {
             Purpose::ModelDownload => "model_download",
             Purpose::ModelLookup => "model_lookup",
             Purpose::DictationModel => "dictation_model",
-            Purpose::WatchFeed => "watch_feed",
-            Purpose::WatchPage => "watch_page",
             Purpose::Chat => "chat",
             Purpose::Documents => "documents",
             Purpose::Server => "server",
@@ -620,8 +614,9 @@ pub(crate) fn purpose_words(purpose: &str, detail: &str) -> String {
         "model_download" => with("Model download"),
         "model_lookup" => "Looking up a model's files".to_string(),
         "dictation_model" => with("Dictation model"),
-        "watch_feed" => "A feed a Watch follows".to_string(),
-        "watch_page" => "A page a Watch follows".to_string(),
+        // Recorded by versions that could watch feeds and pages.
+        "watch_feed" => "A feed a Watch followed".to_string(),
+        "watch_page" => "A page a Watch followed".to_string(),
         "chat" => "Chat sent to a server".to_string(),
         "documents" => "Text sent to a server for document search".to_string(),
         "server" => "Checking with a server".to_string(),
@@ -1172,7 +1167,7 @@ mod tests {
         // A connection another program would make on our behalf, too.
         assert!(allow_host(Purpose::ModelDownload, "llama3", "ollama.com").is_err());
         // An address that cannot be read is not waved through.
-        assert!(allow(Purpose::WatchPage, "", "").is_err());
+        assert!(allow(Purpose::Server, "", "").is_err());
         LOCKED.store(false, Ordering::SeqCst);
     }
 
@@ -1213,8 +1208,6 @@ mod tests {
             Purpose::ModelDownload,
             Purpose::ModelLookup,
             Purpose::DictationModel,
-            Purpose::WatchFeed,
-            Purpose::WatchPage,
             Purpose::Chat,
             Purpose::Documents,
             Purpose::Server,

@@ -49,13 +49,13 @@ test.describe("harness smoke", () => {
       MarkdownMessage: typeof window.MarkdownMessage,
       // Pure helpers from utils.js
       formatHotkey: typeof window.formatHotkey,
-      parseFencedBlocks: typeof window.parseFencedBlocks,
+      sortTemplates: typeof window.sortTemplates,
     }));
     expect(exposed).toEqual({
       OnboardingTour: "function",
       MarkdownMessage: "function",
       formatHotkey: "function",
-      parseFencedBlocks: "function",
+      sortTemplates: "function",
     });
   });
 });

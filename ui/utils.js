@@ -216,109 +216,6 @@ function hotkeyFromEvent(e) {
   return parts.join("+");
 }
 
-// ── Fenced-block parsing (chat.jsx heuristic save-buttons fallback) ────────
-
-// Default filename per language tag. Anything not listed falls back to
-// `snippet.<lang>` — better to surface something the user can rename than
-// to silently drop the block.
-const LANG_DEFAULT_NAME = {
-  html: 'index.html', xml: 'index.xml', svg: 'image.svg',
-  css: 'style.css',
-  js: 'main.js', javascript: 'main.js',
-  jsx: 'App.jsx',
-  ts: 'main.ts', typescript: 'main.ts',
-  tsx: 'App.tsx',
-  py: 'main.py', python: 'main.py',
-  sh: 'run.sh', bash: 'run.sh', shell: 'run.sh', zsh: 'run.sh',
-  rs: 'main.rs', rust: 'main.rs',
-  go: 'main.go', golang: 'main.go',
-  c: 'main.c', cpp: 'main.cpp', 'c++': 'main.cpp',
-  java: 'Main.java', kotlin: 'Main.kt',
-  rb: 'main.rb', ruby: 'main.rb',
-  json: 'data.json',
-  yaml: 'config.yaml', yml: 'config.yml',
-  toml: 'config.toml',
-  md: 'README.md', markdown: 'README.md',
-  sql: 'schema.sql',
-  swift: 'main.swift',
-  php: 'index.php',
-};
-
-// First-line filename hint patterns, keyed by language families that
-// commonly use the matching comment syntax.
-const FILENAME_HINT_PATTERNS = [
-  { test: /^<!--\s*([^\s<>"]+\.[a-z0-9]+)\s*-->/i,
-    langs: ['html', 'xml', 'svg', 'markdown', 'md'] },
-  { test: /^\/\*\s*([^\s/*"]+\.[a-z0-9]+)\s*\*\//,
-    langs: ['css', 'js', 'javascript', 'jsx', 'ts', 'typescript', 'tsx',
-            'rs', 'rust', 'c', 'cpp', 'c++', 'go', 'java', 'swift', 'kotlin', 'php'] },
-  { test: /^\/\/\s*([^\s/"]+\.[a-z0-9]+)/,
-    langs: ['js', 'javascript', 'jsx', 'ts', 'typescript', 'tsx',
-            'rs', 'rust', 'c', 'cpp', 'c++', 'go', 'java', 'swift', 'kotlin', 'php'] },
-  { test: /^#\s*([^\s#"]+\.[a-z0-9]+)/,
-    langs: ['py', 'python', 'sh', 'bash', 'shell', 'zsh', 'rb', 'ruby',
-            'yaml', 'yml', 'toml'] },
-  { test: /^--\s*([^\s-"]+\.[a-z0-9]+)/,
-    langs: ['sql', 'haskell', 'lua'] },
-];
-
-// Append "-2", "-3", … to disambiguate when the same name already exists
-// in this message's parsed blocks. Cheap: typical messages have 1-3 blocks.
-function uniquifyFilename(name, taken) {
-  if (!taken.has(name)) return name;
-  const dot = name.lastIndexOf('.');
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : '';
-  let i = 2;
-  while (taken.has(`${stem}-${i}${ext}`)) i++;
-  return `${stem}-${i}${ext}`;
-}
-
-function inferFilename(lang, content, takenSet) {
-  const langKey = (lang || '').toLowerCase();
-  // First-line filename hint wins over defaults.
-  for (const p of FILENAME_HINT_PATTERNS) {
-    if (p.langs.includes(langKey)) {
-      const m = content.match(p.test);
-      if (m && m[1]) return uniquifyFilename(m[1], takenSet);
-    }
-  }
-  // HTML doctype fingerprint nudges plain `text` / unmarked blocks toward
-  // index.html when the content is clearly a full document.
-  if ((langKey === 'html' || langKey === '') && /^\s*<!doctype html>/i.test(content)) {
-    return uniquifyFilename('index.html', takenSet);
-  }
-  const def = LANG_DEFAULT_NAME[langKey] || `snippet.${langKey || 'txt'}`;
-  return uniquifyFilename(def, takenSet);
-}
-
-// Walk the markdown looking for ```lang ... ``` blocks. Ordinal is the
-// index among ALL fences in the message — useful for stable keys + the
-// model's mental model when the user later asks "regenerate the 2nd file".
-function parseFencedBlocks(markdown) {
-  if (!markdown) return [];
-  // Match ``` followed by optional lang tag (no spaces), newline, content
-  // (lazy, including newlines), then a ``` on its own line.
-  const re = /```([a-zA-Z0-9_+\-.]*)\n([\s\S]*?)\n```/g;
-  const out = [];
-  const taken = new Set();
-  let m;
-  let ord = 0;
-  while ((m = re.exec(markdown)) !== null) {
-    const lang = (m[1] || '').toLowerCase();
-    // Don't trip on terminal-output blocks marked ```output / ```text-only
-    // when the content is obviously not a file (no newlines, no doctype,
-    // very short). We still surface them — user can rename. Just avoids
-    // creating index.html out of a 2-word block.
-    const content = m[2];
-    if (content.length < 6) { ord++; continue; }
-    const filename = inferFilename(lang, content, taken);
-    taken.add(filename);
-    out.push({ language: lang, content, filename, ordinal: ord++ });
-  }
-  return out;
-}
-
 // ── Markdown escaping (markdown.jsx) ───────────────────────────────────────
 
 function escapeHtml(s) {
@@ -366,18 +263,6 @@ function tryParseJson(s, fallback) {
 
 function genId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
-// ── Watch defaults (watch.jsx) ─────────────────────────────────────────────
-
-// Default poll cadence per watch kind. The UI calls this when the user
-// switches kind in the form so the interval field jumps to a sensible
-// starting point instead of carrying over a value that may be wildly
-// inappropriate (e.g. 30 seconds for a daily-updated RSS feed).
-function defaultIntervalForKind(kind) {
-  if (kind === "rss") return 600;     // 10 min
-  if (kind === "url") return 1800;    // 30 min
-  return 30;                          // folder
 }
 
 // ── Model manager helpers (model-manager.jsx, overlays.jsx, overlay.jsx) ───
@@ -1123,33 +1008,27 @@ function workspaceDocsLabel(pins) {
 // prefill mapping is unit-testable; `nowSecs` is passed in rather than read
 // from the clock so tests are deterministic.
 //
-//   recipe — entry from WATCH_RECIPES (watch.jsx): { kind, promptSlug,
-//            urlDiffMode?, useDownloadsDir?, skipExisting?, notesFileName?,
-//            name?, custom? }
+//   recipe — entry from WATCH_RECIPES (watch.jsx): { promptSlug,
+//            useDownloadsDir?, skipExisting?, notesFileName?, name?, custom? }
 //   paths  — { downloadsDir, defaultNotesDir } from watch_default_paths
 //   nowSecs — unix seconds, used as the ignore_before cutoff when the recipe
 //            opts into skipping pre-existing files
 function recipeToFormDefaults(recipe, paths, nowSecs) {
   if (!recipe || recipe.custom) return null;
   const p = paths || {};
-  const kind = recipe.kind || "folder";
   const notesPath =
     p.defaultNotesDir && recipe.notesFileName
       ? `${p.defaultNotesDir}/${recipe.notesFileName}`
       : "";
   return {
     name: recipe.name || "",
-    kind,
     folderPath: recipe.useDownloadsDir ? p.downloadsDir || "" : "",
-    sourceUrl: "",
-    urlSelector: "",
-    urlDiffMode: recipe.urlDiffMode || "snapshot",
-    intervalSecs: defaultIntervalForKind(kind),
+    intervalSecs: 30,
     notesPath,
     promptId: recipe.promptSlug || null,
     notify: false,
-    // Folder recipes that opt into skipping the existing backlog stamp the
-    // cutoff at setup time; everything else leaves it unset (process all).
+    // A starting point that skips the files already there stamps the
+    // cutoff now; otherwise every file is summarised.
     ignoreBefore: recipe.skipExisting ? nowSecs : null,
   };
 }
@@ -1277,33 +1156,6 @@ function bucketChatsByDate(chatRows) {
   };
 }
 
-// ── Chat-files grouping (files.jsx) ────────────────────────────────────────
-
-// Collapse a flat list of chat_files rows into per-path entries. Each
-// entry's `head` is the most recently-saved version; `versions` keeps all
-// versions in insertion order so the UI can show "v3 of index.html". The
-// returned list is sorted by `head.savedAt` descending so newest files
-// appear at the top.
-function ekFilesGroupByPath(rows) {
-  const byPath = new Map();
-  for (const r of rows) {
-    const existing = byPath.get(r.relPath);
-    if (!existing) {
-      byPath.set(r.relPath, {
-        relPath: r.relPath,
-        head: r,
-        versions: [r],
-      });
-    } else {
-      existing.versions.push(r);
-      if (r.savedAt > existing.head.savedAt) existing.head = r;
-    }
-  }
-  return Array.from(byPath.values()).sort(
-    (a, b) => b.head.savedAt - a.head.savedAt
-  );
-}
-
 // ── Tauri API accessors (every JSX file used to re-derive these) ───────────
 //
 // Why these exist as helpers rather than inline lookups: the `invoke`
@@ -1414,6 +1266,35 @@ function lightenHex(hex, amount) {
   );
 }
 
+// ── The look: Light, Dark, or Match system ─────────────────────────────────
+//
+// The setting (`ekorbia.tweaks`.theme) is "one_light", "one_dark" or
+// "system". Light is the default. The app once had six themes; a choice
+// saved by an older version maps to the nearer of the two that remain.
+const LOOK_DEFAULT = 'one_light';
+const LOOK_CHOICES = [
+  { value: 'one_light', label: 'Light' },
+  { value: 'one_dark', label: 'Dark' },
+  { value: 'system', label: 'Match system' },
+];
+
+// A saved choice → "one_light" | "one_dark" | "system".
+function normalizeLook(saved) {
+  const k = String(saved || '').trim();
+  if (!k) return LOOK_DEFAULT;
+  if (k === 'system' || k === 'one_light' || k === 'one_dark') return k;
+  // Older themes: "ayu_light" (Sand) was light; the rest were dark.
+  return /light/i.test(k) ? 'one_light' : 'one_dark';
+}
+
+// The look to draw now: "one_light" | "one_dark". `systemDark` says what
+// macOS is set to, for "Match system".
+function resolveLook(saved, systemDark) {
+  const k = normalizeLook(saved);
+  if (k === 'system') return systemDark ? 'one_dark' : 'one_light';
+  return k;
+}
+
 // ── isLocalEndpoint ────────────────────────────────────────────────────────
 //
 // True when inference runs on THIS machine: the bundled engine, or an
@@ -1446,18 +1327,6 @@ function isLocalEndpoint(backendKind, baseUrl) {
     host === "0.0.0.0" ||
     /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
   );
-}
-
-// ── greetingForHour ────────────────────────────────────────────────────────
-//
-// Time-of-day greeting for the empty-chat state. Pure (takes the hour) so
-// it's node-testable; the component passes `new Date().getHours()`. No name —
-// Ekorbia doesn't store one.
-function greetingForHour(hour) {
-  if (hour < 5) return "Good evening";
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
 }
 
 // ── previewSnippet ─────────────────────────────────────────────────────────
@@ -1669,61 +1538,6 @@ function externalLinkTarget(href) {
   if (/^\/\/[^\s\/]/.test(s)) return 'https:' + s;
   if (/^mailto:[^\s]/i.test(s)) return s;
   return null;
-}
-
-// Fuzzy match scorer for the command palette (ui/command-palette.jsx).
-// Returns a score (higher = better) or -1 for "no match". Every match
-// scores ≥ 1 so callers can use `< 0` as the reject test; the empty
-// query matches everything with a neutral 0 (palette keeps its authored
-// order in that case).
-//
-// Two tiers, deliberately far apart so they never interleave:
-//   • substring (base 1000): the query appears verbatim — earlier is
-//     better, a word-boundary start better still, and shorter targets
-//     edge out longer ones at equal position.
-//   • subsequence (base 500): every non-space query char appears in
-//     order ("npc" → "New private chat"); tighter packing wins.
-function paletteFuzzyScore(query, text) {
-  const q = String(query == null ? "" : query).toLowerCase().trim();
-  const t = String(text == null ? "" : text).toLowerCase();
-  if (!q) return 0;
-  if (!t) return -1;
-  const idx = t.indexOf(q);
-  if (idx >= 0) {
-    const wordStart = idx === 0 || /[\s/-]/.test(t[idx - 1]);
-    return Math.max(1, 1000 + (wordStart ? 200 : 0) - idx * 4 - Math.min(t.length, 99));
-  }
-  const chars = q.replace(/\s+/g, "");
-  let pos = -1;
-  let gaps = 0;
-  for (const ch of chars) {
-    const next = t.indexOf(ch, pos + 1);
-    if (next < 0) return -1;
-    if (pos >= 0) gaps += next - pos - 1;
-    pos = next;
-  }
-  return Math.max(1, 500 - gaps * 2 - Math.min(t.length, 99));
-}
-
-// ── spaceAmbientTint ────────────────────────────────────────────────────────
-//
-// Resolve the ambient-tint hex for a Space, or null for "use the default
-// ambience". The chat pane and sidebar tint their whisper-level glows
-// with the Space's color so being inside a Space reads ambiently, not
-// just as a highlighted row. Null (no tint) whenever:
-//   • the theme is light — tints read as stains on light surfaces (the
-//     long-standing chat-pane covenant, see ui/chat.jsx);
-//   • there is no Space, or it has no color set;
-//   • the color key isn't in the palette (unknown/purged keys) — the
-//     spaceColorHex fallback (muted fg2) would render as a gray smudge,
-//     worse than no tint at all.
-// `palette` is SPACE_COLORS (injected for testability; frozen at the
-// one_dark accents by tokens.jsx load order, which is fine here — the
-// tint only ever renders on dark themes, where those vivid values sit
-// correctly).
-function spaceAmbientTint(space, palette, isLight) {
-  if (isLight || !space || !space.color || !palette) return null;
-  return palette[space.color] || null;
 }
 
 // ── Selection actions (quick-query overlay, ⌘⇧E) ───────────────────────────
@@ -1943,6 +1757,378 @@ function describeContextOverflow(errText, { hasHistory = false } = {}) {
 // from a node:test file). Both guards are necessary: Node has no `window`,
 // the browser has no `module`.
 
+// ── Saving a code block from a reply (markdown.jsx → text_file_save) ───────
+
+// The name the save dialog suggests for a code block, from the language
+// the model wrote on its fence ("```python"). The person can change it in
+// the dialog. Only a language the model STATED counts: a guess made for
+// colouring must not turn plain text into `text.ini`. Anything unknown, or
+// no language, is `text.txt`.
+const CODE_BLOCK_FILES = {
+  markdown: "notes.md", md: "notes.md",
+  csv: "data.csv", tsv: "data.tsv", json: "data.json", jsonl: "data.jsonl", xml: "data.xml",
+  yaml: "config.yaml", yml: "config.yaml", toml: "config.toml", ini: "config.ini",
+  html: "page.html", htm: "page.html", css: "styles.css", svg: "image.svg",
+  javascript: "script.js", js: "script.js", jsx: "script.jsx",
+  typescript: "script.ts", ts: "script.ts", tsx: "script.tsx",
+  python: "script.py", py: "script.py",
+  bash: "script.sh", sh: "script.sh", shell: "script.sh", zsh: "script.sh",
+  sql: "query.sql", r: "script.R", ruby: "script.rb", rb: "script.rb", php: "script.php",
+  rust: "main.rs", rs: "main.rs", go: "main.go", swift: "main.swift", kotlin: "main.kt", kt: "main.kt",
+  java: "Main.java", c: "main.c", cpp: "main.cpp", "c++": "main.cpp", csharp: "Program.cs", cs: "Program.cs",
+  latex: "document.tex", tex: "document.tex", diff: "changes.diff", patch: "changes.diff",
+  text: "text.txt", txt: "text.txt", plaintext: "text.txt",
+};
+
+function codeBlockFileName(lang) {
+  // A fence can carry more than a language ("python title=x"): the first
+  // word is the language.
+  const key = String(lang == null ? "" : lang).trim().toLowerCase().split(/[\s,:;{]/)[0];
+  return Object.prototype.hasOwnProperty.call(CODE_BLOCK_FILES, key) ? CODE_BLOCK_FILES[key] : "text.txt";
+}
+
+// ── Word export (chat.jsx → docx_save) ─────────────────────────────────────
+//
+// `docxParts(markdown, lexer)` turns a reply (or a whole chat as Markdown)
+// into the three XML parts of a .docx that depend on the text: the
+// document, its styles and its list numbering. Rust (src-tauri/src/docx.rs)
+// adds the fixed parts and writes the file. `lexer` is `marked.lexer`, so a
+// document is built from the same tokens the chat view renders.
+//
+// What carries over: headings, paragraphs, bold / italic / strikethrough,
+// inline code and code blocks, bulleted, numbered and task lists (nested),
+// quotes, tables, rules, links. Math stays as its source text, and an image
+// becomes its description.
+
+const DOCX_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+const DOCX_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+const DOCX_TABLE_BORDERS =
+  "<w:tblBorders>" +
+  ["top", "left", "bottom", "right", "insideH", "insideV"]
+    .map((side) => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="A6A6A6"/>`)
+    .join("") +
+  "</w:tblBorders>";
+
+// Text → XML text: drop what XML 1.0 cannot hold, escape the rest.
+function docxEsc(s) {
+  return String(s == null ? "" : s)
+    .replace(/[^\x09\x0A\x0D\x20-퟿-�\u{10000}-\u{10FFFF}]/gu, "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// marked hands inline text back already escaped for HTML; undo that.
+function docxUnescape(s) {
+  return String(s == null ? "" : s)
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n) || 0xfffd))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16) || 0xfffd))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
+}
+
+// One run of text. `f` = { bold, italic, strike, code, link }.
+function docxRun(text, f) {
+  // A line break inside a paragraph's source is only a space.
+  const t = String(text == null ? "" : text).replace(/\r?\n/g, " ");
+  if (!t) return "";
+  const fmt = f || {};
+  let props = "";
+  if (fmt.code) props += '<w:rStyle w:val="CodeChar"/>';
+  else if (fmt.link) props += '<w:rStyle w:val="Hyperlink"/>';
+  if (fmt.bold) props += "<w:b/>";
+  if (fmt.italic) props += "<w:i/>";
+  if (fmt.strike) props += "<w:strike/>";
+  return `<w:r>${props ? `<w:rPr>${props}</w:rPr>` : ""}<w:t xml:space="preserve">${docxEsc(t)}</w:t></w:r>`;
+}
+
+// Inline tokens → runs.
+function docxInline(tokens, f) {
+  const fmt = f || {};
+  let out = "";
+  for (const t of tokens || []) {
+    if (!t) continue;
+    switch (t.type) {
+      case "strong":
+        out += docxInline(t.tokens, { ...fmt, bold: true });
+        break;
+      case "em":
+        out += docxInline(t.tokens, { ...fmt, italic: true });
+        break;
+      case "del":
+        out += docxInline(t.tokens, { ...fmt, strike: true });
+        break;
+      case "codespan":
+        out += docxRun(docxUnescape(t.text), { ...fmt, code: true });
+        break;
+      case "br":
+        out += "<w:r><w:br/></w:r>";
+        break;
+      case "link": {
+        const href = String(t.href || "");
+        const inner = docxInline(t.tokens && t.tokens.length ? t.tokens : [{ type: "text", text: t.text || href }], {
+          ...fmt,
+          link: /^(https?:|mailto:)/i.test(href),
+        });
+        // A field needs no entry in the package's relationships.
+        out += /^(https?:|mailto:)/i.test(href)
+          ? `<w:fldSimple w:instr="${docxEsc(` HYPERLINK "${href.replace(/"/g, "%22").replace(/\\/g, "%5C")}" `)}">${inner}</w:fldSimple>`
+          : inner;
+        break;
+      }
+      case "image":
+        out += docxRun(t.text || t.title || t.href || "", fmt);
+        break;
+      case "html": {
+        const raw = String(t.raw || t.text || "");
+        if (/^<br\s*\/?>$/i.test(raw.trim())) out += "<w:r><w:br/></w:r>";
+        else out += docxRun(docxUnescape(raw.replace(/<[^>]*>/g, "")), fmt);
+        break;
+      }
+      case "text":
+      case "escape":
+      default:
+        if (t.tokens && t.tokens.length) out += docxInline(t.tokens, fmt);
+        else out += docxRun(docxUnescape(t.text != null ? t.text : t.raw), fmt);
+    }
+  }
+  return out;
+}
+
+// One paragraph. `p` = { style, num: { id, level }, indent, align, rule }.
+function docxPara(runs, p) {
+  const o = p || {};
+  let props = "";
+  if (o.style) props += `<w:pStyle w:val="${o.style}"/>`;
+  if (o.num) props += `<w:numPr><w:ilvl w:val="${o.num.level}"/><w:numId w:val="${o.num.id}"/></w:numPr>`;
+  if (o.rule) props += '<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="A6A6A6"/></w:pBdr>';
+  if (o.indent) props += `<w:ind w:left="${o.indent}"/>`;
+  if (o.align === "center" || o.align === "right") props += `<w:jc w:val="${o.align}"/>`;
+  return `<w:p>${props ? `<w:pPr>${props}</w:pPr>` : ""}${runs || ""}</w:p>`;
+}
+
+// Block tokens → paragraphs and tables. `ctx` = { quote, list: { id, level },
+// first } — `first` marks the paragraph that carries an item's bullet or
+// number; `state.lists` collects the numbered lists for the numbering part.
+function docxBlocks(tokens, ctx, state) {
+  const c = ctx || {};
+  let out = "";
+  let first = !!c.first;
+  // The paragraph settings for where we are: in a list item, in a quote.
+  const here = (extra) => {
+    const p = { ...(extra || {}) };
+    if (c.list) {
+      if (!p.style) p.style = "ListParagraph";
+      if (first) p.num = { id: c.list.id, level: c.list.level };
+      else p.indent = 720 * (c.list.level + 1);
+      first = false;
+    } else if (c.quote && !p.style) {
+      p.style = "Quote";
+    }
+    return p;
+  };
+  for (const t of tokens || []) {
+    if (!t) continue;
+    switch (t.type) {
+      case "space":
+        break;
+      case "heading":
+        out += docxPara(docxInline(t.tokens), here({ style: `Heading${Math.min(Math.max(t.depth || 1, 1), 4)}` }));
+        break;
+      case "paragraph":
+      case "text": {
+        let runs = docxInline(t.tokens && t.tokens.length ? t.tokens : [{ type: "text", text: t.text }]);
+        if (c.task != null && first) runs = docxRun(c.task ? "☑ " : "☐ ") + runs;
+        out += docxPara(runs, here());
+        break;
+      }
+      case "code": {
+        const lines = String(t.text || "").replace(/\r\n?/g, "\n").split("\n");
+        const indent = c.list ? 720 * (c.list.level + 1) : 0;
+        first = false;
+        for (const line of lines) {
+          // Tabs would jump to Word's tab stops; four spaces keep the shape.
+          out += docxPara(docxRun(line.replace(/\t/g, "    ") || " "), { style: "Code", indent });
+        }
+        break;
+      }
+      case "blockquote":
+        out += docxBlocks(t.tokens, { ...c, quote: true, first: false }, state);
+        first = false;
+        break;
+      case "list": {
+        const level = c.list ? Math.min(c.list.level + 1, 8) : 0;
+        let id = 1; // every bulleted list shares the one bullet definition
+        if (t.ordered) {
+          // A numbered list gets its own entry, so it starts at its own number.
+          id = 2 + state.lists.length;
+          state.lists.push({ id, level, start: Number(t.start) > 0 ? Number(t.start) : 1 });
+        }
+        for (const item of t.items || []) {
+          out += docxBlocks(item.tokens, { quote: c.quote, list: { id, level }, first: true, task: item.task ? !!item.checked : null }, state);
+        }
+        first = false;
+        break;
+      }
+      case "table": {
+        const cell = (cellTok, i, header) =>
+          `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr>${docxPara(
+            docxInline(cellTok && cellTok.tokens, header ? { bold: true } : null),
+            { style: "TableText", align: (t.align || [])[i] },
+          )}</w:tc>`;
+        const row = (cells, header) =>
+          `<w:tr>${header ? "<w:trPr><w:tblHeader/></w:trPr>" : ""}${(cells || []).map((x, i) => cell(x, i, header)).join("")}</w:tr>`;
+        const cols = Math.max((t.header || []).length, 1);
+        out +=
+          // Borders are stated on the table as well as in its style: not
+          // every reader applies a table style.
+          `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/>${DOCX_TABLE_BORDERS}</w:tblPr>` +
+          `<w:tblGrid>${`<w:gridCol w:w="${Math.floor(9000 / cols)}"/>`.repeat(cols)}</w:tblGrid>` +
+          row(t.header, true) +
+          (t.rows || []).map((r) => row(r, false)).join("") +
+          "</w:tbl>" +
+          // Word needs a paragraph between a table and whatever follows.
+          docxPara("", { style: "TableText" });
+        first = false;
+        break;
+      }
+      case "hr":
+        out += docxPara("", { rule: true });
+        first = false;
+        break;
+      case "html": {
+        const text = docxUnescape(String(t.raw || t.text || "").replace(/<[^>]*>/g, "")).trim();
+        if (text) out += docxPara(docxRun(text), here());
+        break;
+      }
+      default:
+        if (t.tokens && t.tokens.length) out += docxPara(docxInline(t.tokens), here());
+        else if (String(t.raw || "").trim()) out += docxPara(docxRun(t.raw), here());
+    }
+  }
+  return out;
+}
+
+// The styles the document part names. Arial and Courier New are on every
+// Mac and every Windows PC, with or without Word, so no reader reports a
+// missing font.
+function docxStylesXml() {
+  const font = (name) => `<w:rFonts w:ascii="${name}" w:hAnsi="${name}" w:cs="${name}" w:eastAsia="${name}"/>`;
+  const heading = (n, size, extra) =>
+    `<w:style w:type="paragraph" w:styleId="Heading${n}"><w:name w:val="heading ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>` +
+    `<w:pPr><w:keepNext/><w:spacing w:before="${n === 1 ? 320 : 240}" w:after="80"/><w:outlineLvl w:val="${n - 1}"/></w:pPr>` +
+    `<w:rPr><w:b/>${extra || ""}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr></w:style>`;
+  return (
+    `${DOCX_HEAD}<w:styles ${DOCX_NS}>` +
+    `<w:docDefaults><w:rPrDefault><w:rPr>${font("Arial")}<w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault>` +
+    '<w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+    // The font is on Normal as well as in the defaults: Pages and Quick Look
+    // read it only from the style.
+    `<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:rPr>${font("Arial")}<w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:style>` +
+    '<w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/></w:style>' +
+    heading(1, 32) +
+    heading(2, 26) +
+    heading(3, 24) +
+    heading(4, 22, "<w:i/>") +
+    '<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:qFormat/>' +
+    '<w:pPr><w:spacing w:after="60"/></w:pPr></w:style>' +
+    '<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:qFormat/>' +
+    '<w:pPr><w:pBdr><w:left w:val="single" w:sz="12" w:space="8" w:color="BFBFBF"/></w:pBdr><w:ind w:left="360"/></w:pPr>' +
+    '<w:rPr><w:color w:val="595959"/></w:rPr></w:style>' +
+    '<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:qFormat/>' +
+    '<w:pPr><w:shd w:val="clear" w:color="auto" w:fill="F2F2F2"/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>' +
+    `<w:rPr>${font("Courier New")}<w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>` +
+    '<w:style w:type="character" w:styleId="CodeChar"><w:name w:val="Code Char"/>' +
+    `<w:rPr>${font("Courier New")}<w:sz w:val="19"/><w:szCs w:val="19"/></w:rPr></w:style>` +
+    '<w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>' +
+    '<w:style w:type="paragraph" w:styleId="TableText"><w:name w:val="Table Text"/><w:basedOn w:val="Normal"/>' +
+    '<w:pPr><w:spacing w:after="0"/></w:pPr></w:style>' +
+    '<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/>' +
+    '<w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>' +
+    '<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:basedOn w:val="TableNormal"/>' +
+    `<w:tblPr>${DOCX_TABLE_BORDERS}<w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>` +
+    "</w:styles>"
+  );
+}
+
+// The list definitions: one for bullets (list 1), then one per numbered
+// list in the document, so each starts at its own number. (A shared
+// definition with a per-list "start again" is read by Word but not by
+// Pages or Quick Look, which carried the count on from the list before.)
+function docxNumberingXml(lists) {
+  const bullets = ["\u2022", "\u25E6", "\u25AA"];
+  const formats = ["decimal", "lowerLetter", "lowerRoman"];
+  // `list` = null for bullets, else { level, start }.
+  const levels = (list) => {
+    let out = "";
+    for (let i = 0; i < 9; i++) {
+      out +=
+        `<w:lvl w:ilvl="${i}"><w:start w:val="${list && list.level === i ? list.start : 1}"/>` +
+        (list
+          ? `<w:numFmt w:val="${formats[i % 3]}"/><w:lvlText w:val="%${i + 1}."/>`
+          : `<w:numFmt w:val="bullet"/><w:lvlText w:val="${bullets[i % 3]}"/>`) +
+        `<w:lvlJc w:val="left"/><w:pPr><w:ind w:left="${720 * (i + 1)}" w:hanging="360"/></w:pPr></w:lvl>`;
+    }
+    return out;
+  };
+  const all = lists || [];
+  return (
+    `${DOCX_HEAD}<w:numbering ${DOCX_NS}>` +
+    `<w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/>${levels(null)}</w:abstractNum>` +
+    all
+      .map((l) => `<w:abstractNum w:abstractNumId="${l.id}"><w:multiLevelType w:val="hybridMultilevel"/>${levels(l)}</w:abstractNum>`)
+      .join("") +
+    '<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>' +
+    all.map((l) => `<w:num w:numId="${l.id}"><w:abstractNumId w:val="${l.id}"/></w:num>`).join("") +
+    "</w:numbering>"
+  );
+}
+
+// US Letter where it is the paper in use, A4 everywhere else.
+function docxUsesLetter(locale) {
+  const m = /[-_]([A-Za-z]{2})\b/.exec(String(locale || ""));
+  return !!m && ["US", "CA", "MX", "PH"].includes(m[1].toUpperCase());
+}
+
+//   markdown   the text to save
+//   lexer      marked.lexer
+//   opts       { letter } — US Letter instead of A4
+// → { document, styles, numbering }, each a complete XML file.
+function docxParts(markdown, lexer, opts) {
+  const o = opts || {};
+  const state = { lists: [] };
+  // Math is lifted out first, as the chat view does: left in, `$a_i$ and
+  // $b_i$` would lose its underscores to emphasis. It goes back as its
+  // source text.
+  const { text: source, segments } = extractMathSegments(String(markdown || ""));
+  let tokens = [];
+  try {
+    tokens = lexer(source) || [];
+  } catch (_) {
+    // Text marked cannot read still saves, as plain paragraphs.
+    tokens = source
+      .split(/\n{2,}/)
+      .map((text) => ({ type: "paragraph", text, tokens: [{ type: "text", text: docxEsc(text) }] }));
+  }
+  const body = (docxBlocks(tokens, null, state) || docxPara("")).replace(/ekmath(\d+)htamke/g, (m, k) =>
+    segments[k] ? docxEsc(segments[k].tex) : m,
+  );
+  const page = o.letter ? '<w:pgSz w:w="12240" w:h="15840"/>' : '<w:pgSz w:w="11906" w:h="16838"/>';
+  return {
+    document:
+      `${DOCX_HEAD}<w:document ${DOCX_NS}><w:body>${body}` +
+      `<w:sectPr>${page}<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>` +
+      "</w:body></w:document>",
+    styles: docxStylesXml(),
+    numbering: docxNumberingXml(state.lists),
+  };
+}
+
 if (typeof window !== "undefined") {
   window.detectPlatform = detectPlatform;
   window.IS_MAC = IS_MAC;
@@ -1953,17 +2139,11 @@ if (typeof window !== "undefined") {
   window.HOTKEY_MOD_CODES = HOTKEY_MOD_CODES;
   window.formatHotkey = formatHotkey;
   window.hotkeyFromEvent = hotkeyFromEvent;
-  window.LANG_DEFAULT_NAME = LANG_DEFAULT_NAME;
-  window.FILENAME_HINT_PATTERNS = FILENAME_HINT_PATTERNS;
-  window.uniquifyFilename = uniquifyFilename;
-  window.inferFilename = inferFilename;
-  window.parseFencedBlocks = parseFencedBlocks;
   window.escapeHtml = escapeHtml;
   window.escapeAttr = escapeAttr;
   window.relativeTime = relativeTime;
   window.tryParseJson = tryParseJson;
   window.genId = genId;
-  window.defaultIntervalForKind = defaultIntervalForKind;
   window.formatBytes = formatBytes;
   window.accumulatePullProgress = accumulatePullProgress;
   window.voiceModelProgress = voiceModelProgress;
@@ -1981,7 +2161,6 @@ if (typeof window !== "undefined") {
   window.chatIdOfMessage = chatIdOfMessage;
   window.recipeToFormDefaults = recipeToFormDefaults;
   window.buildTodayDigest = buildTodayDigest;
-  window.ekFilesGroupByPath = ekFilesGroupByPath;
   window.bucketChatsByDate = bucketChatsByDate;
   window.getTauriRoot = getTauriRoot;
   window.getInvoke = getInvoke;
@@ -1995,10 +2174,7 @@ if (typeof window !== "undefined") {
   window.hexToRgbTriplet = hexToRgbTriplet;
   window.lightenHex = lightenHex;
   window.isLocalEndpoint = isLocalEndpoint;
-  window.greetingForHour = greetingForHour;
   window.previewSnippet = previewSnippet;
-  window.paletteFuzzyScore = paletteFuzzyScore;
-  window.spaceAmbientTint = spaceAmbientTint;
   window.SELECTION_ACTIONS = SELECTION_ACTIONS;
   window.buildSelectionRequest = buildSelectionRequest;
   window.CONTEXT_REPLY_RESERVE = CONTEXT_REPLY_RESERVE;
@@ -2008,6 +2184,9 @@ if (typeof window !== "undefined") {
   window.contextPreflight = contextPreflight;
   window.describeContextOverflow = describeContextOverflow;
   window.extractMathSegments = extractMathSegments;
+  window.codeBlockFileName = codeBlockFileName;
+  window.docxParts = docxParts;
+  window.docxUsesLetter = docxUsesLetter;
   window.restoreMathSegments = restoreMathSegments;
   window.replyImageIsInline = replyImageIsInline;
   window.MODEL_TIER_INFO = MODEL_TIER_INFO;
@@ -2023,6 +2202,10 @@ if (typeof window !== "undefined") {
   window.netWhen = netWhen;
   window.netSentOffWords = netSentOffWords;
   window.netCountsWords = netCountsWords;
+  window.LOOK_DEFAULT = LOOK_DEFAULT;
+  window.LOOK_CHOICES = LOOK_CHOICES;
+  window.normalizeLook = normalizeLook;
+  window.resolveLook = resolveLook;
   window.TEMPLATE_STAR = TEMPLATE_STAR;
   window.isStarred = isStarred;
   window.sortTemplates = sortTemplates;
@@ -2211,17 +2394,11 @@ if (typeof module !== "undefined" && module.exports) {
     HOTKEY_MOD_CODES,
     formatHotkey,
     hotkeyFromEvent,
-    LANG_DEFAULT_NAME,
-    FILENAME_HINT_PATTERNS,
-    uniquifyFilename,
-    inferFilename,
-    parseFencedBlocks,
     escapeHtml,
     escapeAttr,
     relativeTime,
     tryParseJson,
     genId,
-    defaultIntervalForKind,
     formatBytes,
     accumulatePullProgress,
     voiceModelProgress,
@@ -2243,7 +2420,6 @@ if (typeof module !== "undefined" && module.exports) {
     ggufQuantLabel,
     recipeToFormDefaults,
     buildTodayDigest,
-    ekFilesGroupByPath,
     bucketChatsByDate,
     getTauriRoot,
     getInvoke,
@@ -2257,10 +2433,7 @@ if (typeof module !== "undefined" && module.exports) {
     hexToRgbTriplet,
     lightenHex,
     isLocalEndpoint,
-    greetingForHour,
     previewSnippet,
-    paletteFuzzyScore,
-    spaceAmbientTint,
     SELECTION_ACTIONS,
     buildSelectionRequest,
     CONTEXT_REPLY_RESERVE,
@@ -2270,6 +2443,10 @@ if (typeof module !== "undefined" && module.exports) {
     contextPreflight,
     describeContextOverflow,
     extractMathSegments,
+    codeBlockFileName,
+    docxParts,
+    docxUsesLetter,
+    docxNumberingXml,
     restoreMathSegments,
     replyImageIsInline,
     externalLinkTarget,
@@ -2286,6 +2463,10 @@ if (typeof module !== "undefined" && module.exports) {
     netWhen,
     netSentOffWords,
     netCountsWords,
+    LOOK_DEFAULT,
+    LOOK_CHOICES,
+    normalizeLook,
+    resolveLook,
     TEMPLATE_STAR,
     isStarred,
     sortTemplates,

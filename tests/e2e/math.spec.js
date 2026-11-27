@@ -1,9 +1,9 @@
-// KaTeX math + Mermaid diagrams in assistant replies (ui/markdown.jsx).
-// Math is EXTRACTED before marked runs (utils.js extractMathSegments —
-// node-tested) and re-injected as katex.renderToString output after
-// DOMPurify; mermaid code blocks swap to SVG in the post-mount effect,
-// only on finalized (non-streaming) messages. These smokes pin the
-// browser half: real KaTeX + mermaid from ui/vendor, real sanitizer.
+// KaTeX math in assistant replies (ui/markdown.jsx).
+//
+// Math is extracted before marked runs and rendered by KaTeX, then passes
+// through DOMPurify. utils.test.js covers the extraction; this is the
+// browser half: real KaTeX from ui/vendor, the real sanitizer. Diagrams
+// (mermaid) used to be rendered here too and no longer are.
 
 const { test, expect } = require("@playwright/test");
 
@@ -75,49 +75,26 @@ test("KaTeX trust stays off — \\href cannot mint javascript: links", async ({ 
   await expect(root.locator('a[href^="javascript"]')).toHaveCount(0);
 });
 
-test("mermaid block renders an SVG diagram once finalized", async ({ page }) => {
+// Diagrams were dropped (the library was 3.4 MB, and one more thing to
+// keep safe). A ```mermaid block is now what it is: a block of code.
+test("a mermaid block stays an ordinary code block", async ({ page }) => {
   await mountMd(
     page,
     "Flow:\n```mermaid\nflowchart LR\n  A[Start] --> B[Finish]\n```",
   );
   const root = page.locator("#test-root .ek-md");
-  // Async render — Playwright auto-retries the visibility check.
-  await expect(root.locator(".ek-mermaid svg")).toBeVisible();
-  // Node labels are SVG <text> (htmlLabels:false) — read the markup
-  // directly rather than via innerText, which skips SVG text in WebKit.
-  const svgMarkup = await root.locator(".ek-mermaid svg").innerHTML();
-  expect(svgMarkup).toContain("Start");
-  expect(svgMarkup).toContain("Finish");
-  // The source block was replaced…
-  await expect(root.locator('pre.ek-code[data-lang="mermaid"]')).toHaveCount(0);
-  // …and the scrub invariants hold: pure SVG, no html labels, no scripts.
-  await expect(root.locator(".ek-mermaid foreignObject")).toHaveCount(0);
-  await expect(root.locator(".ek-mermaid script")).toHaveCount(0);
-});
-
-test("invalid mermaid keeps the source code block", async ({ page }) => {
-  await mountMd(
-    page,
-    "```mermaid\nflowchart LR\n  A --> ->> nonsense(((\n```",
-  );
-  const root = page.locator("#test-root .ek-md");
   const pre = root.locator('pre.ek-code[data-lang="mermaid"]');
   await expect(pre).toBeVisible();
-  await expect(pre).toContainText("nonsense");
-  // Give the async path a beat, then confirm no diagram ever appeared.
-  await page.waitForTimeout(400);
-  await expect(root.locator(".ek-mermaid")).toHaveCount(0);
+  await expect(pre).toContainText("A[Start] --> B[Finish]");
+  await page.waitForTimeout(300);
+  await expect(root.locator("svg")).toHaveCount(0);
+  expect(await page.evaluate(() => typeof window.mermaid)).toBe("undefined");
 });
 
-test("streaming renders neither math nor diagrams", async ({ page }) => {
-  await mountMd(
-    page,
-    "partial $a_i$ and\n```mermaid\nflowchart LR\n  A --> B\n```",
-    { streaming: true },
-  );
+test("streaming renders no math", async ({ page }) => {
+  await mountMd(page, "partial $a_i$ and more", { streaming: true });
   const host = page.locator("#test-root");
   await expect(host.locator(".katex")).toHaveCount(0);
-  await expect(host.locator(".ek-mermaid")).toHaveCount(0);
   // The plaintext branch shows the raw source untouched.
   await expect(host).toContainText("$a_i$");
 });

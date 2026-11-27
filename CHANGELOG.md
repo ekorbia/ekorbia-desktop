@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Offline lock.** With it on, Ekorbia refuses every connection off this
   Mac. The built-in engine is unaffected. The line at the foot of the
   window says when the lock is on and opens the record.
+- **Save as Word.** Every reply has Copy, Try again and Save as Word
+  beneath it, and a chat's menu saves the whole conversation as a Word
+  document or as Markdown. Headings, lists, tables and code carry over.
+- **Save… on a code block.** A file the model writes in a reply (a CSV, a
+  note, a script) can be saved as that file. The save dialog asks where
+  each time and suggests a name for the kind of file.
 
 ### Changed
 
@@ -28,8 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to Home and a settings button for the workspace. Private chats and
   comparisons are in the menu beside **New chat**, and **⌘N** starts a chat.
 - **The tab strip, the title-bar buttons and the status bar are gone.** One
-  line at the foot of the sidebar says where chats stay. Watches and saved
-  files are in the settings menu beside it for now.
+  line at the foot of the sidebar says where chats stay.
 - Moving a chat to another workspace is in its right-click menu. Dragging
   it onto a Space is gone.
 - **Models have plain names.** Settings → Models offers Fast, Balanced and
@@ -69,10 +74,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs.
 - A template file can carry two new optional lines, `description` and
   `hint`. Files without them work as before.
-- **Twelve starter templates for professional work** replace the 31 prompts
-  shipped before. Files already in your folder are left alone.
+- **Thirteen starter templates** replace the 31 prompts shipped before:
+  twelve new ones for professional work, and Notes Synthesizer. Files
+  already in your folder are left alone.
 - Workspace settings has "Always use these templates" in place of pinned
   and locked prompts.
+- **Three looks: Light, Dark and Match system.** Light is the default.
+  A theme chosen in an earlier version carries over as the nearer of the
+  two.
+- **Watches are in Settings → Watches, and watch folders only.** The form
+  names models and templates plainly. A watch of a feed or web page from an
+  earlier version no longer runs; the list says so and can remove it.
+- **First run is one welcome screen with the four shortcuts**, then the
+  model choice. The six-slide tour is gone.
+
+### Removed
+
+- **The model can no longer save files by itself.** The save tool, its
+  permission dialog and the Files panel are gone; the model only answers.
+- **The memory file shared by every chat.** A workspace's notes are
+  unaffected. An existing `memory.md` is left on disk and no longer read.
+- **Watches of feeds and web pages.** Ekorbia no longer fetches pages on a
+  timer; a watch reads a folder on this Mac.
+- The command palette (⌘K), diagrams in replies (math still renders),
+  JSON export of a chat, workspace colours, four of the six themes, and
+  the panel beside the chat.
 
 ### Fixed
 

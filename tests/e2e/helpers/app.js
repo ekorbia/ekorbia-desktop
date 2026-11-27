@@ -46,7 +46,6 @@ function seedBackend() {
   R.space_prompts_list = () => [];
   R.db_load_chats = () => [];
   R.db_load_messages = () => [];
-  R.chat_files_list = () => [];
   R.db_upsert_chat = () => undefined;
   R.db_upsert_message = () => undefined;
   R.search_chats = () => [];

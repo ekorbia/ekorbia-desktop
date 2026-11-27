@@ -122,17 +122,13 @@ function QuickQuery() {
   // it. Read the same saved choice the app does (`ekorbia.tweaks`), again
   // each time the panel comes forward and when the system appearance flips.
   const readLight = () => {
-    let key = "one_dark";
+    let saved;
     try {
-      const saved = JSON.parse(localStorage.getItem("ekorbia.tweaks") || "{}");
-      if (saved && saved.theme) key = saved.theme;
+      saved = JSON.parse(localStorage.getItem("ekorbia.tweaks") || "{}").theme;
     } catch {}
-    if (key === "system") {
-      return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches);
-    }
-    const themes = typeof THEMES !== "undefined" ? THEMES : null;
-    if (themes && themes[key]) return !!themes[key].light;
-    return /light/.test(key);
+    const systemDark = !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    // Light unless a dark look was chosen (resolveLook, utils.js).
+    return resolveLook(saved, systemDark) === "one_light";
   };
   const [light, setLight] = qS(readLight);
   qE(() => {
@@ -610,7 +606,7 @@ function QuickQuery() {
         if (overflow) {
           setResponse(`⚠️ ${overflow}`);
         } else if (backendKind !== 'ollama') {
-          setResponse(msg ? `⚠️ ${msg}` : '⚠️ The model backend reported an error. Check Settings → Backend in the main window.');
+          setResponse(msg ? `⚠️ ${msg}` : '⚠️ The model backend reported an error. Check Settings → Advanced in the main window.');
         } else if (/40\d|not found|no such model|try pulling|unknown model/i.test(msg)) {
           setResponse(
             "The default model isn't installed. Choose another in Settings → Models in the main window.",

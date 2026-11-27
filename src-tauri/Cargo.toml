@@ -81,17 +81,6 @@ bytemuck = "1"
 # sha256 of multi-GB GGUF streams against the catalog's pinned hashes.
 # Pure Rust, no system deps.
 sha2 = "0.10"
-# Watch pipeline (RSS / URL kinds — Phase 1+):
-#   feed-rs — unified parser for RSS 1.0/2.0 + Atom feeds. Smaller surface
-#             than rss + atom_syndication separately, handles both formats.
-#   scraper — HTML parsing + CSS selectors for extracting article body when
-#             we follow an RSS entry's <link> for full text (or for URL
-#             watch's optional `url_selector` in later phases).
-#   similar — line-level text diffing for URL diff mode (Phase 3). Produces
-#             unified-diff output that LLMs understand without coaxing.
-feed-rs = "2"
-scraper = "0.20"
-similar = "2"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

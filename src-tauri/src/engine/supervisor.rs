@@ -350,7 +350,7 @@ impl Supervisor {
                 if *n >= FAIL_LIMIT && at.elapsed() < FAIL_PAUSE {
                     return Err(format!(
                         "`{model}` failed to start {n} times in a row — check the model file \
-                         (Settings → Backend shows the models folder). Retries pause for a minute."
+                         (Settings → Advanced shows the models folder). Retries pause for a minute."
                     ));
                 }
             }

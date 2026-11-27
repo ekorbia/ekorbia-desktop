@@ -4,26 +4,25 @@
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS%20%28Apple%20Silicon%29-lightgrey)
 ![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db)
 ![Runs models locally](https://img.shields.io/badge/models-100%25%20local-24c8db)
-[![Launch Certified by FuzzPage](https://fuzzpage.com/badge/ekorbia-ekorbia-desktop.svg)](https://fuzzpage.com/p/ekorbia-ekorbia-desktop)
 
 Private, local AI for your Mac. Ekorbia runs open models on your own machine with a bundled engine: pick one from the built-in catalog and it downloads. No terminal, no account, no API key. Your chats stay on your Mac.
 
 <p align="center">
-  <img src="docs/screenshots/ekorbia-screenshot-0.7.png" alt="Ekorbia main chat window" width="800">
+  <img src="docs/screenshots/ekorbia-screenshot.png" alt="Ekorbia's Home screen: workspaces with their documents, recent chats, and a box for a quick question" width="800">
 </p>
 
 ## What it does
 
-- **Ask from any app.** ⌘⇧Space opens a quick-query panel over whatever you are doing.
+- **Ask from any app.** ⌘⇧Space opens a quick-question panel over whatever you are doing.
 - **Act on copied text.** Copy something, press ⌘⇧E, and summarize, rewrite, fix or explain it.
 - **Talk instead of type.** ⌘⇧V dictates from any app, transcribed on your Mac.
 - **Ask about your screen.** ⌘⇧1 captures a region into a new chat.
 - **Chat with your files.** Attach files or a whole folder; answers cite their sources.
-- **Spaces.** Group chats with their own model, pinned files, prompts and memory.
-- **Watches.** Summaries of new files in a folder, new posts in a feed, or changes to a web page, in the background.
-- **Prompt library.** Plain Markdown files you own; 31 are included.
+- **Workspaces.** Keep a matter's chats together with its documents, notes, model and templates.
+- **Templates.** Reusable instructions kept as plain Markdown files you own; thirteen are included.
+- **See what leaves your Mac.** Settings → Privacy lists every connection Ekorbia has made and saves it as a report. An offline lock refuses them all.
 
-Also: compare two or three models side by side, private chats that are never saved, search across every chat, a memory file, optional thinking before answers, math and diagrams in replies, a ⌘K command palette, files the model saves to a folder you choose, and six themes.
+Also: save a reply or a whole chat as a Word document, save a file the model wrote in a reply, compare two or three models side by side, private chats that are never saved, search across every chat, summaries of new files in a folder you choose to watch, optional thinking before answers, math in replies, and light and dark looks.
 
 What changed in each release is in the [changelog](CHANGELOG.md). More at [ekorbia.com](https://ekorbia.com).
 
@@ -57,16 +56,16 @@ To check a download against the release's checksums, run `shasum -a 256 -c SHA25
 
 ## Models
 
-The bundled engine is [llama.cpp](https://github.com/ggml-org/llama.cpp). The catalog offers Gemma 4 (E2B, E4B, 12B, 26B and 31B) and Qwen (3.5 4B, 3.5 9B and 3.8 27B). Every download is checked against a pinned checksum. Settings → Models also takes a Hugging Face link, so you can add any GGUF model.
+The bundled engine is [llama.cpp](https://github.com/ggml-org/llama.cpp). The catalog offers Gemma 4 (E2B, E4B, 12B, 26B and 31B) and Qwen (3.5 4B, 3.5 9B and 3.8 27B). Each catalog model is checked against a pinned checksum when it downloads. Settings → Models offers three that fit your Mac: Fast, Balanced and Most capable. Settings → Advanced has the whole catalog and takes a Hugging Face link, so you can add any GGUF model.
 
-Prefer your own runtime? Settings → Backend switches to [Ollama](https://ollama.com) or any OpenAI-compatible server, such as LM Studio, llama-server or vLLM.
+Prefer your own runtime? Settings → Advanced switches to [Ollama](https://ollama.com) or any OpenAI-compatible server, such as LM Studio, llama-server or vLLM.
 
 ## Privacy and your data
 
 - No telemetry, no account, and no code or fonts loaded from the internet. Once a model is downloaded, Ekorbia works offline.
-- The only network traffic is what you ask for: model downloads from Hugging Face, the feeds and pages your Watches follow, and a custom endpoint if you set one up.
+- The only network traffic is what you ask for: model downloads from Hugging Face, and a custom endpoint if you set one up. Settings → Privacy shows each connection, and the offline lock stops them.
 - Chats are in a SQLite database in `~/Library/Application Support/com.ekorbia.desktop/`, with models in the `models` folder beside it.
-- Prompts and the memory file are plain Markdown in `~/Documents/Ekorbia/`.
+- Templates and each workspace's notes are plain Markdown in `~/Documents/Ekorbia/`.
 - Closing the window keeps Ekorbia running for its hotkeys and Watches, and ends any private chat. ⌘Q quits.
 
 ## Build from source

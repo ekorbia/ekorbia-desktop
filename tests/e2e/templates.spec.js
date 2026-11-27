@@ -241,12 +241,39 @@ test("the picker's last row opens Settings on Templates", async ({ page }) => {
   await expect(page.locator("[data-templates-settings]")).toBeVisible();
 });
 
-test("the right-hand panel no longer has a prompt library", async ({ page }) => {
+test("there is no prompt library beside the chat any more", async ({ page }) => {
   await openApp(page, seedTemplates);
   await page.locator("[data-more-menu-button]").click();
   const menu = page.locator("[data-more-menu]");
   await expect(menu).toContainText("Templates…");
   await expect(menu).not.toContainText("Prompt library");
-  await menu.locator('[data-more-panel="watches"]').click();
+  // Nothing in the menu opens a panel; Templates opens Settings.
+  await expect(menu.locator("[data-more-panel]")).toHaveCount(0);
+  await menu.locator("[data-more-templates]").click();
+  await expect(page.locator("[data-templates-settings]")).toBeVisible();
   await expect(page.getByRole("button", { name: "Prompts", exact: true })).toHaveCount(0);
+});
+
+// The model is offered no tools: it answers, and cannot write files or act
+// by itself. (A `write_file` tool, a permission dialog and a Files panel
+// were removed; ⌘K's command palette went at the same time.)
+test("a chat request carries no tools, and nothing asks for a folder to save into", async ({ page }) => {
+  await openApp(page, seedTemplates);
+  await openWorkspace(page, null);
+  await send(page, "Draft a file note and save it as note.md");
+  const sent = await invoked(page, "llm_chat_stream");
+  expect(sent).toHaveLength(1);
+  expect(sent[0].body.tools).toBeUndefined();
+  for (const cmd of ["chat_tool_schemas", "chat_output_dir", "tool_write_file", "chat_files_list"]) {
+    expect(await invoked(page, cmd), cmd).toEqual([]);
+  }
+});
+
+test("⌘K opens nothing", async ({ page }) => {
+  await openApp(page, seedTemplates);
+  await page.keyboard.press("Meta+k");
+  await page.waitForTimeout(200);
+  await expect(page.locator("[data-command-palette]")).toHaveCount(0);
+  await expect(page.getByPlaceholder(/command/i)).toHaveCount(0);
+  await expect(page.locator("[data-home]")).toBeVisible();
 });

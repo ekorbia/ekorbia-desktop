@@ -23,12 +23,13 @@
 //! - `overlay`       — overlay window + hotkey commands
 //! - `selection`     — clipboard capture for the overlay's selection actions
 //! - `attachments::` — types, config, cancel registry, pipeline, folder, commands
-//! - `watch::`       — types, commands, pipeline, folder/rss/url runners, HTTP
-//! - `files::`       — sandbox + write_file tool execution + chat_files commands
+//! - `watch::`       — types, commands, pipeline, the folder runner
+//! - `files::`       — path sandbox + open/reveal in the OS
 
 mod attachments;
 mod chat;
 mod db;
+mod docx;
 mod engine;
 mod files;
 mod llm;
@@ -292,6 +293,9 @@ pub fn run() {
             chat::db_clear_all_chats,
             chat::db_truncate_chat_from,
             chat::chat_export_to_path,
+            chat::chat_export_markdown,
+            docx::docx_save,
+            files::commands::text_file_save,
             spaces::space_list,
             spaces::space_get,
             spaces::space_create,
@@ -343,25 +347,8 @@ pub fn run() {
             watch::commands::watch_events_list,
             watch::commands::watch_run_once,
             watch::commands::watch_run_one,
-            watch::commands::watch_test_source,
             watch::commands::watch_notes_read,
             watch::commands::watch_default_paths,
-            files::commands::chat_set_output_dir,
-            files::commands::chat_output_dir,
-            files::commands::chat_files_list,
-            files::commands::chat_file_path,
-            files::commands::chat_file_open,
-            files::commands::chat_file_reveal,
-            files::commands::chat_file_remove,
-            files::commands::chat_output_dir_reveal,
-            files::tools::chat_tool_schemas,
-            files::tools::default_output_dir_for_chat,
-            files::tools::tool_write_file,
-            files::tools::chat_save_manual_file,
-            memory::memory_info,
-            memory::memory_read,
-            memory::memory_set_path,
-            memory::memory_open,
             memory::space_memory_read,
             memory::space_memory_open,
             memory::space_memory_write,

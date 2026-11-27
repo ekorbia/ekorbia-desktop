@@ -70,9 +70,12 @@ test("settings: panes are listed down the left, technical settings under Advance
   // Advanced holds what used to be Backend, Models and Files.
   await nav.getByRole("button", { name: "Advanced", exact: true }).click();
   const body = root.locator("[data-settings-body]");
-  for (const label of ["Engine and servers", "Every model", "Memory file", "Attachments", "Show technical details"]) {
+  for (const label of ["Engine and servers", "Every model", "Attachments", "Show technical details"]) {
     await expect(body.getByText(label, { exact: true })).toBeVisible();
   }
+  // The one memory file shared by every chat is gone; a workspace's notes
+  // are in its own settings.
+  await expect(body.getByText("Memory file", { exact: true })).toHaveCount(0);
   // The templates folder moved to the Templates pane with the templates.
   await expect(body.getByText("Prompts folder", { exact: true })).toHaveCount(0);
 
@@ -103,7 +106,7 @@ test("settings: panes are listed down the left, technical settings under Advance
 
 // REGRESSION: the pane's box has a fixed height. As a flex column it
 // squeezed the model manager (which allows it), and the manager's rows
-// spilled over "Prompts folder", "Memory file" and "Attachments".
+// spilled over the sections after it.
 test("settings: Advanced with a long model list — no section is squeezed or overlapped", async ({ page }) => {
   await page.evaluate(() => {
     window.THEMES = { one_dark: { label: "Midnight" }, one_light: { label: "Daylight" } };

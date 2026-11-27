@@ -13,8 +13,6 @@ use crate::log::log_warn;
 use crate::prompts::{parse_prompt_file, resolve_prompts_dir};
 use crate::watch::cancel::register_cancel;
 use crate::watch::folder::run_folder_watch;
-use crate::watch::rss::run_rss_watch;
-use crate::watch::url::run_url_watch;
 use crate::watch::{map_watch_row, Watch, WATCH_COLUMNS, WATCH_POLL_SECS};
 use std::io::Write as _;
 use std::path::Path;
@@ -128,51 +126,6 @@ pub(crate) fn insert_event(
     )
     .map_err(|e| e.to_string())?;
     Ok(())
-}
-
-/// Shared "source-level fetch failed" handler for RSS + URL kinds. (Folder
-/// kind has no fetch step — failures are per-file inside `process_file`.)
-///
-/// Three side effects in order:
-///   1. Insert an `error` event into `watch_events` so the activity feed
-///      shows it. Failure to insert is logged but non-fatal — the notify
-///      batch is the user-visible signal.
-///   2. Emit `watch:event_changed` so the UI's event list re-renders
-///      without a full reload.
-///   3. Push an entry into the caller's `notify_batch` so it coalesces with
-///      any other outcomes in this cycle. Callers still flush the batch
-///      themselves — this helper deliberately doesn't flush so multi-item
-///      flows (RSS feed-fetch + per-entry follow) can accumulate.
-///
-/// `item_id` is the dedup key written to `watch_events.file_path` (typically
-/// the feed URL or page URL for fetch-level failures). `item_label` is the
-/// human-readable label shown in the OS notification.
-pub(crate) fn record_fetch_error(
-    app: &tauri::AppHandle,
-    watch_id: &str,
-    item_id: &str,
-    item_label: &str,
-    error: &str,
-    notify_batch: &mut NotifyBatch,
-) {
-    let event_id = gen_event_id();
-    if let Err(e) = insert_event(
-        app,
-        &event_id,
-        watch_id,
-        item_id,
-        "error",
-        None,
-        Some(error),
-    ) {
-        crate::log::log_warn!("record_fetch_error: insert_event failed for {watch_id}: {e}");
-    }
-    let _ = app.emit("watch:event_changed", &event_id);
-    notify_batch.push(NotifyEntry {
-        success: false,
-        item_label: item_label.to_string(),
-        detail: error.to_string(),
-    });
 }
 
 /// Look up a prompt's body by slug. Returns Ok(None) when the file is
@@ -607,9 +560,11 @@ pub(crate) async fn run_watch(app: &tauri::AppHandle, watch: &Watch) {
     let flag = token.flag.clone();
     match watch.kind.as_str() {
         "folder" | "" => run_folder_watch(app, watch, &flag).await,
-        "rss" => run_rss_watch(app, watch, &flag).await,
-        "url" => run_url_watch(app, watch, &flag).await,
-        other => log_warn!("watch '{}': unsupported kind '{other}'", watch.name),
+        // A feed or page watch from an older version: never run.
+        other => log_warn!(
+            "watch '{}': kind '{other}' is no longer watched",
+            watch.name
+        ),
     }
     mark_watch_polled(app, &watch.id);
     // Token drops here, removing the registry entry. Explicit for clarity

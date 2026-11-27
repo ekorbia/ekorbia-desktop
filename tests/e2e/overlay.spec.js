@@ -99,8 +99,13 @@ test("it wears the app's look: light when the app is light, dark when it is dark
   expect(await ink()).toBe("rgb(227, 230, 236)");
 });
 
-test("with no saved look it is dark, like the app", async ({ page }) => {
+test("with no saved look it is light, like the app", async ({ page }) => {
   await mountPanel(page, () => localStorage.removeItem("ekorbia.tweaks"));
+  await expect(page.locator("[data-quick-panel]")).toHaveAttribute("data-quick-look", "light");
+});
+
+test("a theme saved by an older version maps to the nearer look", async ({ page }) => {
+  await mountPanel(page, () => localStorage.setItem("ekorbia.tweaks", JSON.stringify({ theme: "ayu_mirage" })));
   await expect(page.locator("[data-quick-panel]")).toHaveAttribute("data-quick-look", "dark");
 });
 

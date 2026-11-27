@@ -64,7 +64,6 @@ async function mountHome(page, opts = {}) {
           return Promise.resolve({ id: "s-new", name, color: color || null, slug: "s-new", defaultModel: null, memoryPath: null, sortIndex: 0, createdAt: 1, updatedAt: 1 });
         },
         onRenameSpace: (id, name) => window.__HOME.rename.push([id, name]),
-        onRecolorSpace: (id, color) => window.__HOME.recolor.push([id, color]),
         onDeleteSpace: (id) => window.__HOME.del.push(id),
         onEditSpaceSave: () => {},
         promptsLibrary: [],
@@ -186,9 +185,11 @@ test("New workspace: the name is required; Create opens the new workspace", asyn
   await expect(page.locator("[data-space-create-modal]")).toContainText("New workspace");
   await expect(create).toBeDisabled();
   await page.locator("[data-space-create-modal] input").fill("Lindqvist lease");
-  await page.locator('[data-color-swatch="green"]').click();
+  // A workspace has a name and nothing else to choose: no colour.
+  await expect(page.locator("[data-space-create-modal] [data-color-swatch]")).toHaveCount(0);
+  await expect(page.locator("[data-space-create-modal]")).not.toContainText("Color");
   await create.click();
-  expect(await calls(page, "create")).toEqual([["Lindqvist lease", "green"]]);
+  expect(await calls(page, "create")).toEqual([["Lindqvist lease", null]]);
   await expect.poll(() => calls(page, "open")).toEqual(["s-new"]);
   await expect(page.locator("[data-space-settings-modal]")).toHaveCount(0);
 });
@@ -240,14 +241,14 @@ test("a card's ⋯ button: Delete asks first, and says the chats are kept", asyn
   expect(await calls(page, "del")).toEqual(["s1"]);
 });
 
-test("a card's ⋯ button: Change color picks a swatch", async ({ page }) => {
+test("a card's ⋯ menu has no colour to change", async ({ page }) => {
   await mountHome(page);
   const card = page.locator('[data-workspace-card][data-space-id="s1"]');
   await card.hover();
   await card.locator("[data-workspace-card-more]").click();
-  await page.getByText("Change color…").click();
-  await page.locator('[data-space-color-popover] [data-color-swatch="purple"]').click();
-  expect(await calls(page, "recolor")).toEqual([["s1", "purple"]]);
+  const menu = page.locator("[data-space-overflow-menu]");
+  await expect(menu).toBeVisible();
+  await expect(menu).not.toContainText("Change color");
 });
 
 test("right-clicking a card opens the same menu; General has none", async ({ page }) => {

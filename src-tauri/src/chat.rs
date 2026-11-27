@@ -397,20 +397,15 @@ pub(crate) fn db_truncate_chat_from(
     Ok(())
 }
 
-/// Serialise an entire chat (the row + every message) to a user-chosen
-/// path. `format` is "markdown" or "json"; anything else is rejected so a
-/// typo in the UI dispatch doesn't silently write the wrong serialisation.
+/// Write an entire chat (the row + every message) to a user-chosen path.
+/// `format` is "markdown"; anything else is rejected so a typo in the UI
+/// dispatch doesn't silently write the wrong thing. (A JSON export existed
+/// and was dropped — nobody outside development had a use for it. A Word
+/// export takes the same text through `chat_export_markdown` and
+/// `docx::docx_save`.)
 ///
-/// The path comes from the OS save-dialog (tauri-plugin-dialog), so the
-/// user has already consented to the destination — no sandbox check here
-/// the way `tool_write_file` enforces, because tool writes come from the
-/// model (untrusted) and export comes from the user (trusted, explicit).
-///
-/// Markdown export is human-readable and lossy: it drops tool-role rows
-/// (they're model context, not human content), tool_calls metadata, and
-/// per-message token counts. JSON export is roundtrip-faithful — every
-/// column on every row is preserved so a future "import chat" path could
-/// reconstruct the conversation byte-for-byte.
+/// The path comes from the OS save dialog (tauri-plugin-dialog), so the
+/// user has already chosen the destination.
 #[tauri::command]
 pub(crate) fn chat_export_to_path(
     state: tauri::State<'_, DbState>,
@@ -419,20 +414,38 @@ pub(crate) fn chat_export_to_path(
     path: String,
 ) -> Result<(), String> {
     let format = format.to_lowercase();
-    if format != "markdown" && format != "json" {
+    if format != "markdown" {
         return Err(format!("unknown export format: {format}"));
     }
+    // The lock is released inside `chat_markdown`, before the write: a slow
+    // disk must not hold the only SQLite connection.
+    let body = chat_markdown(&state, &chat_id)?;
+    std::fs::write(&path, body).map_err(|e| format!("write {path}: {e}"))?;
+    Ok(())
+}
 
+/// The same text `chat_export_to_path` writes, handed back instead: the UI
+/// turns it into a Word document.
+#[tauri::command]
+pub(crate) fn chat_export_markdown(
+    state: tauri::State<'_, DbState>,
+    chat_id: String,
+) -> Result<String, String> {
+    chat_markdown(&state, &chat_id)
+}
+
+/// A whole chat as Markdown, for reading: it leaves out tool-role rows from
+/// older chats and per-message token counts.
+fn chat_markdown(state: &DbState, chat_id: &str) -> Result<String, String> {
     let db = state.0.lock().map_err(|e| e.to_string())?;
 
-    // Load the chat row first so we can include its metadata in both
-    // formats. A missing row (deleted between menu-open and click) is a
+    // A missing row (deleted between menu-open and click) is a
     // user-visible error, not a panic.
     let chat = db
         .query_row(
             "SELECT id, title, model, created_at, updated_at, tab_type, multi_models, space_id \
              FROM chats WHERE id = ?1",
-            [&chat_id],
+            [chat_id],
             |row| {
                 Ok(ChatRow {
                     id: row.get(0)?,
@@ -451,9 +464,6 @@ pub(crate) fn chat_export_to_path(
         )
         .map_err(|e| format!("chat not found: {e}"))?;
 
-    // Pull every message column for JSON parity; markdown ignores most of
-    // these but loading once + branching is cheaper than two prepared
-    // statements + cleaner to maintain.
     let mut stmt = db
         .prepare(
             "SELECT id, chat_id, role, content, model, time, tokens_in, tokens_out, tokens_ms, \
@@ -463,7 +473,7 @@ pub(crate) fn chat_export_to_path(
         )
         .map_err(|e| e.to_string())?;
     let messages: Vec<MessageRow> = stmt
-        .query_map([&chat_id], |row| {
+        .query_map([chat_id], |row| {
             Ok(MessageRow {
                 id: row.get(0)?,
                 chat_id: row.get(1)?,
@@ -487,21 +497,10 @@ pub(crate) fn chat_export_to_path(
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-
-    // Drop the DB lock before doing filesystem I/O. Filesystem writes can
-    // block on slow disks / remote volumes and we don't want to hold the
-    // executor's only SQLite connection while that happens.
     drop(stmt);
     drop(db);
 
-    let body = match format.as_str() {
-        "markdown" => render_markdown(&chat, &messages),
-        "json" => render_json(&chat, &messages)?,
-        _ => unreachable!("format validated above"),
-    };
-
-    std::fs::write(&path, body).map_err(|e| format!("write {path}: {e}"))?;
-    Ok(())
+    Ok(render_markdown(&chat, &messages))
 }
 
 /// Markdown export — human-readable, intended for sharing or pasting into
@@ -543,22 +542,6 @@ fn render_markdown(chat: &ChatRow, messages: &[MessageRow]) -> String {
         }
     }
     out
-}
-
-/// JSON export — roundtrip-faithful. The shape is `{ chat: {...}, messages: [...] }`
-/// where each row mirrors the database column set. We hand-build the JSON
-/// rather than deriving Serialize on a wrapper struct so the field order
-/// is deterministic + easy to scan when the file is opened in an editor.
-fn render_json(chat: &ChatRow, messages: &[MessageRow]) -> Result<String, String> {
-    // Wrapper for serialization — the underlying ChatRow / MessageRow are
-    // already serde::Serialize, so this is a straight pass-through.
-    #[derive(serde::Serialize)]
-    struct Export<'a> {
-        chat: &'a ChatRow,
-        messages: &'a [MessageRow],
-    }
-    let payload = Export { chat, messages };
-    serde_json::to_string_pretty(&payload).map_err(|e| format!("serialize JSON: {e}"))
 }
 
 #[cfg(test)]

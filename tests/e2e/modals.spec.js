@@ -1,17 +1,9 @@
-// Modal + keyboard interaction smokes (Ring 3 — D4).
+// Modal stacking contracts.
 //
-// Scope-limited because most modal stacking lives in the App component
-// in main.jsx — mounting App in isolation is impractical (it pulls in
-// every effect that talks to Tauri). What we CAN test cheaply:
-//   1. Each modal's outermost element carries the documented z-index
-//      so the stacking order is preserved if a future refactor moves
-//      style declarations around.
-//   2. Click-through: clicking "Next" in OnboardingTour advances slides;
-//      clicking "Done" on the last slide calls onClose.
-//
-// The full visual stacking test (OllamaGate 9999 over Settings 9998 over
-// Onboarding 9990) is left to manual verification — it's a CSS+DOM
-// interaction we'd need a real App mount to exercise.
+// Most stacking lives in App, but each modal's outermost element carries a
+// documented z-index; these pin the values so a refactor that moves style
+// declarations around cannot reorder them silently. (Settings 9998 sits
+// over the first-run welcome at 9990; the setup gates are 9999.)
 
 const { test, expect } = require("@playwright/test");
 
@@ -54,55 +46,5 @@ test.describe("modal z-index contracts", () => {
     expect(settingsZ).toBe(9998);
     expect(onbZ).toBe(9990);
     expect(settingsZ).toBeGreaterThan(onbZ);
-  });
-});
-
-test.describe("OnboardingTour navigation by click", () => {
-  test("clicking Next through every slide then Done calls onClose exactly once", async ({ page }) => {
-    await page.evaluate(() =>
-      window.__TEST_MOUNT("OnboardingTour", { open: true })
-    );
-
-    // Walk every slide. The button text changes from "Next" → ... →
-    // "Done" on the last slide. We click the *last* visible button each
-    // time (the modal has Skip + Next; Skip is leftmost). The
-    // "Next" / "Done" button is always the rightmost in the toolbar.
-    // Loop bound is generous (10) so a future slide addition doesn't
-    // break this test the way the Spaces slide did — the early-break on
-    // onClose handles termination.
-    for (let i = 0; i < 10; i++) {
-      // Find a button matching either "Next" or "Done" / "Got it" /
-      // "Get started" — onboarding copy varies, so be flexible.
-      const next = page
-        .locator("#test-root button")
-        .filter({ hasText: /next|done|got it|get started/i })
-        .last();
-      await next.click();
-      const closed = await page.evaluate(() => (window.__TEST_CALLS.onClose || 0) > 0);
-      if (closed) break;
-    }
-    const closed = await page.evaluate(() => window.__TEST_CALLS.onClose || 0);
-    expect(closed).toBe(1);
-  });
-
-  test("Skip button (if present) calls onClose immediately", async ({ page }) => {
-    await page.evaluate(() =>
-      window.__TEST_MOUNT("OnboardingTour", { open: true })
-    );
-
-    // Find a "Skip" button if the component exposes one. If it doesn't,
-    // skip the test rather than fail — onboarding copy is editorial,
-    // not a hard contract.
-    const skip = page
-      .locator("#test-root button")
-      .filter({ hasText: /skip/i })
-      .first();
-    if ((await skip.count()) === 0) {
-      test.skip(true, "OnboardingTour does not expose a Skip button");
-    }
-    await skip.click();
-    await expect.poll(() =>
-      page.evaluate(() => window.__TEST_CALLS.onClose || 0)
-    ).toBe(1);
   });
 });

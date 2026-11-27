@@ -6,7 +6,7 @@
 //                 → DOMPurify (sanitize)
 //                 → neutraliseRemoteContent (remote images become links)
 //                 → innerHTML
-//                 → post-mount DOM walk (copy buttons, citations, search)
+//                 → post-mount DOM walk (Save/Copy on code blocks, citations, search)
 //
 // Why the post-mount DOM walk: marked produces HTML strings, but our two
 // pre-existing UI affordances on assistant text — citation chips for [N]
@@ -80,11 +80,15 @@ function ensureMarkedConfigured() {
           highlighted = escapeHtml(text);
         }
         const langAttr = appliedLang ? ` data-lang="${escapeAttr(appliedLang)}"` : '';
+        // The language the model itself wrote on the fence, kept apart from
+        // `data-lang` (which may be a guess made for colouring): the Save
+        // button names the file from this one only.
+        const fenceAttr = language ? ` data-fence="${escapeAttr(language)}"` : '';
         const classAttr = `hljs${appliedLang ? ' language-' + escapeAttr(appliedLang) : ''}`;
         // Pre.ek-code is what our CSS targets; the surrounding scoping
         // (.ek-md pre.ek-code) keeps styles from leaking to any future
         // non-assistant code rendering.
-        return `<pre class="ek-code"${langAttr}><code class="${classAttr}">${highlighted}</code></pre>`;
+        return `<pre class="ek-code"${langAttr}${fenceAttr}><code class="${classAttr}">${highlighted}</code></pre>`;
       },
     },
   });
@@ -119,80 +123,9 @@ function renderKatexSegment(seg) {
   }
 }
 
-// Swap every ```mermaid code block under `root` for its rendered SVG.
-// Runs from MarkdownMessage's post-mount effect, so only on FINALIZED
-// messages (streaming renders plaintext). Async: mermaid.render parses +
-// lays out off-DOM; a message that re-renders mid-await leaves a detached
-// <pre>, which we detect via isConnected and skip.
-//
-// Failure posture: invalid diagram source keeps the original code block
-// (source + copy button stay visible) — a wrong diagram should read as
-// code, not vanish. Theme is whatever's active when the reply finalizes;
-// already-rendered diagrams keep their theme until the message remounts
-// (tab reopen) — deliberate, to avoid re-laying-out every diagram on
-// theme switch.
-let ekMermaidSeq = 0;
-async function renderMermaidBlocks(root) {
-  if (typeof mermaid === "undefined") return;
-  const pres = root.querySelectorAll('pre.ek-code[data-lang="mermaid"]');
-  if (!pres.length) return;
-  // initialize() is a config setter — re-invoked per batch so the theme
-  // tracks T at render time. securityLevel 'strict' is mermaid's
-  // sanitizing mode (label text cleaned, click/script directives
-  // disabled); htmlLabels:false keeps the output pure SVG (no
-  // <foreignObject>), which scrubSvg relies on.
-  try {
-    mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: "strict",
-      theme: typeof T !== "undefined" && T.isLight ? "default" : "dark",
-      fontFamily:
-        (typeof T !== "undefined" && T.sans) || "system-ui, sans-serif",
-      // BOTH flags: mermaid v11's unified renderer reads the top-level
-      // htmlLabels for some diagram types and flowchart.htmlLabels for
-      // others — miss one and node labels come out as <foreignObject>
-      // HTML, which scrubSvg strips (labels silently vanish; pinned by
-      // the math-mermaid spec's label assertions).
-      htmlLabels: false,
-      flowchart: { htmlLabels: false },
-    });
-  } catch (_) {
-    return;
-  }
-  for (const pre of pres) {
-    const codeEl = pre.querySelector("code");
-    // textContent recovers the raw source even after hljs auto-detect
-    // wrapped it in token spans.
-    const src = (codeEl ? codeEl.textContent : pre.textContent) || "";
-    if (!src.trim()) continue;
-    const id = `ek-mermaid-${++ekMermaidSeq}`;
-    let svg;
-    try {
-      const res = await mermaid.render(id, src.trim());
-      svg = res && res.svg;
-    } catch (_) {
-      // Parse/render failure — clean up any scratch nodes mermaid left
-      // behind (it appends a temp container under body on some paths)
-      // and keep the code block.
-      document.getElementById(id)?.remove();
-      document.getElementById("d" + id)?.remove();
-      continue;
-    }
-    if (!svg || !pre.isConnected) continue;
-    const wrap = document.createElement("div");
-    wrap.className = "ek-mermaid";
-    wrap.innerHTML = svg;
-    scrubSvg(wrap);
-    pre.replaceWith(wrap);
-  }
-}
-
-// Defense-in-depth over mermaid's strict-mode output. DOMPurify's SVG
-// profile is a bad fit (it strips the <style> element every mermaid SVG
-// carries its look in), so scrub narrowly instead: no scripts, no
-// foreignObject (htmlLabels:false means none should exist anyway), no
-// on* handlers, no non-fragment hrefs. Anything this removes would
-// already mean a mermaid sanitizer bypass — belt to its suspenders.
+// A narrow scrub for an <svg> a reply carries inline (DOMPurify's SVG
+// profile strips too much to keep such a drawing legible): no scripts, no
+// foreignObject, no on* handlers, no non-fragment hrefs.
 function scrubSvg(container) {
   container
     .querySelectorAll("script, foreignObject")
@@ -238,7 +171,7 @@ const REPLY_FORBID_ATTR = ['style', 'srcset', 'background'];
 //   • <input> survives only as the disabled checkbox of a GFM task list
 //     (`<input type="image" src>` loads, and a text field has no business
 //     in a reply).
-//   • inline <svg> gets the same narrow scrub as a mermaid diagram.
+//   • inline <svg> gets a narrow scrub (scrubSvg above).
 // Runs in a <template>, whose content is inert: nothing parsed into it
 // loads or executes.
 function neutraliseRemoteContent(html) {
@@ -293,42 +226,97 @@ function handleReplyLinkClick(e) {
   }
 }
 
-// Add a "Copy" button to every code block in `root`. Idempotent: bails if
-// a button already exists on a given <pre> (so re-runs from the useEffect
-// don't stack buttons).
-function addCopyButtons(root) {
+// Save one code block as a file, at a place the person chooses. The model
+// wrote the text; where it goes, and under what name, is asked in the OS
+// save dialog every time. Resolves 'saved' | 'cancelled' | 'failed'.
+async function saveCodeBlock(pre) {
+  const dialogApi = getDialogApi();
+  const invoke = getInvoke();
+  if (!dialogApi || !invoke) return 'failed';
+  const code = pre.querySelector('code');
+  // textContent, not innerText: the text exactly as written, whatever the
+  // layout is doing.
+  let text = (code || pre).textContent || '';
+  if (text && !text.endsWith('\n')) text += '\n';
+  let path;
+  try {
+    path = await dialogApi.save({
+      title: 'Save as a file',
+      defaultPath: codeBlockFileName(pre.getAttribute('data-fence')),
+    });
+  } catch (e) {
+    console.error('Save dialog failed:', e);
+    return 'failed';
+  }
+  if (!path) return 'cancelled';
+  try {
+    await invoke('text_file_save', { path, contents: text });
+    window.ekToast?.({ kind: 'success', title: 'Saved', body: path });
+    return 'saved';
+  } catch (e) {
+    console.error('Save failed:', e);
+    window.ekToast?.({ kind: 'error', title: 'Could not save the file', body: String(e?.message || e) });
+    return 'failed';
+  }
+}
+
+// Add "Save…" and "Copy" to every code block in `root`. Idempotent: bails
+// if a block already has its buttons (so re-runs from the useEffect don't
+// stack them). Save… is left out where there is no save dialog to ask.
+function addCodeBlockButtons(root) {
   const blocks = root.querySelectorAll('pre.ek-code');
+  const canSave = !!(getDialogApi() && getInvoke());
   blocks.forEach((pre) => {
-    if (pre.querySelector(':scope > .ek-copy-btn')) return;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'ek-copy-btn';
-    btn.textContent = 'Copy';
-    btn.setAttribute('aria-label', 'Copy code to clipboard');
-    btn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
+    if (pre.querySelector(':scope > .ek-code-actions')) return;
+    const bar = document.createElement('span');
+    bar.className = 'ek-code-actions';
+
+    // A label that changes for a moment after a click, then goes back.
+    const flash = (btn, text, cls) => {
+      const rest = btn.getAttribute('data-label');
+      btn.textContent = text;
+      if (cls) btn.classList.add(cls);
+      setTimeout(() => {
+        btn.textContent = rest;
+        if (cls) btn.classList.remove(cls);
+      }, 1400);
+    };
+    const button = (label, cls, aria, onClick) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `ek-code-btn ${cls}`;
+      btn.textContent = label;
+      btn.setAttribute('data-label', label);
+      btn.setAttribute('aria-label', aria);
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick(btn);
+      });
+      bar.appendChild(btn);
+      return btn;
+    };
+
+    if (canSave) {
+      button('Save…', 'ek-save-btn', 'Save this as a file', async (btn) => {
+        const result = await saveCodeBlock(pre);
+        if (result === 'saved') flash(btn, 'Saved', 'ek-copied');
+        else if (result === 'failed') flash(btn, 'Not saved');
+      });
+    }
+    button('Copy', 'ek-copy-btn', 'Copy this to the clipboard', async (btn) => {
       const code = pre.querySelector('code');
       const text = code ? code.innerText : pre.innerText;
       try {
         await navigator.clipboard.writeText(text);
-        btn.textContent = 'Copied!';
-        btn.classList.add('ek-copied');
-        setTimeout(() => {
-          btn.textContent = 'Copy';
-          btn.classList.remove('ek-copied');
-        }, 1400);
+        flash(btn, 'Copied', 'ek-copied');
       } catch (_) {
-        // Clipboard API may fail on insecure contexts or when permission
-        // is denied. Fall back to a transient label so the user still
-        // gets feedback — we don't surface a toast because the bigger
-        // copy paths (chip strip, file save) already have one and a
-        // failure here is rare on a Tauri webview.
-        btn.textContent = 'Failed';
-        setTimeout(() => { btn.textContent = 'Copy'; }, 1400);
+        // The clipboard can refuse (permission, an insecure context). Say
+        // so on the button; it is rare in the app's own webview.
+        flash(btn, 'Not copied');
       }
     });
-    pre.appendChild(btn);
+    pre.appendChild(bar);
   });
 }
 
@@ -475,15 +463,16 @@ function MarkdownMessage({ content, highlightRegex, sources, streaming }) {
     // badge survives sanitization, forbid what could load or post
     // (REPLY_FORBID_*), then turn every non-inline image into a link.
     const clean = neutraliseRemoteContent(DOMPurify.sanitize(raw, {
-      ADD_ATTR: ['data-lang'],
+      ADD_ATTR: ['data-lang', 'data-fence'],
       FORBID_TAGS: REPLY_FORBID_TAGS,
       FORBID_ATTR: REPLY_FORBID_ATTR,
     }));
     return restoreMathSegments(clean, segments, renderKatexSegment);
   }, [content, streaming]);
 
-  // Post-mount annotation pass. Order matters: copy buttons first (they
-  // attach to existing <pre> elements), then citation wrapping (which
+  // Post-mount annotation pass. Order matters: the code blocks' Save and
+  // Copy buttons first (they attach to existing <pre> elements), then
+  // citation wrapping (which
   // mutates text nodes outside <code>), then search highlighting (which
   // walks text nodes including the new citation text — search-matching
   // a citation number is fine because the citation chip carries the
@@ -492,14 +481,9 @@ function MarkdownMessage({ content, highlightRegex, sources, streaming }) {
   useEffect(() => {
     if (streaming) return;
     if (!ref.current) return;
-    addCopyButtons(ref.current);
+    addCodeBlockButtons(ref.current);
     if (sources && sources.length) wrapCitations(ref.current, sources);
     if (highlightRegex) applySearchHighlight(ref.current, highlightRegex);
-    // Mermaid swap runs LAST and async — failed diagrams keep the code
-    // block (with its copy button from above). Re-runs from dep changes
-    // are no-ops: replaced blocks no longer match the selector, and the
-    // DOM only resets when `html` itself changes.
-    renderMermaidBlocks(ref.current);
   }, [html, sources, highlightRegex, streaming]);
 
   // Streaming branch: render as plaintext via the existing helper so the

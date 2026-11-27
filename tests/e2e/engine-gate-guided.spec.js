@@ -45,9 +45,18 @@ test("recommends the 12B on a 20 GB machine (largest that fits) and offers setup
   await mountEngineGate(page, { ram: 20 * GiB });
   const root = page.locator("#test-root");
   await expect(root).toContainText("Gemma 4 12B");
-  await expect(root).toContainText("Download and set up");
-  await expect(root).toContainText("👁 vision");
+  await expect(root).toContainText("Choose a model");
+  await expect(root.locator("[data-engine-gate-download]")).toHaveText("Download");
+  // What the model can do is said in words, in the app's own look.
+  await expect(root.locator("[data-engine-gate-model]")).toContainText("Reads images.");
   await expect(root).not.toContainText("Limited memory");
+  // The three buttons sit inside the dialog (they once spilled past its edge).
+  const box = await root.locator("[data-engine-gate]").boundingBox();
+  for (const id of ["skip", "other", "download"]) {
+    const b = await root.locator(`[data-engine-gate-${id}]`).boundingBox();
+    expect(b.x, id).toBeGreaterThanOrEqual(box.x);
+    expect(b.x + b.width, id).toBeLessThanOrEqual(box.x + box.width);
+  }
 });
 
 test("recommends the smallest with a low-RAM warning on a 4 GB machine", async ({ page }) => {
@@ -63,7 +72,7 @@ test("a lone embedding model does NOT read as ready — still recommends a chat 
   // chat-model download rather than closing as "ready".
   await mountEngineGate(page, { ram: 32 * GiB, installed: ["nomic-embed-text"] });
   const root = page.locator("#test-root");
-  await expect(root).toContainText("Download and set up");
+  await expect(root.locator("[data-engine-gate-download]")).toBeVisible();
   const calls = await page.evaluate(() => ({
     ready: window.__TEST_CALLS.onReady || 0,
     installed: window.__TEST_CALLS.onModelInstalled || 0,
@@ -93,13 +102,13 @@ test("no-binary phase when the engine sidecar is absent (dev build)", async ({ p
     window.__TEST_MOUNT("EngineGate", { open: true, modelId: "gemma4:latest" });
   });
   const root = page.locator("#test-root");
-  await expect(root).toContainText("Engine unavailable");
-  await expect(root).toContainText("Settings → Backend");
+  await expect(root).toContainText("The built-in engine is missing");
+  await expect(root).toContainText("Settings → Advanced");
 });
 
 test("Escape dismisses the gate (safety net)", async ({ page }) => {
   await mountEngineGate(page, { ram: 16 * GiB });
-  await expect(page.locator("#test-root")).toContainText("Download and set up");
+  await expect(page.locator("#test-root [data-engine-gate-download]")).toBeVisible();
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => (window.__TEST_CALLS.onDismiss || 0) >= 1);
 });
@@ -126,7 +135,7 @@ test("Download and set up calls engine_download for the recommended catalog id",
   await expect(root).toContainText("Gemma 4 12B");
   // Single download: skip the embedding model.
   await page.locator('#test-root input[type="checkbox"]').uncheck();
-  await page.locator("#test-root button", { hasText: "Download and set up" }).click();
+  await page.locator("#test-root [data-engine-gate-download]").click();
 
   // The engine (catalog) id — not an Ollama tag — is what gets downloaded.
   await page.waitForFunction(() =>

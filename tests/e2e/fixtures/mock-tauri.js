@@ -76,7 +76,6 @@
     // chat store
     db_load_chats: () => [],
     db_load_messages: () => [],
-    chat_files_list: () => [],
 
     // prompts
     prompts_list: () => [],

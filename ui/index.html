@@ -12,8 +12,8 @@
      - script-src needs 'unsafe-inline' and 'unsafe-eval' because
        Babel-standalone compiles the .jsx files in the page. Scripts can
        still only come from the app's own origin.
-     - style-src needs 'unsafe-inline' for React's style attributes, KaTeX
-       and the styles inside mermaid's SVG.
+     - style-src needs 'unsafe-inline' for React's style attributes and
+       KaTeX.
      - connect-src lists Tauri's IPC endpoints; 'self' covers Babel reading
        the .jsx files.
      It is a meta tag, not tauri.conf.json's `csp` (left null on purpose),
@@ -33,19 +33,22 @@
   (function () {
     try {
       var t = JSON.parse(localStorage.getItem('ekorbia.tweaks') || '{}').theme;
-      // "system" follows the OS appearance — resolve to the brand light/dark
-      // defaults before first paint so Match-System users don't flash the
-      // wrong theme. Mirrors the resolveThemeKey logic in main.jsx.
-      if (t === 'system') t = (window.matchMedia &&
-        window.matchMedia('(prefers-color-scheme: dark)').matches)
-        ? 'one_dark' : 'one_light';
-      var bg = {
-        one_dark: '#0d0f13', warm_dark: '#0a0a0c',
-        one_light: '#fafafa', ayu_dark: '#0d1017',
-        ayu_mirage: '#1f2430', ayu_light: '#fcfcfc'
-      }[t];
+      // Mirrors normalizeLook / resolveLook in utils.js (not loaded yet):
+      // nothing saved is light; "system" follows macOS; a theme from an
+      // older version maps to the nearer of the two looks.
+      var dark;
+      if (!t) dark = false;
+      else if (t === 'system') dark = !!(window.matchMedia &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches);
+      else if (t === 'one_light') dark = false;
+      else if (t === 'one_dark') dark = true;
+      else dark = !/light/i.test(t);
+      var bg = dark ? '#0d0f13' : '#fafafa';
       if (bg) document.documentElement.style.setProperty('--ek-bg0', bg);
-    } catch (e) { /* corrupt tweaks JSON — keep the dark default */ }
+    } catch (e) {
+      /* corrupt saved settings — the app will start in the light look */
+      document.documentElement.style.setProperty('--ek-bg0', '#fafafa');
+    }
   })();
 </script>
 <!-- Self-hosted fonts (Inter, JetBrains Mono, Instrument Serif) — see
@@ -288,18 +291,6 @@
     overflow-y: hidden;
     padding: 2px 0;
   }
-  /* Mermaid diagrams (markdown.jsx swaps ```mermaid code blocks for
-     rendered SVG once a reply finalizes). The SVG carries its own
-     theme-matched styles; we just size and center it. */
-  .ek-mermaid {
-    margin: 12px 0;
-    text-align: center;
-    overflow-x: auto;
-  }
-  .ek-mermaid svg {
-    max-width: 100%;
-    height: auto;
-  }
   .ek-md table {
     border-collapse: collapse;
     margin: 8px 0;
@@ -344,51 +335,52 @@
     background: transparent;
     overflow-x: auto;
   }
-  /* Language badge in the top-left of each code block. Hidden when no
-     language is known, so generic ``` blocks don't show an empty chip. */
+  /* Every code block has a band along its top: the language on the left
+     (when one is known) and Save… / Copy on the right, always on show so
+     they can be found. They are the app's own controls, so they are set in
+     the interface font, in ordinary case. */
+  .ek-md pre.ek-code > code.hljs {
+    padding-top: 30px;
+  }
   .ek-md pre.ek-code[data-lang]::before {
     content: attr(data-lang);
     position: absolute;
-    top: 6px;
-    left: 10px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 9.5px;
-    letter-spacing: 0.6px;
-    text-transform: uppercase;
-    color: rgba(227, 230, 236, 0.4);
+    top: 8px;
+    left: 12px;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 11.5px;
+    color: rgba(227, 230, 236, 0.5);
     pointer-events: none;
   }
-  .ek-md pre.ek-code[data-lang] > code.hljs {
-    padding-top: 22px;
-  }
-  /* Copy button on each code block. Mounted by addCopyButtons() after the
-     HTML is injected — it's not part of the parsed markdown. Hover-reveal
-     keeps the chrome quiet at rest. */
-  .ek-md pre.ek-code .ek-copy-btn {
+  /* Mounted by addCodeBlockButtons() after the HTML is injected: they are
+     not part of the parsed markdown. */
+  .ek-md pre.ek-code .ek-code-actions {
     position: absolute;
     top: 4px;
     right: 4px;
-    padding: 3px 8px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 10px;
-    color: rgba(227, 230, 236, 0.55);
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 5px;
+    display: flex;
+    gap: 4px;
+  }
+  .ek-md pre.ek-code .ek-code-btn {
+    padding: 3px 9px;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: rgba(227, 230, 236, 0.7);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
     cursor: pointer;
-    opacity: 0;
-    transition: opacity 120ms, color 120ms, background 120ms;
+    transition: color 120ms, background 120ms, border-color 120ms;
   }
-  .ek-md pre.ek-code:hover .ek-copy-btn,
-  .ek-md pre.ek-code .ek-copy-btn:focus { opacity: 1; }
-  .ek-md pre.ek-code .ek-copy-btn:hover {
+  .ek-md pre.ek-code .ek-code-btn:hover,
+  .ek-md pre.ek-code .ek-code-btn:focus-visible {
     color: #e3e6ec;
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.1);
   }
-  .ek-md pre.ek-code .ek-copy-btn.ek-copied {
+  .ek-md pre.ek-code .ek-code-btn.ek-copied {
     color: #7dd17a;
     border-color: rgba(125, 209, 122, 0.4);
-    opacity: 1;
   }
   /* Citation chip — wraps [N] markers when the message has sources.
      Visually identical to the React-rendered chip in renderMessageContent
@@ -437,15 +429,10 @@
 <script src="vendor/marked.min.js"></script>
 <script src="vendor/highlight.min.js"></script>
 <script src="vendor/purify.min.js"></script>
-<!-- Math + diagram rendering (offline). katex.min.js pairs with the
-     katex.min.css link in <head> (fonts under vendor/fonts/KaTeX_*).
-     mermaid.min.js is the IIFE build — sets globalThis.mermaid; rendering
-     is invoked per-message by markdown.jsx with securityLevel 'strict'
-     and startOnLoad:false (nothing auto-scans the DOM). Both degrade
-     gracefully: with the scripts absent, math shows as its TeX source
-     and mermaid blocks stay ordinary code blocks. -->
+<!-- Math rendering (offline). katex.min.js pairs with the katex.min.css
+     link in <head> (fonts under vendor/fonts/KaTeX_*). It degrades
+     gracefully: with the script absent, math shows as its TeX source. -->
 <script src="vendor/katex.min.js"></script>
-<script src="vendor/mermaid.min.js"></script>
 
 <!-- Pure helpers extracted from the JSX so they can be unit-tested under
      Node. Loads as a plain script (not text/babel) so it's synchronous
@@ -486,7 +473,6 @@
 <script type="text/babel" data-presets="react" src="model-manager.jsx"></script>
 <script type="text/babel" data-presets="react" src="voice.jsx"></script>
 <script type="text/babel" data-presets="react" src="watch.jsx"></script>
-<script type="text/babel" data-presets="react" src="files.jsx"></script>
 <script type="text/babel" data-presets="react" src="home.jsx"></script>
 <script type="text/babel" data-presets="react" src="templates.jsx"></script>
 <script type="text/babel" data-presets="react" src="privacy.jsx"></script>
@@ -496,7 +482,6 @@
      uses <OnboardingTour /> in its render, so it must load before main. -->
 <script type="text/babel" data-presets="react" src="onboarding.jsx"></script>
 <script type="text/babel" data-presets="react" src="toast.jsx"></script>
-<script type="text/babel" data-presets="react" src="command-palette.jsx"></script>
 <script type="text/babel" data-presets="react" src="main.jsx"></script>
 <script type="text/babel" data-presets="react" src="overlay.jsx"></script>
 </body>

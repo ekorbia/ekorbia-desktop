@@ -61,7 +61,6 @@ function HomeScreen({
   askDisabled = false,
   onCreateSpace,
   onRenameSpace,
-  onRecolorSpace,
   onDeleteSpace,
   onEditSpaceSave,
   promptsLibrary = [],
@@ -72,7 +71,6 @@ function HomeScreen({
   const [createOpen, setCreateOpen] = useState(false);
   const [menu, setMenu] = useState(null); // { space, x, y }
   const [renameModal, setRenameModal] = useState(null);
-  const [recolorModal, setRecolorModal] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [editModal, setEditModal] = useState(null);
 
@@ -437,12 +435,6 @@ function HomeScreen({
           y={menu.y}
           onEdit={() => { const s = menu.space; setMenu(null); setEditModal({ space: s }); }}
           onRename={() => { const s = menu.space; setMenu(null); setRenameModal({ space: s }); }}
-          onRecolor={() => {
-            const s = menu.space;
-            const anchorRect = { left: menu.x, right: menu.x, top: menu.y, bottom: menu.y, width: 0, height: 0 };
-            setMenu(null);
-            setRecolorModal({ space: s, anchorRect });
-          }}
           onDelete={() => { const s = menu.space; setMenu(null); setConfirmDelete({ space: s }); }}
           onClose={() => setMenu(null)}
         />
@@ -478,18 +470,6 @@ function HomeScreen({
             setRenameModal(null);
             if (name && name !== s.name) onRenameSpace && onRenameSpace(s.id, name);
           }}
-        />
-      )}
-      {recolorModal && (
-        <SpaceColorPickerPopover
-          anchorRect={recolorModal.anchorRect}
-          current={recolorModal.space.color || null}
-          onPick={(color) => {
-            const s = recolorModal.space;
-            setRecolorModal(null);
-            onRecolorSpace && onRecolorSpace(s.id, color);
-          }}
-          onClose={() => setRecolorModal(null)}
         />
       )}
       {editModal && (

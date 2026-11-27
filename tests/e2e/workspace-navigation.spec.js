@@ -284,18 +284,68 @@ test("search: Home finds messages everywhere, a workspace only its own", async (
   await expect(page.locator("[data-sidebar]")).not.toContainText("Does the gift fail?");
 });
 
-test("the settings menu reaches Settings, Templates and the two panels", async ({ page }) => {
+test("the settings menu reaches Settings, Templates and Watches", async ({ page }) => {
   await openApp(page, seedWorkspaces);
   await page.locator("[data-more-menu-button]").click();
   const menu = page.locator("[data-more-menu]");
   await expect(menu).toContainText("Settings…");
-  // Templates moved from a panel into Settings.
+  // Templates and Watches each moved from a panel beside the chat into
+  // Settings; the list of files the model had saved went with its save tool.
   await expect(menu.locator("[data-more-templates]")).toHaveText("Templates…");
-  await expect(menu.locator("[data-more-panel]")).toHaveCount(2);
-  await menu.locator('[data-more-panel="watches"]').click();
+  await expect(menu.locator("[data-more-watches]")).toHaveText("Watches…");
+  await expect(menu.locator("[data-more-panel]")).toHaveCount(0);
+  await expect(menu).not.toContainText("Saved files");
+  await menu.locator("[data-more-watches]").click();
   await expect(menu).toHaveCount(0);
-  // The panel opens beside Home, on the tab asked for.
-  await expect(page.getByTitle("Close panel")).toBeVisible();
+  // Settings opens on Watches; no panel opens beside Home.
+  await expect(page.locator("[data-watches-settings]")).toBeVisible();
+  await expect(page.locator("[data-watch-panel]")).toBeVisible();
+  await expect(page.getByTitle("Close panel")).toHaveCount(0);
+});
+
+// Watches live in Settings. Adding one goes: starting point → the form →
+// saved, and the list (still open underneath) shows it.
+test("a folder watch is added from Settings → Watches", async ({ page }) => {
+  await openApp(page, () => {
+    const R = window.__INVOKE_RESPONSES;
+    window.__WATCHES = [];
+    R.watch_list = () => window.__WATCHES;
+    R.watch_events_list = () => [];
+    R.watch_create = (a) => { window.__WATCHES = [...window.__WATCHES, a.watch]; };
+  });
+  await page.locator("[data-more-menu-button]").click();
+  await page.locator("[data-more-watches]").click();
+  const pane = page.locator("[data-watches-settings]");
+  await expect(pane.locator("[data-watch-empty]")).toBeVisible();
+  await pane.locator("[data-watch-add]").click();
+  await page.locator('[data-recipe-picker] [data-recipe="downloads"]').click();
+  const form = page.locator("[data-watch-form]");
+  await expect(form.locator('[data-watch-field="folder"]')).toHaveValue("/Users/test/Downloads");
+  // A new watch uses the app's default model, shown by its plain name.
+  await expect(form.locator("[data-watch-model]")).toHaveValue("gemma4-12b");
+  await expect(form.locator("[data-watch-model] option:checked")).not.toHaveText(/gemma4-12b/);
+  await form.locator("[data-watch-save]").click();
+  await expect(form).toHaveCount(0);
+  // Settings is still open, on Watches, and lists the new watch.
+  await expect(pane.locator("[data-watch-row]")).toHaveCount(1);
+  await expect(pane.locator("[data-watch-name]")).toHaveText("Downloads");
+  const sent = await page.evaluate(() => window.__INVOKES.find((c) => c.cmd === "watch_create").args.watch);
+  expect(sent.kind).toBe("folder");
+});
+
+// Escape closes the form on top and leaves Settings open underneath.
+test("Escape closes the watch form, not Settings", async ({ page }) => {
+  await openApp(page, () => {
+    window.__INVOKE_RESPONSES.watch_list = () => [];
+    window.__INVOKE_RESPONSES.watch_events_list = () => [];
+  });
+  await page.locator("[data-more-menu-button]").click();
+  await page.locator("[data-more-watches]").click();
+  await page.locator('[data-watch-empty] [data-recipe="custom"]').click();
+  await expect(page.locator("[data-watch-form]")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-watch-form]")).toHaveCount(0);
+  await expect(page.locator("[data-watches-settings]")).toBeVisible();
 });
 
 test("a workspace's document count is shown on its card and in its sidebar", async ({ page }) => {

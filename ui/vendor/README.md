@@ -21,7 +21,6 @@ Licenses for these files: [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md).
 | `purify.min.js` | dompurify | 3.1.6 | `https://unpkg.com/dompurify@3.1.6/dist/purify.min.js` |
 | `katex.min.js` | katex | 0.18.4 | `https://unpkg.com/katex@0.18.4/dist/katex.min.js` |
 | `katex.min.css` | katex | 0.18.4 | `https://unpkg.com/katex@0.18.4/dist/katex.min.css` |
-| `mermaid.min.js` | mermaid (IIFE build; sets `globalThis.mermaid`) | 11.16.1 | `https://unpkg.com/mermaid@11.16.1/dist/mermaid.min.js` |
 
 Note: through v0.3.0 the app loaded React **development** UMD builds from
 the CDN; the vendored copies are the **production** builds (smaller,
@@ -63,7 +62,6 @@ never requests the others (minimumSystemVersion 11.0 ⇒ Safari 14+).
 180c2d77d434d7da51d6625c50a964d4fd6fdbdb9bc8796a0a016c30c49931fb  katex.min.css
 2ec5916941ef4383e0314eaabcc712301b06001d9fb68e08d751d2bae5a27a1a  katex.min.js
 95674eef99e625a35507b91ae746e82ce59a2ffcc6d83f69c6c4e62e79d21835  marked.min.js
-18327bef70d96fb505fe7287d9f6a7362ebf07ff6576ddfaffb1a06f3e1a2954  mermaid.min.js
 c0845096a7c4a6741f362ac506c94c1c7d27dc603bcc1bf64a587f76f2dbe3a1  purify.min.js
 35f4f974f4b2bcd44da73963347f8952e341f83909e4498227d4e26b98f66f0d  react-dom.production.min.js
 d949f1c3687aedadcedac85261865f29b17cd273997e7f6b2bfc53b2f9d4c4dd  react.production.min.js

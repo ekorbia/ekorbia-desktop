@@ -170,7 +170,7 @@ pub(crate) fn load_backend_config(conn: &Connection) {
 /// error when the backend is selected but unconfigured.
 fn endpoint_cfg(cfg: &BackendConfig) -> Result<EndpointCfg, String> {
     let base_url = cfg.base_url.clone().ok_or_else(|| {
-        "Custom endpoint URL is not configured — set it in Settings → Backend".to_string()
+        "Custom endpoint URL is not configured — set it in Settings → Advanced".to_string()
     })?;
     Ok(EndpointCfg {
         base_url,

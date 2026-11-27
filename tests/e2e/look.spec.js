@@ -183,6 +183,71 @@ test("the comparison carries no monospace or uppercased words", async ({ page })
   expect(words.filter((w) => w.size < 11)).toEqual([]);
 });
 
+// Watches (list, starting points, form) and the first-run welcome were the
+// last screens still in the older look.
+const plain = async (page, root) => {
+  const words = await wordsIn(page, root);
+  expect(words.length, `${root} has words`).toBeGreaterThan(0);
+  expect(words.filter((w) => w.upper), `${root}: uppercased`).toEqual([]);
+  expect(words.filter((w) => w.mono), `${root}: monospace`).toEqual([]);
+  expect(words.filter((w) => w.size < 11), `${root}: tiny`).toEqual([]);
+};
+
+test("Watches carry no monospace, uppercased or tiny words", async ({ page }) => {
+  const now = Math.floor(Date.now() / 1000);
+  await page.evaluate((now) => {
+    const R = window.__INVOKE_RESPONSES;
+    R.watch_list = () => [
+      { id: "w1", name: "Intake", kind: "folder", enabled: true, notify: true, folderPath: "/Users/you/Matters/Intake", notesPath: "/n.md", model: "gemma4-12b", promptId: null },
+      { id: "w2", name: "Old feed", kind: "rss", enabled: true, sourceUrl: "https://example.com/feed", notesPath: "/o.md", model: "gemma4-12b" },
+    ];
+    R.watch_events_list = () => [
+      { id: "e1", watchId: "w1", filePath: "/Users/you/Matters/Intake/Letter.pdf", status: "done", summary: "A letter dated 20 November.", error: null, createdAt: now - 60 },
+      { id: "e2", watchId: "w1", filePath: "/Users/you/Matters/Intake/Scan.pdf", status: "error", summary: null, error: "Could not read the file.", createdAt: now - 30 },
+    ];
+    window.__TEST_MOUNT("WatchPanel", { prompts: [], nameOfModel: () => ({ name: "Balanced", detail: "" }) });
+  }, now);
+  await expect(page.locator("[data-watch-event]")).toHaveCount(2);
+  await plain(page, "[data-watch-panel]");
+
+  await page.evaluate(() => window.__TEST_MOUNT("RecipePickerModal", { open: true }));
+  await plain(page, "[data-recipe-picker]");
+
+  await page.evaluate(() => {
+    window.__INVOKE_RESPONSES.llm_list_models = () => ({ models: [{ name: "gemma4-12b" }] });
+    window.__TEST_MOUNT("WatchModal", {
+      open: true, template: null, defaultModel: "gemma4-12b", notifPermission: "default",
+      prompts: [{ id: "summarise-a-document", name: "Summarise a document", body: "x" }],
+      editing: { id: "w1", name: "Intake", kind: "folder", folderPath: "/a", notesPath: "/n.md", model: "gemma4-12b", enabled: true, notify: true, intervalSecs: 60 },
+    });
+  });
+  await expect(page.locator("[data-watch-notify-permission]")).toBeVisible();
+  await plain(page, "[data-watch-form]");
+});
+
+test("first run (the welcome, then the model choice) carries no monospace, uppercased or tiny words", async ({ page }) => {
+  await page.evaluate(() => window.__TEST_MOUNT("OnboardingTour", { open: true }));
+  await plain(page, "[data-onboarding]");
+
+  await page.evaluate(() => {
+    const R = window.__INVOKE_RESPONSES;
+    R.engine_status = () => ({ binaryOk: true, binaryError: null });
+    R.engine_catalog = () => ({
+      version: 1,
+      models: [
+        { id: "gemma4-e2b", label: "Gemma 4 E2B", purpose: "chat", minRamGb: 8, totalBytes: 4.3e9, caps: { vision: true }, suggest: true, installed: false },
+        { id: "nomic-embed-text", label: "Nomic Embed", purpose: "embed", minRamGb: 8, totalBytes: 3e8, caps: {}, installed: false },
+      ],
+    });
+    // Too little memory: the warning line is on show as well.
+    R.system_profile = () => ({ totalRamBytes: 4 * 1024 * 1024 * 1024, platform: "macos", arch: "aarch64" });
+    R.llm_list_models = () => ({ models: [] });
+    window.__TEST_MOUNT("EngineGate", { open: true, modelId: "gemma4:latest" });
+  });
+  await expect(page.locator("[data-engine-gate-low-memory]")).toBeVisible();
+  await plain(page, "[data-engine-gate]");
+});
+
 const USER = { id: "u1", role: "user", content: "What is the cap on the seller's liability?" };
 const REPLY = {
   id: "a1", role: "assistant", content: "Thirty per cent of the purchase price.", model: "gemma4-12b",

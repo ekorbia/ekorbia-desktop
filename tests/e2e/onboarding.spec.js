@@ -1,12 +1,9 @@
-// Mount smokes for the OnboardingTour component.
+// The first-run welcome (ui/onboarding.jsx): one screen, the four shortcuts.
 //
-// This file owns the Rules-of-Hooks regression test that the Phase 6
-// blank-screen bug would have failed. Concretely: the bug was an
-// `if (!open) return null;` placed BETWEEN useState and useEffect, so
-// flipping `open` from false to true changed the number of hooks called
-// during render and React's reconciler threw. The current implementation
-// calls every hook unconditionally and gates effect bodies on `open` —
-// that's what we lock in here.
+// This file also owns the Rules-of-Hooks regression: an `if (!open) return
+// null;` placed BETWEEN two hooks once changed the hook count when `open`
+// flipped, and React refused to render (a blank app on first launch). Every
+// hook must run on every render; the early return comes after them.
 
 const { test, expect } = require("@playwright/test");
 
@@ -17,82 +14,64 @@ test.beforeEach(async ({ page }) => {
 
 test.describe("OnboardingTour", () => {
   test("open=false renders nothing", async ({ page }) => {
-    await page.evaluate(() =>
-      window.__TEST_MOUNT("OnboardingTour", { open: false })
-    );
-    // Component returns null when closed — test-root should be empty.
-    const innerHtml = await page.evaluate(
-      () => document.getElementById("test-root").innerHTML
-    );
+    await page.evaluate(() => window.__TEST_MOUNT("OnboardingTour", { open: false }));
+    const innerHtml = await page.evaluate(() => document.getElementById("test-root").innerHTML);
     expect(innerHtml).toBe("");
   });
 
-  test("open=true renders the modal with at least one button", async ({ page }) => {
-    await page.evaluate(() =>
-      window.__TEST_MOUNT("OnboardingTour", { open: true })
-    );
-    // Modal mounts a backdrop + slide content. We don't assert on exact
-    // copy (would couple to writing) — just that *something* visible
-    // rendered. expect().toBeVisible() polls automatically so React's
-    // async render is handled for us.
-    await expect(page.locator("#test-root button").first()).toBeVisible();
+  test("it is one screen: the four shortcuts and Continue", async ({ page }) => {
+    await page.evaluate(() => window.__TEST_MOUNT("OnboardingTour", { open: true }));
+    const box = page.locator("[data-onboarding]");
+    await expect(box).toContainText("Welcome to Ekorbia");
+    const rows = box.locator("[data-onboarding-shortcut]");
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(0)).toContainText("Ask a quick question");
+    await expect(rows.nth(1)).toContainText("Act on copied text");
+    await expect(rows.nth(2)).toContainText("Dictate a question");
+    await expect(rows.nth(3)).toContainText("Ask about part of the screen");
+    // No slides to page through, and nothing about what was removed.
+    await expect(box.getByRole("button")).toHaveCount(1);
+    await expect(box.getByRole("button")).toHaveText("Continue");
+    await expect(box).not.toContainText(/memory file|prompts library|themes|RSS|Space\b/i);
+  });
+
+  test("the keys shown are the ones in force, defaults unless changed", async ({ page }) => {
+    await page.evaluate(() => {
+      localStorage.setItem("ekorbia.selection.hotkey", "Super+Alt+KeyJ");
+      window.__TEST_MOUNT("OnboardingTour", { open: true });
+    });
+    const keys = (id) => page.locator(`[data-onboarding-shortcut="${id}"] [data-onboarding-keys]`);
+    const shown = await page.evaluate(() => ({
+      question: window.formatHotkey("Super+Shift+Space"),
+      selection: window.formatHotkey("Super+Alt+KeyJ"),
+      dictation: window.formatHotkey("Super+Shift+KeyV"),
+      capture: window.formatHotkey("Super+Shift+Digit1"),
+    }));
+    for (const id of Object.keys(shown)) await expect(keys(id)).toHaveText(shown[id]);
+    await page.evaluate(() => localStorage.removeItem("ekorbia.selection.hotkey"));
   });
 
   test("REGRESSION: open false→true does not throw Rules-of-Hooks", async ({ page }) => {
-    // The exact sequence that crashed Phase 6 the first time.
-    //
-    // Mount with open=false (1 hook call: useState), then re-render with
-    // open=true (would-be hook count: 2 = useState + useEffect, if the
-    // early return is misplaced). If the bug regresses, React throws
-    // "Rendered more hooks than during the previous render" inside its
-    // reconciler — page-level uncaught errors get surfaced by Playwright
-    // as a test failure via the `pageerror` handler below.
     const pageErrors = [];
     page.on("pageerror", (err) => pageErrors.push(err.message));
-
-    await page.evaluate(() =>
-      window.__TEST_MOUNT("OnboardingTour", { open: false })
-    );
-    await page.evaluate(() =>
-      window.__TEST_RERENDER("OnboardingTour", { open: true })
-    );
-    // Wait for React's commit phase + effects to flush. With Playwright's
-    // locator auto-wait the button check itself is enough of a barrier,
-    // but we want to specifically assert "no exceptions thrown" so a
-    // small idle wait gives any synchronous error room to surface.
-    await expect(page.locator("#test-root button").first()).toBeVisible();
-
+    await page.evaluate(() => window.__TEST_MOUNT("OnboardingTour", { open: false }));
+    await page.evaluate(() => window.__TEST_RERENDER("OnboardingTour", { open: true }));
+    await expect(page.locator("[data-onboarding-continue]")).toBeVisible();
     expect(pageErrors).toEqual([]);
   });
 
-  test("Escape key calls onClose", async ({ page }) => {
-    await page.evaluate(() =>
-      window.__TEST_MOUNT("OnboardingTour", { open: true })
-    );
-    await expect(page.locator("#test-root button").first()).toBeVisible();
-    await page.keyboard.press("Escape");
-    // The mount helper records each synthesised handler invocation on
-    // window.__TEST_CALLS — see playwright.html.
-    await expect.poll(
-      () => page.evaluate(() => window.__TEST_CALLS.onClose || 0)
-    ).toBeGreaterThan(0);
-  });
+  for (const key of ["Escape", "Enter"]) {
+    test(`${key} continues`, async ({ page }) => {
+      await page.evaluate(() => window.__TEST_MOUNT("OnboardingTour", { open: true }));
+      await expect(page.locator("[data-onboarding-continue]")).toBeVisible();
+      await page.keyboard.press(key);
+      await expect.poll(() => page.evaluate(() => window.__TEST_CALLS.onClose || 0)).toBeGreaterThan(0);
+    });
+  }
 
-  test("ArrowRight advances slides until the last one closes", async ({ page }) => {
-    await page.evaluate(() =>
-      window.__TEST_MOUNT("OnboardingTour", { open: true })
-    );
-    await expect(page.locator("#test-root button").first()).toBeVisible();
-
-    // 5 slides — pressing ArrowRight from the last slide is the same as
-    // pressing Enter on the "Done" button (it calls onClose). We don't
-    // assert on exact slide count to avoid coupling; we just verify that
-    // some number of presses eventually triggers onClose.
-    for (let i = 0; i < 10; i++) {
-      await page.keyboard.press("ArrowRight");
-      const closed = await page.evaluate(() => (window.__TEST_CALLS.onClose || 0) > 0);
-      if (closed) return;
-    }
-    throw new Error("ArrowRight pressed 10 times without ever calling onClose");
+  test("Continue closes it", async ({ page }) => {
+    await page.evaluate(() => window.__TEST_MOUNT("OnboardingTour", { open: true }));
+    await page.locator("[data-onboarding-continue]").click();
+    await expect.poll(() => page.evaluate(() => window.__TEST_CALLS.onClose || 0)).toBe(1);
   });
 });

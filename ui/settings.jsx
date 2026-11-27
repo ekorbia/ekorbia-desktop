@@ -374,181 +374,6 @@ function AttachmentsSettings() {
   );
 }
 
-// Memory-file settings UI (Phase 4a). Shows the current path + size,
-// lets the user pick a different file via the OS dialog or reset to the
-// default, and exposes an "Edit memory" button that opens the file in
-// the OS default text editor (creating it with a small template if it
-// doesn't exist yet).
-function MemorySettings() {
-  const invoke = getInvoke();
-  const dialogApi = getDialogApi();
-  const [info, setInfo] = useState(null); // { path, exists, bytes, oversized, unresolvable }
-  const [status, setStatus] = useState(null);
-
-  const refresh = async () => {
-    if (!invoke) return;
-    try {
-      const next = await invoke("memory_info");
-      setInfo(next);
-    } catch (e) {
-      console.error("memory_info failed:", e);
-    }
-  };
-  useEffect(() => { refresh(); }, []);
-
-  const browse = async () => {
-    if (!dialogApi) return;
-    try {
-      // `save` returns a path the file *should* live at. Doesn't have to
-      // exist yet — memory_open creates it on first edit if needed.
-      const picked = await dialogApi.save({
-        title: "Choose memory file",
-        defaultPath: info?.path || undefined,
-        filters: [
-          { name: "Markdown", extensions: ["md", "markdown"] },
-          { name: "Text", extensions: ["txt"] },
-        ],
-      });
-      if (!picked) return;
-      await invoke("memory_set_path", { path: picked });
-      setStatus({ ok: true, msg: "Memory file path updated." });
-      await refresh();
-    } catch (e) {
-      setStatus({ ok: false, msg: String(e) });
-    }
-  };
-
-  const resetDefault = async () => {
-    if (!invoke) return;
-    try {
-      // Empty string clears the override; current_memory_path() falls
-      // back to ~/Documents/Ekorbia/memory.md.
-      await invoke("memory_set_path", { path: "" });
-      setStatus({ ok: true, msg: "Reset to default." });
-      await refresh();
-    } catch (e) {
-      setStatus({ ok: false, msg: String(e) });
-    }
-  };
-
-  const edit = async () => {
-    if (!invoke) return;
-    try {
-      await invoke("memory_open");
-      // Refresh after a short delay so size updates land in the UI
-      // once the user has finished editing externally. We can't watch
-      // the file for changes in v1, so this is "best-effort" — the
-      // info refreshes on next Settings open anyway.
-      setStatus({ ok: true, msg: "Opened in your default editor." });
-      setTimeout(refresh, 1500);
-    } catch (e) {
-      setStatus({ ok: false, msg: String(e) });
-    }
-  };
-
-  const fmtBytes = (n) => {
-    if (n === 0) return "0 B";
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / (1024 * 1024)).toFixed(2)} MB`;
-  };
-
-  // Local Btn (the one in PromptsFolderRow is scoped to its component and
-  // doesn't expose `disabled`). Same visual style so the two settings
-  // rows feel uniform. Disabled buttons drop interactivity + dim — still
-  // visible so the user can tell what they *would* do if available.
-  const Btn = ({ children, onClick, title, disabled }) => (
-    <button
-      onClick={disabled ? undefined : onClick}
-      title={title}
-      disabled={!!disabled}
-      style={ekBtn("secondary", { small: true, disabled })}
-    >
-      {children}
-    </button>
-  );
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "4px 8px",
-          background: T.bg2,
-          border: `1px solid ${T.border}`,
-          borderRadius: 8,
-          fontFamily: T.sans,
-          fontSize: 12.5,
-          color: T.fg2,
-          minHeight: 24,
-        }}
-      >
-        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {info?.path || "…"}
-        </span>
-      </div>
-      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <Btn onClick={edit} disabled={!invoke || info?.unresolvable}>
-          {info?.exists ? "Edit memory" : "Create & edit"}
-        </Btn>
-        <Btn onClick={browse} disabled={!dialogApi}>Choose file…</Btn>
-        <Btn onClick={resetDefault} disabled={!invoke}>Reset to default</Btn>
-        <span style={{ flex: 1 }} />
-        {info && (
-          <span
-            style={{
-              fontFamily: T.sans,
-              fontSize: 12,
-              color: info.oversized ? T.amber : T.fg3,
-            }}
-          >
-            {info.exists ? fmtBytes(info.bytes) : "not yet created"}
-          </span>
-        )}
-      </div>
-      {info?.unresolvable && (
-        <div
-          style={{
-            fontFamily: T.sans,
-            fontSize: 12,
-            color: T.red,
-            lineHeight: 1.5,
-          }}
-        >
-          Could not resolve a default path. Use "Choose file…" to pick one
-          manually.
-        </div>
-      )}
-      {info?.oversized && (
-        <div
-          style={{
-            fontFamily: T.sans,
-            fontSize: 12,
-            color: T.amber,
-            lineHeight: 1.5,
-          }}
-        >
-          Memory is over 10 KB — it'll be added to the prompt on every send,
-          which costs tokens. Trim if you can.
-        </div>
-      )}
-      {status && (
-        <div
-          style={{
-            fontFamily: T.sans,
-            fontSize: 12,
-            color: status.ok ? T.fg2 : T.red,
-          }}
-        >
-          {status.msg}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Settings → Models ──────────────────────────────────────
 // The app's default model, in plain names. For the bundled engine these
 // are the three tiers modelTiers (utils.js) works out from the catalog
@@ -759,7 +584,7 @@ function ModelsSettings({ defaultModel = "", onDefaultModel, spaces = [], onOpen
 //
 //   defaultModel / onDefaultModel — the app-wide model (main.jsx owns it)
 //   spaces                        — to say which workspaces use a model
-function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onClearAllChats, defaultModel = "", onDefaultModel, spaces = [], templates = [], onSaveTemplate, onDeleteTemplate, onDuplicateTemplate, onToggleTemplateStar, backendKind = "engine", backendBaseUrl = null, nameOfModel, modelLabels = {} }) {
+function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onClearAllChats, defaultModel = "", onDefaultModel, spaces = [], templates = [], onSaveTemplate, onDeleteTemplate, onDuplicateTemplate, onToggleTemplateStar, backendKind = "engine", backendBaseUrl = null, nameOfModel, modelLabels = {}, watchesPane = null }) {
   const [open, setOpen] = useState(false);
   // Danger-zone state. Confirm modal sits above the settings modal at
   // zIndex 9999 (settings is 9998), so opening it while settings is up
@@ -1072,6 +897,7 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
             { id: "general", label: "General" },
             { id: "models", label: "Models" },
             { id: "templates", label: "Templates" },
+            { id: "watches", label: "Watches" },
             // Dictation is macOS-only (the Whisper backend is macOS-gated).
             ...(IS_MAC ? [{ id: "voice", label: "Dictation" }] : []),
             // Shortcuts: Quick Query is macOS+Windows; dictation + screenshot
@@ -1126,63 +952,21 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
           {activeTab === "general" && (
             <>
               <SectionLabel label="Appearance" />
-              <Row label="Theme">
+              <Row label="Look">
                 <select
-                  value={tweaks.theme}
+                  data-look-select
+                  aria-label="Look"
+                  value={normalizeLook(tweaks.theme)}
                   onChange={(e) => setTweak("theme", e.target.value)}
-                  style={{
-                    background: T.bg2,
-                    border: `1px solid ${T.border}`,
-                    borderRadius: 8,
-                    color: T.fg,
-                    fontFamily: T.sans,
-                    fontSize: 13,
-                    padding: "4px 8px",
-                    cursor: "pointer",
-                  }}
+                  style={ekField({ width: "auto", padding: "5px 9px", cursor: "pointer" })}
                 >
-                  <option value="system">Match System</option>
-                  {Object.entries(THEMES).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v.label}
+                  {LOOK_CHOICES.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
                     </option>
                   ))}
                 </select>
               </Row>
-
-              <SectionLabel label="Help" />
-              <Row label="Onboarding tour">
-                <button
-                  onClick={() => {
-                    // Close settings first so the tour modal isn't
-                    // stacked behind it. The setting flag is not
-                    // touched — the tour's own onClose will re-set it
-                    // when the user finishes/skips.
-                    setOpen(false);
-                    // Defer the open by one tick so the settings backdrop
-                    // is fully unmounted before the tour mounts. Without
-                    // this, focus + Esc handling can fight over which
-                    // modal owns the keyboard.
-                    setTimeout(() => {
-                      window.ekOpenOnboarding?.();
-                    }, 0);
-                  }}
-                  style={ekBtn("secondary", { small: true })}
-                >
-                  Show tour again
-                </button>
-              </Row>
-              <div
-                style={{
-                  fontFamily: T.sans,
-                  fontSize: 12,
-                  color: T.fg2,
-                  lineHeight: 1.5,
-                }}
-              >
-                A short tour of the hotkeys, attachments, memory file, and
-                prompts library.
-              </div>
 
               {/* ── Danger zone ─────────────────────────────────── */}
               {/* Bulk destructive actions live in their own visually
@@ -1447,6 +1231,19 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
             />
           )}
 
+          {activeTab === "watches" && (
+            <div data-watches-settings style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div>
+                <div style={{ fontFamily: T.sans, fontSize: 17, fontWeight: 600, color: T.fg }}>Watches</div>
+                <div style={ekHint({ fontSize: 12.5, marginTop: 3 })}>
+                  A watch keeps an eye on a folder and summarises each new
+                  file into a notes file, using a template you choose.
+                </div>
+              </div>
+              {watchesPane}
+            </div>
+          )}
+
           {activeTab === "privacy" && (
             <PrivacySettings
               backendKind={backendKind}
@@ -1465,23 +1262,6 @@ function SettingsModal({ tweaks, setTweak, onPromptsChanged, chatCount = 0, onCl
               {/* ModelManagerPanel lives in model-manager.jsx: the whole
                   catalog, a model from a link, and removal. */}
               <ModelManagerPanel activeModel={defaultModel || "gemma4:latest"} />
-
-              <SectionLabel label="Memory file" />
-              <div
-                style={{
-                  fontFamily: T.sans,
-                  fontSize: 12,
-                  color: T.fg2,
-                  lineHeight: 1.5,
-                  marginBottom: 8,
-                }}
-              >
-                A single markdown file injected into every chat as background
-                context. Useful for facts about you, preferences, or anything
-                you want every model to know. Read-only: the model can read it
-                but cannot modify it — only you can.
-              </div>
-              <MemorySettings />
 
               <SectionLabel label="Attachments" />
               <div

@@ -10,10 +10,9 @@ const { useState: useS, useEffect: useE, useRef: useR } = React;
 // soften (dark-tuned shadows read as dirt on a light surface). Applied
 // via Object.assign(T, ...) below.
 //
-// `one_dark` mirrors ekorbia.com's site tokens (the vignette palette) and
-// MUST stay in sync with the defaults in tokens.jsx — the overlay window
-// never mounts App(), so it renders off those defaults. `warm_dark` is the
-// pre-0.6 neutral/earthy palette, kept for anyone who prefers the old look.
+// Two looks: light (the default) and dark; "Match system" picks between
+// them. `one_dark` MUST stay in sync with the defaults in tokens.jsx, which
+// are what anything drawn before App() applies a look starts from.
 const THEMES = {
   one_dark: {
     bg0:'#0d0f13', bg1:'#14171d', bg2:'#1c1f26', bg3:'#232730', bg4:'#2a2f3a',
@@ -21,15 +20,7 @@ const THEMES = {
     border:'#262a33', borderStrong:'#2f3540',
     amber:'#f0934a', blue:'#5fb0ff', green:'#7dd17a', purple:'#c281f5',
     yellow:'#e8ca6a', teal:'#6cc7d1', red:'#ff8b8b',
-    label:'Midnight',
-  },
-  warm_dark: {
-    bg0:'#0a0a0c', bg1:'#15151a', bg2:'#1c1c22', bg3:'#272730', bg4:'#33333d',
-    fg:'#e6e3dc', fg1:'#b8b4ab', fg2:'#8a877e', fg3:'#5e5c54',
-    border:'#2e2e38', borderStrong:'#3d3d48',
-    amber:'#d48a50', blue:'#7ea7d8', green:'#9bbf83', purple:'#c89bd0',
-    yellow:'#d8c97e', teal:'#83b4bf', red:'#d87e7e',
-    label:'Warm',
+    label:'Dark',
   },
   one_light: {
     bg0:'#fafafa', bg1:'#f0f0f0', bg2:'#e7e7e7', bg3:'#d8d8d8', bg4:'#c4c4c4',
@@ -37,36 +28,12 @@ const THEMES = {
     border:'#d4d4d4', borderStrong:'#bcbcbc',
     amber:'#b15c13', blue:'#4078f2', green:'#50a14f', purple:'#a626a4',
     yellow:'#c18401', teal:'#0184bc', red:'#e45649',
-    light:true, label:'Daylight',
-  },
-  ayu_dark: {
-    bg0:'#0d1017', bg1:'#131721', bg2:'#1b202a', bg3:'#232a35', bg4:'#2d3540',
-    fg:'#bfbdb6', fg1:'#9a9890', fg2:'#787570', fg3:'#5a5852',
-    border:'#262d38', borderStrong:'#3a4150',
-    amber:'#e6b450', blue:'#5fb0ff', green:'#7dd17a', purple:'#c281f5',
-    yellow:'#e8ca6a', teal:'#6cc7d1', red:'#ff8b8b',
-    label:'Slate',
-  },
-  ayu_mirage: {
-    bg0:'#1f2430', bg1:'#232834', bg2:'#2a2f3d', bg3:'#343a4b', bg4:'#3d4456',
-    fg:'#cccac2', fg1:'#b3b1a8', fg2:'#8a8780', fg3:'#5c6773',
-    border:'#2d3340', borderStrong:'#3d4456',
-    amber:'#ffcc66', blue:'#5fb0ff', green:'#7dd17a', purple:'#c281f5',
-    yellow:'#e8ca6a', teal:'#6cc7d1', red:'#ff8b8b',
-    label:'Dusk',
-  },
-  ayu_light: {
-    bg0:'#fcfcfc', bg1:'#f3f4f5', bg2:'#e8eaeb', bg3:'#dcdfe2', bg4:'#c8ccd0',
-    fg:'#5c6166', fg1:'#787c80', fg2:'#959a9f', fg3:'#b3b8bd',
-    border:'#dcdfe2', borderStrong:'#bcc0c5',
-    amber:'#fa8d3e', blue:'#399ee6', green:'#86b300', purple:'#a37acc',
-    yellow:'#f2ae49', teal:'#4cbf99', red:'#f07171',
-    light:true, label:'Sand',
+    light:true, label:'Light',
   },
 };
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "theme": "one_dark",
+  "theme": "one_light",
   "fontScale": 1.0,
   "density": "comfortable",
   "showDetails": false
@@ -200,11 +167,6 @@ function usePersistedState(key, defaultValue) {
 // format (overlay.jsx uses `ekorbia.overlay.model` the same way).
 const COMPOSER_MODEL_LS_KEY = 'ekorbia.main.model';
 const COMPOSER_FALLBACK_MODEL = 'gemma4:latest';
-// Hard cap on tool-call iterations within a single chat send. Each iteration
-// is one round-trip to /api/chat. Without a cap a misbehaving model could
-// loop indefinitely emitting tool_calls. Set conservatively — most legitimate
-// flows finish in 1-3 iterations (initial response → tool call → final text).
-const MAX_TOOL_ITERATIONS = 8;
 
 function readPersistedComposerModel() {
   try {
@@ -220,157 +182,6 @@ function readPersistedComposerModel() {
 // from what the user actually prefers).
 function persistComposerModel(id) {
   try { localStorage.setItem(COMPOSER_MODEL_LS_KEY, id); } catch {}
-}
-
-// ── Output-dir permission modal ───────────────────────────────────────────
-//
-// Fires the first time a chat's model tries to use the write_file tool with
-// no `output_dir` set. The Rust side emits `chat:needs_output_dir` and
-// suspends the tool call until the user makes a choice via chat_set_output_dir.
-//
-// Three resolutions:
-//   Allow         — set output_dir = props.suggested (Rust-supplied default,
-//                    typically ~/Documents/Ekorbia/Outputs/<slug>/)
-//   Choose folder — opens the dialog plugin so the user picks a custom path
-//   Block always  — set output_dir = "" (sentinel that suppresses the modal
-//                    for future tool calls in this chat; surfaces as a
-//                    warn toast on subsequent attempts)
-//
-// The component is hoisted to module scope per CLAUDE.md's "modal components
-// must be hoisted" rule — defining it inside App would cause focus loss on
-// every keystroke as React tears down + remounts on each parent render.
-function OutputDirModal({ chatId, chatTitle, suggested, onClose, invoke }) {
-  const [chosen, setChosen] = useS(suggested || '');
-
-  const submit = async (dir) => {
-    try {
-      await invoke('chat_set_output_dir', { chatId, dir });
-      onClose(dir);
-    } catch (e) {
-      window.ekToast?.({
-        kind: 'error',
-        title: 'Could not set output folder',
-        body: String(e),
-      });
-    }
-  };
-
-  const pickFolder = async () => {
-    const dialogApi = getDialogApi();
-    if (!dialogApi) return;
-    try {
-      const picked = await dialogApi.open({
-        directory: true,
-        multiple: false,
-        defaultPath: chosen || undefined,
-      });
-      if (typeof picked === 'string' && picked) setChosen(picked);
-    } catch (_) { /* user cancelled */ }
-  };
-
-  return (
-    <div
-      role="dialog"
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 1000,
-        background: 'rgba(0,0,0,0.55)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-    >
-      <div
-        style={{
-          width: 440, padding: 18,
-          background: panelGrad(),
-          border: `1px solid ${T.borderStrong}`,
-          borderRadius: 10,
-          fontFamily: T.sans,
-          color: T.fg,
-          boxShadow: `${T.shadowPop}, ${T.insetHi}`,
-        }}
-      >
-        <div style={{ fontFamily: T.serif, fontSize: 18, marginBottom: 6 }}>
-          Allow this chat to save files?
-        </div>
-        <div style={{ color: T.fg1, fontSize: 13, lineHeight: 1.5, marginBottom: 12 }}>
-          The model in <em>{chatTitle || 'this chat'}</em> wants to write files
-          to a folder. Files will be saved to this directory — nothing outside it.
-        </div>
-        <label style={{ display: 'block', color: T.fg2, fontSize: 11, marginBottom: 4 }}>
-          Output folder
-        </label>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-          <input
-            value={chosen}
-            onChange={(e) => setChosen(e.target.value)}
-            spellCheck={false}
-            style={{
-              flex: 1, padding: '6px 8px',
-              background: T.bg2,
-              border: `1px solid ${T.border}`,
-              borderRadius: 8,
-              color: T.fg,
-              fontFamily: T.sans,
-              fontSize: 13,
-            }}
-          />
-          <button
-            onClick={pickFolder}
-            style={{
-              padding: '0 10px',
-              background: T.bg2,
-              border: `1px solid ${T.border}`,
-              borderRadius: 5,
-              color: T.fg1,
-              cursor: 'pointer',
-              fontSize: 12,
-            }}
-          >Browse…</button>
-        </div>
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button
-            onClick={() => submit('')}
-            title="Block file writes from this chat. The model will see an error and can adjust."
-            style={{
-              padding: '6px 12px',
-              background: 'transparent',
-              border: `1px solid ${T.border}`,
-              borderRadius: 5,
-              color: T.fg2,
-              cursor: 'pointer',
-              fontSize: 12,
-            }}
-          >Block always</button>
-          <button
-            onClick={() => onClose(null)}
-            style={{
-              padding: '6px 12px',
-              background: 'transparent',
-              border: `1px solid ${T.border}`,
-              borderRadius: 5,
-              color: T.fg2,
-              cursor: 'pointer',
-              fontSize: 12,
-            }}
-          >Not now</button>
-          <button
-            onClick={() => submit(chosen)}
-            disabled={!chosen}
-            style={{
-              padding: '6px 14px',
-              background: chosen ? T.amber : T.bg3,
-              border: 'none',
-              borderRadius: 5,
-              color: chosen ? T.bg0 : T.fg3,
-              cursor: chosen ? 'pointer' : 'not-allowed',
-              fontSize: 12,
-              fontWeight: 600,
-            }}
-          >Allow</button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -407,13 +218,10 @@ function App() {
   // light/dark defaults and re-resolving live when the OS flips. Any other
   // value is a concrete THEMES key.
   const systemDark = usePrefersDark();
-  const resolvedThemeKey =
-    tweaks.theme === "system"
-      ? systemDark
-        ? "one_dark"
-        : "one_light"
-      : tweaks.theme;
-  const theme = THEMES[resolvedThemeKey] || THEMES.one_dark;
+  // A theme saved by an older version (there were six) maps to the nearer
+  // of the two looks — normalizeLook / resolveLook in utils.js.
+  const resolvedThemeKey = resolveLook(tweaks.theme, systemDark);
+  const theme = THEMES[resolvedThemeKey] || THEMES.one_light;
 
   // Apply theme tokens to T (mutate in place — components read T at render).
   // Includes fg1/fg2/fg3 + border tokens so light themes don't end up with
@@ -481,23 +289,8 @@ function App() {
   const [view, setView] = useS('home');
   // Latest "start a chat" for the ⌘N handler, whose effect is mount-only.
   const newChatRef = useR(null);
-  // Command palette (⌘K). Declared next to the screen state because the same
-  // deps-free keydown effect below toggles both; the commands list and
-  // its runner map are built further down (buildPaletteCommands), below
-  // every handler they reference.
-  const [paletteOpen, setPaletteOpen] = useS(false);
-  // The Prompts / Watches / Files panel. Closed until asked for from the
-  // settings menu (MoreMenu in shell.jsx); no longer remembered across
-  // launches, because nothing on screen shows it is open elsewhere.
-  const [rightPanelOpen, setRightPanelOpen] = useS(false);
   const [sidebarWidth, setSidebarWidth] = usePersistedState('ekorbia.sidebar.width', 252);
-  const [rightPanelWidth, setRightPanelWidth] = usePersistedState('ekorbia.rightpanel.width', 380);
-  // Which tab is showing in the right panel: 'prompts' or 'watches'.
-  const [rightPanelTabRaw, setRightPanelTab] = usePersistedState('ekorbia.rightpanel.tab', 'watches');
-  // 'prompts' was a tab here until templates moved into Settings.
-  const rightPanelTab = rightPanelTabRaw === 'files' ? 'files' : 'watches';
   const sidebarStartRef = useR(220);
-  const rightPanelStartRef = useR(380);
   // Bumped every time a new watch is created so the WatchPanel reloads its
   // list. Lets the modal-created-watch flow stay one-way (modal → panel)
   // without lifting the watches state up to the App.
@@ -603,6 +396,10 @@ function App() {
   // template's editor; "new" for a blank one).
   const openSettings = (tab, template) =>
     window.postMessage({ type: '__activate_edit_mode', tab: tab || undefined, template: template || undefined }, '*');
+  const closeSettings = () => window.postMessage({ type: '__deactivate_edit_mode' }, '*');
+  // For listeners set up once at mount.
+  const openSettingsRef = useR(null);
+  openSettingsRef.current = openSettings;
 
   // ── Chat attachments ──────────────────────────────────────────────────────
   // Map of chatId → Attachment[] mirrors the Rust `attachments` table. The
@@ -612,34 +409,18 @@ function App() {
   const [chatAttachments, setChatAttachments] = useS({});
   const attachments = chatAttachments[activeTab] || [];
   // In-memory caches of model → capability bits. Populated by
-  // llm_capabilities; gate the "VISION" / "TOOL" badges and are
-  // checked before encoding base64 / enabling write_file tool injection
-  // (the Rust side double-checks anyway).
+  // llm_capabilities; checked before encoding images as base64 (the Rust
+  // side double-checks anyway).
   const [modelVisionMap, setModelVisionMap] = useS({});
-  const [modelToolsMap, setModelToolsMap] = useS({});
   // Thinking-capable (reasoning) models — qwen3.x, deepseek-r1, gpt-oss, …
   // Ollama auto-enables thinking on these, so we send `think: false` to
   // keep chat snappy. The map gates that flag: sending `think` to a
   // non-thinking model is a 400 error, so we ONLY set it when true here.
   const [modelThinkingMap, setModelThinkingMap] = useS({});
-  // NOTE: the derived `activeModelHasVision` / `activeModelHasTools`
-  // reads live BELOW the `modelId` declaration — see the Babel-var-
-  // hoisting gotcha in CLAUDE.md. Putting them here (above modelId)
-  // silently reads `modelToolsMap[undefined]` on every render instead
-  // of crashing, and the capability badges go permanently dark.
-
-  // Permission-modal state for the write_file tool. Set when Rust emits
-  // chat:needs_output_dir (the model tried to write but the chat has no
-  // output_dir picked yet). Cleared on user choice or dismissal.
-  const [outputDirReq, setOutputDirReq] = useS(null); // { chatId, chatTitle, suggested } | null
-  // When handleSend's tool loop hits `permission_required`, it awaits the
-  // user's modal choice via this ref. The modal's onClose populates it
-  // with the resolution: a path string (Allow), "" (Block always), or
-  // null (Not now / dismissed). Single-shot — cleared on resolve.
-  const outputDirResolverRef = useR(null);
-  // Tool schemas fetched once from Rust so we can pass them in the /api/chat
-  // request body. Loaded lazily on first tool-capable send.
-  const toolSchemasRef = useR(null);
+  // NOTE: the derived `activeModelHasVision` read lives BELOW the
+  // `modelId` declaration — see the Babel-var-hoisting gotcha in
+  // CLAUDE.md. Putting it here (above modelId) silently reads
+  // `modelVisionMap[undefined]` on every render instead of crashing.
 
   // Embedding-model-change banner state. `staleAttachments` is the number
   // of attachments whose chunks were embedded with a model other than the
@@ -926,32 +707,6 @@ function App() {
     return () => { unlisten?.(); };
   }, []);
 
-  // First write_file tool call in a chat with no output_dir surfaces this
-  // event. The Rust loop suspends the tool execution; user choice (Allow /
-  // Block) feeds back via chat_set_output_dir and the tool call resumes.
-  // "Not now" closes without persisting — the next tool attempt re-fires
-  // the event. Multiple events arriving back-to-back collapse to the most
-  // recent (last writer wins) — Rust only re-fires after a previous
-  // dismissal, so this is safe.
-  useE(() => {
-    const eventApi = getEventApi();
-    if (!eventApi) return;
-    let unlisten = null;
-    eventApi
-      .listen('chat:needs_output_dir', (e) => {
-        const p = e?.payload || {};
-        if (!p.chatId) return;
-        setOutputDirReq({
-          chatId: p.chatId,
-          chatTitle: p.chatTitle || '',
-          suggested: p.suggested || '',
-        });
-      })
-      .then((u) => { unlisten = u; })
-      .catch(() => {});
-    return () => { unlisten?.(); };
-  }, []);
-
   // Notification focus-hint plumbing. Rust emits `watch:focus_hint` right
   // before showing an OS notification; we stash the watchId + timestamp in
   // a ref. The companion window-focus listener (below) reads the ref and
@@ -993,8 +748,7 @@ function App() {
         if (Date.now() - hint.ts > FOCUS_HINT_WINDOW_MS) return;
         // Consume the hint so a later unrelated focus doesn't re-trigger.
         notificationHintRef.current = { watchId: null, ts: 0 };
-        setRightPanelOpen(true);
-        setRightPanelTab('watches');
+        openSettingsRef.current && openSettingsRef.current('watches');
         setWatchFocusFilter((f) => ({ watchId: hint.watchId, key: f.key + 1 }));
       })
       .then((u) => { unlisten = u; })
@@ -1012,13 +766,11 @@ function App() {
     if (!model) return;
     if (
       modelVisionMap[model] !== undefined &&
-      modelToolsMap[model] !== undefined &&
       modelThinkingMap[model] !== undefined
     ) return;
     try {
       const caps = await invoke('llm_capabilities', { model });
       setModelVisionMap((m) => ({ ...m, [model]: !!caps?.vision }));
-      setModelToolsMap((m) => ({ ...m, [model]: !!caps?.tools }));
       setModelThinkingMap((m) => ({ ...m, [model]: !!caps?.thinking }));
     } catch (e) {
       // Ollama is often not up yet when this first fires — the app
@@ -1241,7 +993,6 @@ function App() {
   // inert (dep array stuck at [undefined]) from the day they shipped —
   // see the CLAUDE.md gotcha before "cleaning up" this ordering.
   const activeModelHasVision = !!modelVisionMap[modelId];
-  const activeModelHasTools = !!modelToolsMap[modelId];
   useE(() => {
     probeModelCapabilities(modelId);
     return () => clearTimeout(capsRetryRef.current);
@@ -1419,13 +1170,6 @@ function App() {
         // there may be the target of this very key event.
         setTimeout(() => { newChatRef.current && newChatRef.current(); }, 0);
       }
-      // ⌘K toggles the command palette. Functional update keeps this
-      // effect deps-free; a guard effect below force-closes the palette
-      // whenever a first-run gate / tour takes the screen.
-      if (meta && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault();
-        setPaletteOpen(o => !o);
-      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -1508,48 +1252,22 @@ function App() {
     }
   }, []);
 
-  // First-launch onboarding gate (Phase 6). We read the completion flag
-  // from app_settings — null/empty means "never finished the tour", so
-  // open it. Any other value (we write "1" on completion) keeps it hidden.
-  // Settings live in SQLite rather than localStorage because (a) they
-  // survive an explicit localStorage wipe, and (b) the tour is something
-  // we'd want to re-trigger via a one-line `setting_set` if a future
-  // release reworks it substantially.
-  //
-  // Also expose window.ekOpenOnboarding so SettingsModal's "Show tour
-  // again" button (and anything else that wants to nudge users back into
-  // the tour) can reopen without lifting state up to App.
+  // The first-run welcome (onboarding.jsx): shown until it has been closed
+  // once. The flag is in app_settings (not localStorage) so it survives a
+  // cleared web store. A read that fails keeps it closed, so a returning
+  // person is never shown it again by accident.
   useE(() => {
-    const opener = () => setOnboardingOpen(true);
-    window.ekOpenOnboarding = opener;
     invoke('setting_get', { key: 'onboarding.completed' })
       .then((v) => {
-        // get_setting returns Option<String>: null when unset; we also
-        // treat empty string as unset so a future "reset the tour"
-        // setting_set('','') re-fires it cleanly.
         if (!v) setOnboardingOpen(true);
       })
-      .catch((err) => {
-        // setting_get can't fail without DB lock contention; if it
-        // somehow does, fail closed (don't show) so we don't pester a
-        // returning user. The Settings → Help "Show tour again" button
-        // still gives them an out.
-        console.error('onboarding setting_get failed:', err);
-      });
-    return () => {
-      // Only clear if it's still our handle — defensive in case a hot
-      // reload (dev) or future code installs a replacement.
-      if (window.ekOpenOnboarding === opener) {
-        delete window.ekOpenOnboarding;
-      }
-    };
+      .catch((err) => console.error('onboarding setting_get failed:', err));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Expose window.ekOpenModelManager so any surface (composer ModelPicker
-  // footer/empty-state, OllamaGate's no-model phase, Settings) can open
+  // Expose window.ekOpenModelManager so any surface (OllamaGate's
+  // no-model phase, Settings) can open
   // the model download/delete modal without lifting state up to App.
-  // Same register/cleanup pattern as window.ekOpenOnboarding above.
   useE(() => {
     const opener = () => setModelManagerOpen(true);
     window.ekOpenModelManager = opener;
@@ -1561,11 +1279,8 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Close handler — invoked from Skip, Get started, ⎋, and the
-  // dot-indicator's last-slide Next path. Writes the completion flag
-  // synchronously-ish (fire-and-forget; the worst case of a failed write
-  // is the tour re-opening once more on next launch — not a data loss
-  // bug, just a minor annoyance).
+  // Closing the welcome records that it has been seen. A failed write
+  // only means it shows once more at the next launch.
   const closeOnboarding = React.useCallback(() => {
     setOnboardingOpen(false);
     invoke('setting_set', { key: 'onboarding.completed', value: '1' })
@@ -1635,120 +1350,6 @@ function App() {
   //     stream completes (or aborts mid-flight). Cleared after persist.
   const multiStreamControllersRef = useR(new Map());
   const multiStreamAccumRef = useR(new Map());
-
-  // Execute a single file write. Handles the permission-required dance:
-  // when Rust emits chat:needs_output_dir, the modal renders and user
-  // choice flows back via outputDirResolverRef. On Allow we retry once;
-  // on Block we surface a user-blocked error; on dismiss ("Not now") the
-  // call returns silently — the caller (tool loop OR heuristic save) gets
-  // a refusal it can reason about, but we don't toast it (the user just
-  // clicked "no").
-  //
-  // The `command` parameter switches between:
-  //   - 'tool_write_file' (default): model-driven saves via the tool loop.
-  //     chat_files.source = 'tool'.
-  //   - 'chat_save_manual_file': user-driven saves via the heuristic
-  //     Save buttons in chat.jsx. chat_files.source = 'manual'. Same
-  //     sandbox + permission flow.
-  const executeWriteFile = async (chatId, messageId, path, contents, command = 'tool_write_file') => {
-    const argPath = String(path || '');
-    const argContents = String(contents || '');
-    const callOnce = async () => {
-      const r = await invoke(command, {
-        chatId, messageId, path: argPath, contents: argContents,
-      });
-      return {
-        ok: true,
-        // id is the chat_files row id, threaded through so Reveal/Open
-        // affordances on the chip can call the native opener commands
-        // (chat_file_reveal / chat_file_open) which take a fileId arg.
-        // Without this, freshly-saved chips would lack a fileId and the
-        // buttons would no-op (the JS-side absPath path was removed when
-        // we abandoned the shell plugin due to its scope regex).
-        id: r.id,
-        relPath: r.relPath,
-        bytes: r.bytes,
-        version: r.version,
-        absPath: r.absPath,
-      };
-    };
-    try {
-      return await callOnce();
-    } catch (e) {
-      const errStr = String(e);
-      if (errStr.includes('permission_required')) {
-        const dir = await new Promise((resolve) => {
-          outputDirResolverRef.current = resolve;
-        });
-        if (dir === null) {
-          return { ok: false, error: 'user declined to allow file saves', silent: true };
-        }
-        if (dir === '') {
-          return { ok: false, error: 'user has blocked file saves on this chat' };
-        }
-        try { return await callOnce(); }
-        catch (e2) { return { ok: false, error: String(e2) }; }
-      }
-      return { ok: false, error: errStr };
-    }
-  };
-
-  // Register window.ekSaveModelFile — the heuristic-fallback bridge for
-  // chat.jsx's per-block Save buttons. Calls executeWriteFile with the
-  // 'manual' source command, toasts the result, and patches the
-  // assistant message's toolResults so the green chip strip surfaces the
-  // newly-saved file alongside any tool-driven saves. Mount-once: the
-  // closure captures stable refs (setChats setter, outputDirResolverRef);
-  // executeWriteFile reads through to those at call time.
-  useE(() => {
-    window.ekSaveModelFile = async ({ chatId, messageId, path, contents }) => {
-      const result = await executeWriteFile(
-        chatId, messageId, path, contents, 'chat_save_manual_file'
-      );
-      if (result.ok) {
-        window.ekToast?.({
-          kind: 'info',
-          title: `Saved ${result.relPath}`,
-          body: `${result.bytes} bytes · v${result.version}`,
-        });
-        // Mirror the live tool-write path: stash on the message so the
-        // chip strip renders it like any other saved file.
-        setChats(cs => {
-          const c = cs[chatId];
-          if (!c) return cs;
-          const msgs = c.messages.map(m => {
-            if (m.id !== messageId) return m;
-            return {
-              ...m,
-              toolResults: [
-                ...(m.toolResults || []),
-                {
-                  callId: `manual-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
-                  // Same as the tool-loop chip: fileId drives the native
-                  // opener commands; absPath stays for debug display only.
-                  fileId: result.id,
-                  relPath: result.relPath,
-                  bytes: result.bytes,
-                  version: result.version,
-                  absPath: result.absPath,
-                },
-              ],
-            };
-          });
-          return { ...cs, [chatId]: { ...c, messages: msgs } };
-        });
-      } else if (!result.silent) {
-        window.ekToast?.({
-          kind: 'warn',
-          title: 'Could not save file',
-          body: result.error || 'unknown error',
-        });
-      }
-      return result;
-    };
-    return () => { try { delete window.ekSaveModelFile; } catch (_) {} };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const handleSend = async (text, options = {}) => {
     // `options.baseMessages` lets edit-and-resubmit / retry pass a truncated
@@ -1839,28 +1440,11 @@ function App() {
     const attachmentSystemMessages = attachPayload.systemBlock
       ? [{ role: 'system', content: attachPayload.systemBlock }]
       : [];
-    // Memory file (Phase 4a): a single user-edited markdown file injected
-    // as a system message on every send. Wrapped in <user_memory> tags so
-    // the model can distinguish "stuff the user wrote about themselves"
-    // from the rest of the system prompt. memory_read returns null when
-    // the file is missing, empty, or unreadable — in those cases we add
-    // no message at all (no point burning tokens on an empty wrapper).
-    // Sent every send (not first-only like prompts) because the user
-    // expects "memory" to follow the conversation; if they edit memory.md
-    // mid-chat, the next turn should reflect the change.
-    let memoryContent = null;
-    try {
-      memoryContent = await invoke('memory_read');
-    } catch (e) {
-      console.error('memory_read failed:', e);
-    }
-    // Space-scoped memory (Phase 5). If the chat lives in a Space AND
-    // that Space has a memory_path configured, read it and append to
-    // the memory block AFTER the global memory. The Space memory
-    // overlays on top — the global file sets stable facts ("I'm based
-    // in Portland"), the Space file sets project-specific context
-    // ("the novel's protagonist is named Maya"). Sent every send like
-    // global memory, for the same "edit-and-see-it" reason.
+    // Workspace notes: if the chat is in a workspace with a notes file,
+    // its text goes with every question (sent each time, not first-only
+    // like templates, so an edit to the notes shows on the next turn).
+    // There is no global memory file any more — nothing is added to a
+    // chat that its own workspace did not put there.
     let spaceMemoryContent = null;
     if (chatSpace?.memoryPath) {
       try {
@@ -1870,16 +1454,7 @@ function App() {
       }
     }
     const memorySystemMessages = [];
-    if (memoryContent) {
-      memorySystemMessages.push({
-        role: 'system',
-        content: `<user_memory>\n${memoryContent.trim()}\n</user_memory>`,
-      });
-    }
     if (spaceMemoryContent) {
-      // Distinct wrapper tag so models that key off the existing tag
-      // don't confuse Space memory with the global file. Same idea
-      // works without strict tag handling on either side.
       memorySystemMessages.push({
         role: 'system',
         content: `<space_memory>\n${spaceMemoryContent.trim()}\n</space_memory>`,
@@ -1904,46 +1479,27 @@ function App() {
 
     // JIT capability resolve — the mount-time probe can lose the race
     // against Ollama's own startup (see probeModelCapabilities), which
-    // would silently disable tool injection AND think:false gating for
-    // this send even though the model supports both. Mirrors the
-    // screenshot path's vision JIT probe. Cheap in steady state: the
-    // maps are populated, so this is a lookup; the extra /api/show on
-    // the unknown path is cached per model on the Rust side.
-    let modelHasToolsNow = modelToolsMap[modelId];
+    // would silently disable think:false gating for this send even though
+    // the model supports it. Mirrors the screenshot path's vision JIT
+    // probe. Cheap in steady state: the maps are populated, so this is a
+    // lookup; the extra /api/show on the unknown path is cached per model
+    // on the Rust side.
     let modelThinkingNow = modelThinkingMap[modelId];
-    if (modelHasToolsNow === undefined || modelThinkingNow === undefined) {
+    if (modelThinkingNow === undefined) {
       try {
         const caps = await invoke('llm_capabilities', { model: modelId });
-        modelHasToolsNow = !!caps?.tools;
         modelThinkingNow = !!caps?.thinking;
         setModelVisionMap((m) => ({ ...m, [modelId]: !!caps?.vision }));
-        setModelToolsMap((m) => ({ ...m, [modelId]: modelHasToolsNow }));
         setModelThinkingMap((m) => ({ ...m, [modelId]: modelThinkingNow }));
       } catch (_) {
-        // Probe failed (Ollama down?) — proceed without tools/thinking;
-        // the stream call below surfaces the real connectivity error.
-        modelHasToolsNow = false;
+        // Probe failed (Ollama down?) — proceed without thinking; the
+        // stream call below surfaces the real connectivity error.
         modelThinkingNow = false;
       }
     }
 
-    // Resolve current output_dir up front: lets us skip including tools at
-    // all when the user has explicitly blocked saves (output_dir === '').
-    // NULL/undefined means "never asked" — we still pass tools through and
-    // the modal fires on the first tool_call.
-    let currentOutputDir = null;
-    if (modelHasToolsNow) {
-      try { currentOutputDir = await invoke('chat_output_dir', { chatId: activeTab }); }
-      catch (_) { currentOutputDir = null; }
-    }
-    const includeTools = modelHasToolsNow && currentOutputDir !== '';
-    if (includeTools && !toolSchemasRef.current) {
-      try { toolSchemasRef.current = (await invoke('chat_tool_schemas')) || []; }
-      catch (_) { toolSchemasRef.current = []; }
-    }
-
-    // Mutable conversation array — extended each tool iteration with the
-    // assistant's tool_calls turn + the tool-result responses, then re-sent.
+    // The conversation as sent. (The model is given no tools: it cannot
+    // write files or act on its own — it only answers.)
     // System message ordering:
     //   memory   — durable facts about the user (every send)
     //   prompts  — first-send-only system prompt(s) the user attached.
@@ -1975,7 +1531,6 @@ function App() {
     // server-side message (describeContextOverflow, below) instead.
     if (!options.baseMessages) {
       const pfBody = { model: modelId, messages: convoMessages };
-      if (includeTools && toolSchemasRef.current?.length) pfBody.tools = toolSchemasRef.current;
       const refusal = await contextPreflight({
         invoke,
         backendKind,
@@ -2095,19 +1650,8 @@ function App() {
     // final post-stream persist uses, so db_upsert_message's ON CONFLICT
     // path converges on one row (its SET clause overwrites every field).
     //
-    // Required by the tool loop: tool_write_file inserts chat_files rows
-    // with message_id = asstId WHILE the stream is still running, and
-    // chat_files.message_id carries an enforced FK to messages(id)
-    // (SCHEMA opens with PRAGMA foreign_keys = ON). Without this row the
-    // first model-initiated save of a send fails with "FOREIGN KEY
-    // constraint failed" AFTER the file already hit disk — file present,
-    // no chip, scary toast. Manual Save buttons never hit this because
-    // they run on already-persisted messages.
-    //
-    // Awaited (unlike the fire-and-forget persists around it): the write
-    // must be durably in `messages` before any tool call can race it.
-    // Cost is one tiny pre-stream INSERT; ephemeral chats no-op inside
-    // persistMessage exactly like every other persist on this path.
+    // Written before the stream starts so a reply interrupted by a crash
+    // or a quit still has its row; the final persist overwrites it.
     try {
       await persistMessage({
         id: asstId, chatId: activeTab, role: 'assistant',
@@ -2134,9 +1678,7 @@ function App() {
     // Reasoning ("thinking") shown above the reply — see reasoningInit in
     // utils.js. Spans the whole tool loop; in memory only, never persisted.
     let reasoning = reasoningInit();
-    // Why the last turn ended ('stop' | 'length' | 'tool_calls' | '').
-    // Overwritten per iteration so the FINAL turn's reason wins —
-    // intermediate tool_calls turns are not what the chip cares about.
+    // Why the reply ended ('stop' | 'length' | '').
     let doneReason = '';
     let ollamaOk = false;
     // In-band provider error message (StreamEvent type:'error'). Distinct
@@ -2147,40 +1689,14 @@ function App() {
     // real Rust error string). Surfaced backend-aware in the fallback.
     let streamTransportError = null;
 
-    // Tool-use loop. When the active model supports tools (modelHasTools)
-    // and the user hasn't blocked file saves on this chat (output_dir !== ''),
-    // we include the write_file schema in the request. The model may
-    // respond with `tool_calls`; we execute them via tool_write_file, append
-    // tool-response messages, and re-fetch /api/chat. Loop terminates when
-    // the model responds with no tool_calls (or MAX_TOOL_ITERATIONS hits).
-    //
-    // When tools are off (text-only models, or user-blocked chats), the
-    // loop runs exactly once and behaves exactly like the pre-tool-use
-    // streaming path — no tools field in the body, no tool_calls in the
-    // response, no permission modal.
-
-    // Accumulate across iterations for final persistence.
-    // - allToolCalls: every tool_call this send produced, stored as
-    //   tool_calls_json on the assistant message for history.
-    // - toolResultMessages: role='tool' rows to persist after the loop.
-    // - allToolResults: just the successful saves, threaded onto the
-    //   live assistant message so chat.jsx can render the chip row.
-    //   On chat reload, the equivalent comes from chat_files_list.
-    const allToolCalls = [];
-    const toolResultMessages = [];
-    const allToolResults = [];
-
     try {
-      for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
-        if (!streamingRef.current) break;
+      // One request, one streamed reply.
+      if (streamingRef.current) {
         const body = {
           model: modelId,
           messages: convoMessages,
           stream: true,
         };
-        if (includeTools && toolSchemasRef.current?.length) {
-          body.tools = toolSchemasRef.current;
-        }
         // Reasoning models default thinking ON in Ollama, which streams a
         // long chain-of-thought into a `thinking` field we don't render —
         // so the chat looks frozen for seconds before the answer. Force it
@@ -2195,13 +1711,11 @@ function App() {
         // while Settings → Backend → Thinking is on.
         applyThinkPref(body, modelThinkingNow, { backendKind, rendersReasoning: true });
 
-        let turnContent = '';
-        let turnToolCalls = [];
         // Channel<StreamEvent>: the neutral stream contract (Phase 0
         // provider seam — see src-tauri/src/llm.rs). The adapter owns
-        // every provider quirk: toolCalls arrive AT MOST ONCE (before
-        // done) with `function.arguments` guaranteed to be an object,
-        // and done carries promptTokens/outputTokens. In-band provider
+        // every provider quirk; done carries promptTokens/outputTokens.
+        // A `toolCalls` event cannot arrive (no tools are offered) and
+        // would be ignored. In-band provider
         // errors arrive as {type:'error'}; we deliberately keep the
         // pre-seam behaviour for them (stream just ends; transport
         // failures still reject the invoke below) — surfacing them
@@ -2237,7 +1751,6 @@ function App() {
               return { ...c, messages: msgs };
             });
           } else if (ev.type === 'delta') {
-            turnContent += ev.text;
             accumulated += ev.text;
             streamAccumulatedRef.current = accumulated;
             const snap = accumulated;
@@ -2249,12 +1762,9 @@ function App() {
               msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], ...fields, content: snap, statusText: undefined };
               return { ...c, messages: msgs };
             });
-          } else if (ev.type === 'toolCalls') {
-            turnToolCalls = turnToolCalls.concat(ev.calls);
           } else if (ev.type === 'done') {
-            // A turn that thought and then only called a tool (or ran out
-            // of room) never sent a delta — close the phase here so its
-            // time stops and the block folds while the tool runs.
+            // A turn that thought and then ran out of room never sent a
+            // delta — close the phase here so its time stops.
             if (reasoning.openAt !== null) {
               reasoning = reasoningClose(reasoning, Date.now());
               const fields = reasoningFields(reasoning);
@@ -2264,13 +1774,9 @@ function App() {
                 return { ...c, messages: msgs };
               });
             }
-            // tokensIn is the prompt-eval count of the LATEST request —
-            // it grows each iteration as we append tool responses, so
-            // overwriting (not summing) gives a meaningful total.
             tokensIn = ev.promptTokens ?? tokensIn;
             tokensOut += ev.outputTokens ?? 0;
-            // Server-measured processing time, summed across tool-loop
-            // iterations (each is its own stream). 0 when the provider
+            // Server-measured processing time. 0 when the provider
             // reports no timings — we fall back to wall-clock below.
             genMs += ev.genMs ?? 0;
             // 'length' here means the reply was cut by the token/ctx
@@ -2291,82 +1797,11 @@ function App() {
           // Rust returns Err when the backend is unreachable / non-2xx.
           // CAPTURE the real message — it names the actual failure (e.g.
           // "Endpoint /v1/chat/completions returned 400: …" on a BYO
-          // server). The post-loop fallback used to discard this and
-          // always blame Ollama, which lied on the openai backend AND
-          // hid the reason. Set the flag and break the tool loop.
+          // server). The fallback below used to discard this and always
+          // blame Ollama, which lied on the openai backend AND hid the
+          // reason.
           ollamaOk = false;
           streamTransportError = String(e?.message || e || '');
-          break;
-        }
-
-        // No tool_calls? Final turn — stop.
-        if (turnToolCalls.length === 0) break;
-
-        // Tool-call turn. Push the assistant message (with tool_calls) into
-        // the convo so the next request preserves the Ollama-required
-        // user → assistant(tool_calls) → tool → assistant interleave.
-        allToolCalls.push(...turnToolCalls);
-        convoMessages.push({
-          role: 'assistant',
-          content: turnContent,
-          tool_calls: turnToolCalls,
-        });
-
-        // Execute each tool call serially. JS-side validation is light;
-        // the heavy lifting (sandbox, atomic write, chat_files row) lives
-        // in the tool_write_file Rust command.
-        for (const call of turnToolCalls) {
-          const callId = call.id || call.function?.name || `call_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
-          const name = call.function?.name;
-          // The provider seam guarantees `function.arguments` is always an
-          // object (the object-vs-JSON-string model quirk is absorbed in
-          // the Rust adapter's normalizer — see StreamNorm in ollama.rs).
-          const args = call.function?.arguments || {};
-
-          let result;
-          if (name !== 'write_file') {
-            result = { ok: false, error: `unknown tool: ${name}` };
-          } else {
-            result = await executeWriteFile(activeTab, asstId, args.path, args.contents);
-          }
-
-          // Toast each save (success or failure). Image-only "user
-          // declined" path stays silent — the model still sees the
-          // refusal in the tool result and can react.
-          if (result.ok) {
-            // Stash the live result so the assistant message can render
-            // its file chip when the loop finishes. fileId = chat_files
-            // row id; the chip uses it to call chat_file_reveal /
-            // chat_file_open without needing absPath on the JS side.
-            allToolResults.push({
-              callId,
-              fileId: result.id,
-              relPath: result.relPath,
-              bytes: result.bytes,
-              version: result.version,
-              absPath: result.absPath,
-            });
-            window.ekToast?.({
-              kind: 'info',
-              title: `Saved ${result.relPath}`,
-              body: `${result.bytes} bytes · v${result.version}`,
-            });
-          } else if (!result.silent) {
-            window.ekToast?.({
-              kind: 'warn',
-              title: 'Could not save file',
-              body: result.error || 'unknown error',
-            });
-          }
-
-          // Append the tool response to the convo for the next iteration.
-          // Content must be a string per Ollama's tool-result format.
-          convoMessages.push({
-            role: 'tool',
-            tool_call_id: callId,
-            content: JSON.stringify(result),
-          });
-          toolResultMessages.push({ callId, content: JSON.stringify(result) });
         }
       }
     } catch (e) {
@@ -2397,11 +1832,11 @@ function App() {
         // show them as-is with a pointer at the models folder.
         accumulated = err
           ? `⚠️ ${err}`
-          : `⚠️ The bundled engine couldn't run "${modelId}". Check Settings → Backend for the models folder and engine status.`;
+          : `⚠️ The bundled engine couldn't run "${modelId}". Check Settings → Advanced for the models folder and engine status.`;
       } else if (backendKind === 'openai') {
         accumulated = err
           ? `⚠️ Couldn't complete the request against your custom endpoint:\n\n${err}`
-          : `⚠️ Couldn't reach your custom endpoint. Check Settings → Backend (server running? model "${modelId}" loaded?).`;
+          : `⚠️ Couldn't reach your custom endpoint. Check Settings → Advanced (server running? model "${modelId}" loaded?).`;
       } else if (!err || looksLikeConnRefused) {
         accumulated = `Ollama isn't running on localhost:11434. Start it with \`ollama serve\` and make sure the model "${modelId}" is pulled (\`ollama pull ${modelId}\`).`;
       } else {
@@ -2440,10 +1875,6 @@ function App() {
         // chip on the last assistant message. undefined keeps the
         // message object compact for the common natural-stop case.
         doneReason: doneReason || undefined,
-        // toolResults drives the saved-file chips above the assistant text
-        // in chat.jsx Message. undefined when the model didn't use tools
-        // so the chip strip simply isn't rendered.
-        toolResults: allToolResults.length ? allToolResults : undefined,
       };
       return { ...c, messages: msgs };
     });
@@ -2469,14 +1900,6 @@ function App() {
     const sourcesBlob = (asstSources?.length || asstImagesSkipped)
       ? JSON.stringify({ items: asstSources || [], imagesSkipped: !!asstImagesSkipped })
       : null;
-    // toolCallsJson captures every tool_call the model emitted during this
-    // send (possibly across multiple iterations). Persisted on the single
-    // assistant message id so Phase 4 can render saved-file chips above
-    // the assistant text without needing to walk separate intermediate
-    // assistant rows. Null when no tools were used → row stays compact.
-    const toolCallsBlob = allToolCalls.length
-      ? JSON.stringify(allToolCalls)
-      : null;
     persistMessage({
       id: asstId, chatId: activeTab, role: 'assistant',
       content: finalContent || streamAccumulatedRef.current,
@@ -2485,37 +1908,10 @@ function App() {
       doneReason: doneReason || null,
       promptsJson: null,
       sourcesJson: sourcesBlob,
-      toolCallsJson: toolCallsBlob,
+      toolCallsJson: null,
       toolCallId: null,
       seq: seq + 1,
     }).catch(console.error);
-
-    // Persist each tool-result message as its own row (role='tool',
-    // tool_call_id set, content = JSON-encoded result). Sequenced AFTER
-    // the assistant row to keep the on-reload ordering sensible — the
-    // assistant emitted these calls before the responses came back, so
-    // the order is user → assistant(+tool_calls) → tool ... → end.
-    // Note: when the tool loop ran multiple iterations, all tool rows
-    // collapse here at the tail. For v1 this is acceptable; full multi-
-    // turn replay fidelity would need separate assistant rows per
-    // iteration and is a Phase-4+ concern.
-    let toolSeq = seq + 2;
-    for (const tr of toolResultMessages) {
-      persistMessage({
-        id: `${asstId}-t-${tr.callId}`,
-        chatId: activeTab,
-        role: 'tool',
-        content: tr.content,
-        model: null,
-        time: now(),
-        tokensIn: null, tokensOut: null, tokensMs: null,
-        promptsJson: null,
-        sourcesJson: null,
-        toolCallsJson: null,
-        toolCallId: tr.callId,
-        seq: toolSeq++,
-      }).catch(console.error);
-    }
 
     setStreaming(false);
     streamingRef.current = false;
@@ -3411,20 +2807,6 @@ function App() {
     }
   };
 
-  const recolorSpace = async (id, color) => {
-    if (!id) return;
-    const current = (spaces || []).find((s) => s.id === id);
-    if (!current) return;
-    try {
-      await invoke('space_update', {
-        space: { ...current, color: color || null, updatedAt: Math.floor(Date.now() / 1000) },
-      });
-      await reloadHistory();
-    } catch (e) {
-      console.error('space_update (recolor) failed:', e);
-    }
-  };
-
   // Delete a Space. Chats are NOT deleted — the Rust `space_delete`
   // command unfiles them (sets space_id NULL) inside a transaction. The
   // sidebar refresh that follows will drop the Space row and surface the
@@ -3881,11 +3263,8 @@ function App() {
       setChats(cs => ({ ...cs, [c.id]: baseChat }));
       try {
         const rows = await invoke('db_load_messages', { chatId: c.id });
-        // role='tool' rows hold raw JSON tool-result payloads — useful for
-        // model context on continuation but noise in the chat UI. We skip
-        // them at render time; the saved-file chips are reconstructed from
-        // chat_files_list instead (see below). Persisted rows remain on
-        // disk so a future re-send round trip still includes them.
+        // role='tool' rows exist only in chats from before the model's
+        // save tool was removed: raw JSON results, never shown.
         const messages = rows.filter(r => r.role !== 'tool').map(r => {
           // sources_json is a JSON object { items, imagesSkipped, incomplete? };
           // null when the message had no attachments at send time. tryParseJson
@@ -3916,35 +3295,6 @@ function App() {
             isPicked: r.isPicked,
           };
         });
-
-        // Attach saved-file chips to assistant messages by walking
-        // chat_files rows. Failures here don't block the chat — chips
-        // just won't show. message_id may be null on legacy rows; those
-        // get dropped from the chip rendering.
-        try {
-          const files = await invoke('chat_files_list', { chatId: c.id });
-          if (Array.isArray(files) && files.length) {
-            const byMsg = new Map();
-            for (const f of files) {
-              if (!f.messageId) continue;
-              const list = byMsg.get(f.messageId) || [];
-              list.push({
-                callId: f.id,
-                relPath: f.relPath,
-                bytes: f.bytes,
-                version: f.version,
-                // absPath isn't on chat_files — we resolve lazily via
-                // chat_file_path when the user clicks Reveal/Open.
-                fileId: f.id,
-              });
-              byMsg.set(f.messageId, list);
-            }
-            for (const m of messages) {
-              const list = byMsg.get(m.id);
-              if (list?.length) m.toolResults = list;
-            }
-          }
-        } catch (_) { /* chips silently absent on failure */ }
 
         // Preserve multi-model + Space fields on the chat after messages
         // load. Without this, the loaded: true entry would wipe tabType /
@@ -4192,7 +3542,6 @@ function App() {
 
   const goHome = () => {
     setQuery('');
-    setRightPanelOpen(false);
     setView('home');
     refreshHomeData();
   };
@@ -4705,11 +4054,8 @@ function App() {
   // pending'. Closed state means the modal is not mounted at all (see
   // CompareModelPickerModal's early-return on !open).
   const [compareModalOpen, setCompareModalOpen] = useS(false);
-  // First-launch onboarding tour (Phase 6). Opens automatically when the
-  // app_settings flag is absent; closes on Skip / Get started, both of
-  // which write the flag so the tour stays hidden across launches.
-  // Exposed as window.ekOpenOnboarding so the Settings modal's
-  // "Show tour again" button can re-open it without lifting that state.
+  // The first-run welcome (one screen: the four shortcuts). Opens when the
+  // app_settings flag is absent; closing it writes the flag.
   const [onboardingOpen, setOnboardingOpen] = useS(false);
 
   // Pre-warm a model: POST /api/generate with a tiny one-token prompt so
@@ -4758,76 +4104,6 @@ function App() {
     warmModel(id);
   };
 
-  // ── Command palette (⌘K) — commands + runners ────────────────────────
-  // Built fresh each render (cheap: a few dozen entries) and placed HERE,
-  // below every handler and piece of state it reads, per the TDZ rule.
-  // The palette component gets DATA ONLY ({id,label,section,hint,keywords});
-  // execution routes back through runPaletteCommand → this map, so the
-  // component stays presentation-only and Playwright can mount it with
-  // plain JSON props.
-  //
-  // Force-close whenever a first-run surface takes the screen — the tour
-  // and gates own the keyboard (Esc/Enter) while open.
-  useE(() => {
-    if (onboardingOpen || setupGateOpen || migrationOfferOpen) setPaletteOpen(false);
-  }, [onboardingOpen, setupGateOpen, migrationOfferOpen]);
-
-  const paletteCommands = [];
-  const paletteRunners = {};
-  {
-    const add = (id, label, section, run, opts) => {
-      paletteCommands.push({
-        id, label, section,
-        hint: opts?.hint, keywords: opts?.keywords,
-      });
-      paletteRunners[id] = run;
-    };
-    add('new-chat', 'New chat', 'Actions', () => newTab(),
-      { keywords: 'create start blank' });
-    add('new-private', 'New private chat', 'Actions', () => newPrivateTab(),
-      { keywords: 'ephemeral incognito lock secret' });
-    add('new-compare', 'Compare models side-by-side', 'Actions', () => setCompareModalOpen(true),
-      { keywords: 'comparison versus multi' });
-    add('open-settings', 'Open Settings', 'Actions',
-      () => window.postMessage({ type: '__activate_edit_mode' }, '*'),
-      { keywords: 'preferences options config backend' });
-    add('go-home', 'Go to Home', 'Actions', () => goHome(),
-      { keywords: 'workspaces start back all' });
-    // Workspaces — open one. General holds the chats with no workspace.
-    add('space-all', 'General', 'Workspaces', () => openWorkspace(null),
-      { keywords: 'space workspace unfiled everything' });
-    for (const s of (spaces || [])) {
-      add(`space-${s.id}`, s.name || 'Workspace', 'Workspaces', () => openWorkspace(s.id),
-        { keywords: 'space workspace go open' });
-    }
-    // Themes — THEMES labels + Match System, current one flagged.
-    add('theme-system', 'Match System', 'Theme', () => setTweak('theme', 'system'),
-      { keywords: 'theme appearance auto light dark', hint: tweaks.theme === 'system' ? 'current' : undefined });
-    for (const key of Object.keys(THEMES)) {
-      add(`theme-${key}`, THEMES[key].label || key, 'Theme', () => setTweak('theme', key),
-        { keywords: 'theme appearance color', hint: tweaks.theme === key ? 'current' : undefined });
-    }
-    // Recent chats — sidebar order (already recency-bucketed), capped so
-    // the browse view stays scannable; typing searches only this set.
-    const recentChats = [];
-    for (const sec of (history.dateSections || [])) {
-      for (const c of sec.items) {
-        if (recentChats.length >= 15) break;
-        recentChats.push(c);
-      }
-      if (recentChats.length >= 15) break;
-    }
-    for (const c of recentChats) {
-      add(`chat-${c.id}`, c.title || 'New chat', 'Recent chats',
-        () => openChat(c),
-        { hint: c.preview || undefined, keywords: 'open chat recent' });
-    }
-  }
-  const runPaletteCommand = (id) => {
-    setPaletteOpen(false);
-    const run = paletteRunners[id];
-    if (run) run();
-  };
 
   // The line under the message box. A local backend answers on this Mac;
   // a custom server on another machine is named, because then it does not.
@@ -4883,7 +4159,7 @@ function App() {
       <MoreMenu
         onSettings={() => openSettings()}
         onTemplates={() => openSettings('templates')}
-        onPanel={(tab) => { setRightPanelTab(tab); setRightPanelOpen(true); }}
+        onWatches={() => openSettings('watches')}
       />
     </>
   );
@@ -4947,38 +4223,35 @@ function App() {
       {/* Toast host mounts once and exposes window.ekToast for global use.
           Lives high in the tree so toasts overlay everything else. */}
       <ToastHost />
-      {/* First-launch onboarding tour (Phase 6). State lives in App so the
-          Settings modal can reopen it via window.ekOpenOnboarding. */}
+      {/* The first-run welcome; the model choice opens when it closes. */}
       <OnboardingTour open={onboardingOpen} onClose={closeOnboarding} />
 
-      {/* Command palette (⌘K) — data-only props; execution routes through
-          runPaletteCommand so the component never touches app state. */}
-      <CommandPalette
-        open={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        commands={paletteCommands}
-        onRun={runPaletteCommand}
-      />
-      {/* write_file permission modal — appears when a tool-using model
-          first tries to save a file in a chat with no output_dir.
-          onClose receives the resolution: a path string (Allow), "" (Block
-          always), or null (Not now). handleSend awaits this via
-          outputDirResolverRef. */}
-      {outputDirReq && (
-        <OutputDirModal
-          chatId={outputDirReq.chatId}
-          chatTitle={outputDirReq.chatTitle}
-          suggested={outputDirReq.suggested}
-          invoke={invoke}
-          onClose={(dir) => {
-            setOutputDirReq(null);
-            const r = outputDirResolverRef.current;
-            outputDirResolverRef.current = null;
-            r?.(dir);
-          }}
-        />
-      )}
       <SettingsModal
+        watchesPane={
+          <WatchPanel
+            prompts={prompts}
+            nameOfModel={nameModel}
+            onConfigure={() => {
+              // "+ Add a watch" opens the recipe picker first; the chosen
+              // recipe pre-fills the WatchModal.
+              setRecipePickerOpen(true);
+            }}
+            onPickRecipe={(recipe) => {
+              setEditingWatch(null);
+              setWatchTemplate(recipe && recipe.custom ? null : recipe);
+              setWatchModalOpen(true);
+            }}
+            onChatAboutToday={(digest) => { closeSettings(); chatAboutToday(digest); }}
+            onEdit={(w) => {
+              setEditingWatch(w);
+              setWatchTemplate(null);
+              setWatchModalOpen(true);
+            }}
+            onChatWithNotes={(w) => { closeSettings(); chatWithNotes(w); }}
+            refreshKey={watchPanelRefreshKey}
+            focusFilter={watchFocusFilter}
+          />
+        }
         tweaks={tweaks}
         setTweak={setTweak}
         onPromptsChanged={refreshPrompts}
@@ -5001,7 +4274,8 @@ function App() {
         open={watchModalOpen}
         editing={editingWatch}
         template={watchTemplate}
-        defaultModel={model.id}
+        defaultModel={appDefaultModel}
+        nameOfModel={modelOptionLabel}
         onClose={() => {
           setWatchModalOpen(false);
           setEditingWatch(null);
@@ -5071,7 +4345,6 @@ function App() {
             askDisabled={streaming}
             onCreateSpace={createSpace}
             onRenameSpace={renameSpace}
-            onRecolorSpace={recolorSpace}
             onDeleteSpace={deleteSpace}
             onEditSpaceSave={saveSpaceSettings}
             promptsLibrary={prompts}
@@ -5276,7 +4549,6 @@ function App() {
                     onDetachAttachment={onDetachAttachment}
                     onReindexAttachment={onReindexAttachment}
                     modelHasVision={activeModelHasVision}
-                    modelHasTools={activeModelHasTools}
                     seedText={composerSeedText}
                     seedKey={composerSeedKey}
                     focusSignal={composerFocusKey}
@@ -5296,77 +4568,6 @@ function App() {
           </div>
         </div>
 
-        {rightPanelOpen && (
-          <>
-            <Resizer onDrag={(dx) => {
-              if (dx === 0) rightPanelStartRef.current = rightPanelWidth;
-              setRightPanelWidth(Math.max(280, Math.min(600, rightPanelStartRef.current - dx)));
-            }} />
-            {/* Tab bar is built once and passed as a prop to whichever  */}
-            {/* tab's component is rendering — keeps the two tabs from   */}
-            {/* having to re-implement the chrome each time.             */}
-            {(() => {
-              const tabHeader = (
-                <RightPanelTabs
-                  tab={rightPanelTab}
-                  onTab={setRightPanelTab}
-                  onClose={() => setRightPanelOpen(false)}
-                />
-              );
-              if (rightPanelTab === 'files') {
-                return (
-                  <FilesPanel
-                    tabHeader={tabHeader}
-                    width={rightPanelWidth}
-                    chatId={activeTab}
-                    // Click a row → scroll the chat scroller to the
-                    // message that produced this save. Message divs in
-                    // chat.jsx carry id="ek-msg-{m.id}" so we can find
-                    // them without prop-drilling refs through ChatPane.
-                    onScrollToMessage={(messageId) => {
-                      const el = document.getElementById(`ek-msg-${messageId}`);
-                      if (el) {
-                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        // Brief amber pulse on the targeted message so the
-                        // user notices where the scroll landed.
-                        el.style.transition = 'background 0.6s ease';
-                        const prev = el.style.background;
-                        el.style.background = T.amber + '22';
-                        setTimeout(() => { el.style.background = prev; }, 900);
-                      }
-                    }}
-                  />
-                );
-              }
-              return (
-                <WatchPanel
-                  tabHeader={tabHeader}
-                  width={rightPanelWidth}
-                  prompts={prompts}
-                  onConfigure={() => {
-                    // "+ Configure" now opens the recipe picker first; the
-                    // chosen recipe pre-fills the WatchModal.
-                    setRecipePickerOpen(true);
-                  }}
-                  onPickRecipe={(recipe) => {
-                    setEditingWatch(null);
-                    setWatchTemplate(recipe && recipe.custom ? null : recipe);
-                    setWatchModalOpen(true);
-                  }}
-                  onChatAboutToday={chatAboutToday}
-                  onEdit={(w) => {
-                    setEditingWatch(w);
-                    setWatchTemplate(null);
-                    setWatchModalOpen(true);
-                  }}
-                  onChatWithNotes={chatWithNotes}
-                  refreshKey={watchPanelRefreshKey}
-                  focusFilter={watchFocusFilter}
-                />
-              );
-            })()}
-          </>
-        )}
       </div>
     </>
   );

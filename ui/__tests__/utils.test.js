@@ -8,15 +8,11 @@ const {
   detectPlatform,
   formatHotkey,
   hotkeyFromEvent,
-  parseFencedBlocks,
-  inferFilename,
-  uniquifyFilename,
   escapeHtml,
   escapeAttr,
   relativeTime,
   tryParseJson,
   genId,
-  defaultIntervalForKind,
   formatBytes,
   accumulatePullProgress,
   voiceModelProgress,
@@ -38,13 +34,11 @@ const {
   ggufQuantLabel,
   recipeToFormDefaults,
   buildTodayDigest,
-  ekFilesGroupByPath,
   bucketChatsByDate,
   instantiateSpacePinnedAttachments,
   hexToRgbTriplet,
   lightenHex,
   isLocalEndpoint,
-  greetingForHour,
   netPurposeWords,
   netResultWords,
   netBytesWords,
@@ -52,6 +46,10 @@ const {
   netWhen,
   netSentOffWords,
   netCountsWords,
+  LOOK_DEFAULT,
+  LOOK_CHOICES,
+  normalizeLook,
+  resolveLook,
   isStarred,
   sortTemplates,
   starredTemplates,
@@ -59,8 +57,6 @@ const {
   templateHint,
   templateCopyName,
   previewSnippet,
-  paletteFuzzyScore,
-  spaceAmbientTint,
   SELECTION_ACTIONS,
   buildSelectionRequest,
   CONTEXT_REPLY_RESERVE,
@@ -86,6 +82,9 @@ const {
   describeModel,
   chatDocumentCount,
   documentsLabel,
+  docxParts,
+  docxUsesLetter,
+  codeBlockFileName,
 } = require("../utils.js");
 
 // ── formatHotkey ─────────────────────────────────────────────────────────
@@ -211,95 +210,6 @@ test("hotkeyFromEvent: modifier order is canonical", () => {
   assert.equal(spec, "Super+Ctrl+Alt+Shift+Space");
 });
 
-// ── parseFencedBlocks ────────────────────────────────────────────────────
-
-test("parseFencedBlocks: no markdown returns empty", () => {
-  assert.deepEqual(parseFencedBlocks(""), []);
-  assert.deepEqual(parseFencedBlocks(null), []);
-});
-
-test("parseFencedBlocks: plain text without fences returns empty", () => {
-  assert.deepEqual(parseFencedBlocks("Just some prose, no code blocks."), []);
-});
-
-test("parseFencedBlocks: single fence with language tag", () => {
-  const md = "Here:\n```python\nprint('hello world')\n```\nDone.";
-  const out = parseFencedBlocks(md);
-  assert.equal(out.length, 1);
-  assert.equal(out[0].language, "python");
-  assert.equal(out[0].content, "print('hello world')");
-  assert.equal(out[0].filename, "main.py");
-  assert.equal(out[0].ordinal, 0);
-});
-
-test("parseFencedBlocks: short content (< 6 chars) is skipped but bumps ordinal", () => {
-  // Documented in chat.jsx: bare ```output\nhi\n``` shouldn't produce a
-  // save button (it's not a file), but the ordinal must still advance so
-  // subsequent blocks get stable indices.
-  const md = "```\nhi\n```\n```js\nconsole.log('hello world');\n```";
-  const out = parseFencedBlocks(md);
-  assert.equal(out.length, 1);
-  assert.equal(out[0].ordinal, 1);
-  assert.equal(out[0].filename, "main.js");
-});
-
-test("parseFencedBlocks: doctype HTML routes to index.html", () => {
-  // Plain ``` block (no language tag) but obvious HTML doc → save as
-  // index.html, not snippet.txt. Documented heuristic in inferFilename.
-  const md = "```\n<!doctype html>\n<html><body>hi</body></html>\n```";
-  const out = parseFencedBlocks(md);
-  assert.equal(out[0].filename, "index.html");
-});
-
-test("parseFencedBlocks: comment-hint pattern wins over default", () => {
-  // `// foo.js` first-line hint in a JS block should override main.js.
-  const md = "```javascript\n// utils.js\nexport const x = 1;\n```";
-  const out = parseFencedBlocks(md);
-  assert.equal(out[0].filename, "utils.js");
-});
-
-test("parseFencedBlocks: duplicate filenames get -2, -3 suffixes", () => {
-  const md = [
-    "```python\nimport sys\nprint('a')\n```",
-    "```python\nimport os\nprint('b')\n```",
-    "```python\nimport re\nprint('c')\n```",
-  ].join("\n");
-  const out = parseFencedBlocks(md);
-  assert.deepEqual(out.map((o) => o.filename), ["main.py", "main-2.py", "main-3.py"]);
-});
-
-test("parseFencedBlocks: unknown language falls back to snippet.<lang>", () => {
-  const md = "```elixir\ndefmodule Foo do\nend\n```";
-  const out = parseFencedBlocks(md);
-  assert.equal(out[0].filename, "snippet.elixir");
-});
-
-// ── uniquifyFilename ─────────────────────────────────────────────────────
-
-test("uniquifyFilename: not taken returns unchanged", () => {
-  assert.equal(uniquifyFilename("fresh.txt", new Set()), "fresh.txt");
-});
-
-test("uniquifyFilename: taken returns -2", () => {
-  assert.equal(uniquifyFilename("foo.js", new Set(["foo.js"])), "foo-2.js");
-});
-
-test("uniquifyFilename: taken-2 also taken returns -3", () => {
-  assert.equal(
-    uniquifyFilename("foo.js", new Set(["foo.js", "foo-2.js"])),
-    "foo-3.js"
-  );
-});
-
-test("uniquifyFilename: extension handling preserves stem.ext shape", () => {
-  // dotfiles (.gitignore) have no stem before the dot — uniquify treats
-  // the whole thing as a stem since `lastIndexOf('.')` is 0.
-  assert.equal(
-    uniquifyFilename(".gitignore", new Set([".gitignore"])),
-    ".gitignore-2"
-  );
-});
-
 // ── escapeHtml / escapeAttr ──────────────────────────────────────────────
 
 test("escapeHtml: dangerous chars are entity-encoded", () => {
@@ -399,66 +309,6 @@ test("genId: two calls produce different ids", () => {
   const a = genId();
   const b = genId();
   assert.notEqual(a, b);
-});
-
-// ── defaultIntervalForKind ───────────────────────────────────────────────
-
-test("defaultIntervalForKind: rss => 600", () => {
-  assert.equal(defaultIntervalForKind("rss"), 600);
-});
-
-test("defaultIntervalForKind: url => 1800", () => {
-  assert.equal(defaultIntervalForKind("url"), 1800);
-});
-
-test("defaultIntervalForKind: folder + unknown => 30", () => {
-  assert.equal(defaultIntervalForKind("folder"), 30);
-  // Defensive: an unrecognised kind shouldn't pick "url" by accident —
-  // 30s is the safest default for any new file-watch flavour.
-  assert.equal(defaultIntervalForKind("bogus"), 30);
-  assert.equal(defaultIntervalForKind(""), 30);
-});
-
-// ── ekFilesGroupByPath ───────────────────────────────────────────────────
-
-test("ekFilesGroupByPath: empty list returns empty", () => {
-  assert.deepEqual(ekFilesGroupByPath([]), []);
-});
-
-test("ekFilesGroupByPath: groups by relPath", () => {
-  const rows = [
-    { relPath: "index.html", savedAt: 10, version: 1 },
-    { relPath: "style.css", savedAt: 20, version: 1 },
-    { relPath: "index.html", savedAt: 30, version: 2 },
-  ];
-  const groups = ekFilesGroupByPath(rows);
-  assert.equal(groups.length, 2);
-  const html = groups.find((g) => g.relPath === "index.html");
-  assert.equal(html.versions.length, 2);
-});
-
-test("ekFilesGroupByPath: head is the row with max savedAt", () => {
-  const rows = [
-    { relPath: "x.txt", savedAt: 10, version: 1 },
-    { relPath: "x.txt", savedAt: 100, version: 2 }, // newer
-    { relPath: "x.txt", savedAt: 50, version: 3 },
-  ];
-  const [g] = ekFilesGroupByPath(rows);
-  assert.equal(g.head.savedAt, 100);
-  assert.equal(g.head.version, 2);
-});
-
-test("ekFilesGroupByPath: sorted by head.savedAt desc", () => {
-  const rows = [
-    { relPath: "old.txt", savedAt: 5, version: 1 },
-    { relPath: "new.txt", savedAt: 100, version: 1 },
-    { relPath: "mid.txt", savedAt: 50, version: 1 },
-  ];
-  const groups = ekFilesGroupByPath(rows);
-  assert.deepEqual(
-    groups.map((g) => g.relPath),
-    ["new.txt", "mid.txt", "old.txt"]
-  );
 });
 
 // ── bucketChatsByDate ────────────────────────────────────────────────────
@@ -1047,27 +897,27 @@ test("recipeToFormDefaults: custom / null recipe returns null", () => {
 test("recipeToFormDefaults: downloads recipe fills folder + notes + cutoff", () => {
   const paths = { downloadsDir: "/Users/x/Downloads", defaultNotesDir: "/Users/x/Documents/Ekorbia/watches" };
   const f = recipeToFormDefaults(
-    { kind: "folder", promptSlug: "summarize", useDownloadsDir: true, skipExisting: true, notesFileName: "downloads-summaries.md", name: "Downloads" },
+    { promptSlug: "summarise-a-document", useDownloadsDir: true, skipExisting: true, notesFileName: "downloads-summaries.md", name: "Downloads" },
     paths, 1700000000,
   );
-  assert.equal(f.kind, "folder");
   assert.equal(f.folderPath, "/Users/x/Downloads");
   assert.equal(f.notesPath, "/Users/x/Documents/Ekorbia/watches/downloads-summaries.md");
-  assert.equal(f.promptId, "summarize");
-  assert.equal(f.ignoreBefore, 1700000000); // skip pre-existing files
+  assert.equal(f.promptId, "summarise-a-document");
+  assert.equal(f.ignoreBefore, 1700000000); // skip the files already there
   assert.equal(f.name, "Downloads");
+  assert.equal(f.intervalSecs, 30);
 });
 
-test("recipeToFormDefaults: url recipe carries diff mode, no cutoff", () => {
+test("recipeToFormDefaults: carries nothing about feeds or pages", () => {
   const f = recipeToFormDefaults(
-    { kind: "url", promptSlug: "price-watcher", urlDiffMode: "diff" },
+    { promptSlug: "summarise-a-document", name: "Inbox" },
     { downloadsDir: "/dl", defaultNotesDir: "/n" }, 100,
   );
-  assert.equal(f.kind, "url");
-  assert.equal(f.urlDiffMode, "diff");
-  assert.equal(f.folderPath, ""); // not a downloads recipe
+  assert.equal(f.folderPath, ""); // not the Downloads starting point
   assert.equal(f.ignoreBefore, null); // skipExisting not set
-  assert.equal(f.intervalSecs, 1800); // url default
+  for (const k of ["kind", "sourceUrl", "urlSelector", "urlDiffMode"]) {
+    assert.equal(k in f, false, k);
+  }
 });
 
 // ── buildTodayDigest ─────────────────────────────────────────────────────
@@ -1209,18 +1059,6 @@ test("isLocalEndpoint: remote hosts are NOT local (never claim private)", () => 
   assert.equal(isLocalEndpoint("openai", ""), false); // BYO requires a URL
 });
 
-// ── greetingForHour ──────────────────────────────────────────────────────
-test("greetingForHour: maps the hour to a time-of-day greeting", () => {
-  assert.equal(greetingForHour(2), "Good evening"); // small hours
-  assert.equal(greetingForHour(8), "Good morning");
-  assert.equal(greetingForHour(13), "Good afternoon");
-  assert.equal(greetingForHour(20), "Good evening");
-  // boundaries
-  assert.equal(greetingForHour(5), "Good morning");
-  assert.equal(greetingForHour(12), "Good afternoon");
-  assert.equal(greetingForHour(18), "Good evening");
-});
-
 // ── previewSnippet ─────────────────────────────────────────────────────────
 test("previewSnippet: collapses whitespace, trims, caps at 100 chars", () => {
   assert.equal(previewSnippet("Flagged three risks"), "Flagged three risks");
@@ -1235,46 +1073,6 @@ test("previewSnippet: collapses whitespace, trims, caps at 100 chars", () => {
   const s100 = "x".repeat(100);
   assert.equal(previewSnippet(s100), s100);
   assert.equal(previewSnippet("y".repeat(101)), "y".repeat(100) + "…");
-});
-
-// ── paletteFuzzyScore ──────────────────────────────────────────────────────
-test("paletteFuzzyScore: empty query is a neutral match-all", () => {
-  assert.equal(paletteFuzzyScore("", "New chat"), 0);
-  assert.equal(paletteFuzzyScore("   ", "New chat"), 0);
-  assert.equal(paletteFuzzyScore(null, "New chat"), 0);
-});
-
-test("paletteFuzzyScore: no match returns -1, every match is positive", () => {
-  assert.equal(paletteFuzzyScore("zzz", "New chat"), -1);
-  assert.equal(paletteFuzzyScore("chat", ""), -1);
-  assert.ok(paletteFuzzyScore("chat", "New chat") > 0);
-  // Deep-but-real matches must never sink to the -1 sentinel.
-  assert.ok(paletteFuzzyScore("z", "a".repeat(500) + "z") > 0);
-});
-
-test("paletteFuzzyScore: substring beats subsequence, early beats late", () => {
-  // verbatim substring ("set" in "Settings") outranks scattered chars
-  assert.ok(
-    paletteFuzzyScore("set", "Settings") > paletteFuzzyScore("set", "Slate theme"),
-  );
-  // earlier occurrence wins at the same tier
-  assert.ok(
-    paletteFuzzyScore("chat", "Chat history") > paletteFuzzyScore("chat", "New private chat"),
-  );
-});
-
-test("paletteFuzzyScore: word-boundary start outranks mid-word hit", () => {
-  assert.ok(
-    paletteFuzzyScore("side", "Toggle sidebar") > paletteFuzzyScore("side", "Besides"),
-  );
-});
-
-test("paletteFuzzyScore: subsequence matches initials-style queries", () => {
-  assert.ok(paletteFuzzyScore("npc", "New private chat") > 0);
-  // case-insensitive both ways
-  assert.ok(paletteFuzzyScore("NPC", "new private chat") > 0);
-  // order matters: reversed initials don't match
-  assert.equal(paletteFuzzyScore("cpn", "New private chat"), -1);
 });
 
 // ── extractMathSegments / restoreMathSegments ──────────────────────────────
@@ -1362,44 +1160,7 @@ test("restoreMathSegments: unknown index leaves the sentinel", () => {
   assert.equal(restoreMathSegments("plain", [], () => { throw new Error("no"); }), "plain");
 });
 
-// ── spaceAmbientTint ─────────────────────────────────────────────────────
-
 const TINT_PALETTE = { amber: "#f0934a", purple: "#c281f5", green: "#7dd17a" };
-
-test("spaceAmbientTint: colored Space on a dark theme resolves its hex", () => {
-  assert.equal(
-    spaceAmbientTint({ id: "s1", color: "purple" }, TINT_PALETTE, false),
-    "#c281f5",
-  );
-});
-
-test("spaceAmbientTint: light themes never tint (stain covenant)", () => {
-  assert.equal(
-    spaceAmbientTint({ id: "s1", color: "purple" }, TINT_PALETTE, true),
-    null,
-  );
-});
-
-test("spaceAmbientTint: no Space → null (default ambience)", () => {
-  assert.equal(spaceAmbientTint(null, TINT_PALETTE, false), null);
-  assert.equal(spaceAmbientTint(undefined, TINT_PALETTE, false), null);
-});
-
-test("spaceAmbientTint: Space without a color → null", () => {
-  assert.equal(spaceAmbientTint({ id: "s1", color: null }, TINT_PALETTE, false), null);
-  assert.equal(spaceAmbientTint({ id: "s1" }, TINT_PALETTE, false), null);
-});
-
-test("spaceAmbientTint: unknown/purged color key → null, not a gray smudge", () => {
-  assert.equal(
-    spaceAmbientTint({ id: "s1", color: "magenta" }, TINT_PALETTE, false),
-    null,
-  );
-});
-
-test("spaceAmbientTint: missing palette → null", () => {
-  assert.equal(spaceAmbientTint({ id: "s1", color: "purple" }, null, false), null);
-});
 
 // ── buildSelectionRequest (selection actions, ⌘⇧E) ─────────────────────────
 
@@ -2206,4 +1967,213 @@ test("netCountsWords", () => {
   assert.equal(netCountsWords({ made: 0, refused: 0 }), "None yet");
   assert.equal(netCountsWords({ made: 4, refused: 1 }), "4 made, 1 refused");
   assert.equal(netCountsWords({ made: 0, refused: 2 }), "0 made, 2 refused");
+});
+
+// ── The look ───────────────────────────────────────────────────────────────
+test("the look: three choices, light by default", () => {
+  assert.equal(LOOK_DEFAULT, "one_light");
+  assert.deepEqual(LOOK_CHOICES.map((c) => c.label), ["Light", "Dark", "Match system"]);
+  assert.deepEqual(LOOK_CHOICES.map((c) => c.value), ["one_light", "one_dark", "system"]);
+});
+
+test("normalizeLook: nothing saved is light; today's values pass through", () => {
+  assert.equal(normalizeLook(undefined), "one_light");
+  assert.equal(normalizeLook(""), "one_light");
+  assert.equal(normalizeLook("one_light"), "one_light");
+  assert.equal(normalizeLook("one_dark"), "one_dark");
+  assert.equal(normalizeLook("system"), "system");
+});
+
+test("normalizeLook: a theme from an older version maps to the nearer look", () => {
+  assert.equal(normalizeLook("ayu_light"), "one_light");
+  assert.equal(normalizeLook("ayu_dark"), "one_dark");
+  assert.equal(normalizeLook("ayu_mirage"), "one_dark");
+  assert.equal(normalizeLook("warm_dark"), "one_dark");
+  assert.equal(normalizeLook("something-else"), "one_dark");
+});
+
+test("resolveLook: Match system follows macOS; a fixed choice ignores it", () => {
+  assert.equal(resolveLook("system", true), "one_dark");
+  assert.equal(resolveLook("system", false), "one_light");
+  assert.equal(resolveLook("one_light", true), "one_light");
+  assert.equal(resolveLook("ayu_mirage", false), "one_dark");
+  assert.equal(resolveLook(undefined, true), "one_light");
+});
+
+// ── Word export: docxParts ───────────────────────────────────────────────
+// Run through the same vendored marked the app loads, so a change in the
+// tokens it produces is caught here.
+
+const markedForDocx = require("../vendor/marked.min.js");
+markedForDocx.setOptions({ gfm: true, breaks: false });
+const docx = (md, opts) => docxParts(md, markedForDocx.lexer, opts);
+// The text of each paragraph, in order.
+const docxTexts = (xml) =>
+  [...xml.matchAll(/<w:p>(.*?)<\/w:p>/g)].map((m) =>
+    [...m[1].matchAll(/<w:t xml:space="preserve">(.*?)<\/w:t>/g)].map((t) => t[1]).join(""),
+  );
+
+test("docxParts: three complete XML parts", () => {
+  const parts = docx("Hello");
+  assert.deepEqual(Object.keys(parts).sort(), ["document", "numbering", "styles"]);
+  for (const k of Object.keys(parts)) assert.ok(parts[k].startsWith("<?xml"), k);
+  assert.match(parts.document, /<w:document /);
+  assert.match(parts.styles, /<w:styles /);
+  assert.match(parts.numbering, /<w:numbering /);
+  assert.deepEqual(docxTexts(parts.document), ["Hello"]);
+});
+
+test("docxParts: headings, bold, italic, strikethrough, inline code", () => {
+  const xml = docx("# Advice\n\n###### Deep\n\nThis is **bold**, *italic*, ~~gone~~ and `code`.").document;
+  assert.match(xml, /<w:pStyle w:val="Heading1"\/><\/w:pPr><w:r><w:t xml:space="preserve">Advice</);
+  // Levels past four use the fourth heading style.
+  assert.match(xml, /<w:pStyle w:val="Heading4"\/><\/w:pPr><w:r><w:t xml:space="preserve">Deep</);
+  assert.match(xml, /<w:rPr><w:b\/><\/w:rPr><w:t xml:space="preserve">bold</);
+  assert.match(xml, /<w:rPr><w:i\/><\/w:rPr><w:t xml:space="preserve">italic</);
+  assert.match(xml, /<w:rPr><w:strike\/><\/w:rPr><w:t xml:space="preserve">gone</);
+  assert.match(xml, /<w:rPr><w:rStyle w:val="CodeChar"\/><\/w:rPr><w:t xml:space="preserve">code</);
+});
+
+test("docxParts: text is escaped once, never twice", () => {
+  const xml = docx('Fees < £5,000 & "fixed" > costs; R&D; `a<b && c>d`').document;
+  assert.deepEqual(docxTexts(xml), ["Fees &lt; £5,000 &amp; &quot;fixed&quot; &gt; costs; R&amp;D; a&lt;b &amp;&amp; c&gt;d"]);
+  assert.doesNotMatch(xml, /&amp;(amp|lt|gt|quot);/);
+});
+
+test("docxParts: a character XML cannot hold is dropped, not written", () => {
+  const xml = docx("a\u0001b\u000bc").document;
+  assert.deepEqual(docxTexts(xml), ["abc"]);
+});
+
+test("docxParts: bullets share one list; nested items sit a level down", () => {
+  const xml = docx("- one\n- two\n  - inner\n- three").document;
+  const nums = [...xml.matchAll(/<w:ilvl w:val="(\d)"\/><w:numId w:val="(\d+)"\/>/g)].map((m) => `${m[2]}@${m[1]}`);
+  assert.deepEqual(nums, ["1@0", "1@0", "1@1", "1@0"]);
+  assert.deepEqual(docxTexts(xml), ["one", "two", "inner", "three"]);
+});
+
+test("docxParts: each numbered list has its own definition and starts at its own number", () => {
+  const parts = docx("1. a\n2. b\n\nBetween.\n\n5. e\n6. f");
+  const ids = [...parts.document.matchAll(/<w:numId w:val="(\d+)"\/>/g)].map((m) => m[1]);
+  assert.deepEqual(ids, ["2", "2", "3", "3"]);
+  // Two numbered lists → two definitions beside the bullets', each named by a list.
+  assert.equal((parts.numbering.match(/<w:abstractNum /g) || []).length, 3);
+  assert.match(parts.numbering, /<w:num w:numId="2"><w:abstractNumId w:val="2"\/>/);
+  assert.match(parts.numbering, /<w:num w:numId="3"><w:abstractNumId w:val="3"\/>/);
+  // The second list starts at 5.
+  assert.match(parts.numbering, /<w:abstractNum w:abstractNumId="3">.*?<w:lvl w:ilvl="0"><w:start w:val="5"\/><w:numFmt w:val="decimal"\/>/);
+  // Every definition comes before every list that uses one (Word requires it).
+  assert.ok(parts.numbering.lastIndexOf("<w:abstractNum ") < parts.numbering.indexOf("<w:num "));
+});
+
+test("docxParts: a task list shows its boxes", () => {
+  assert.deepEqual(docxTexts(docx("- [x] sent\n- [ ] filed").document), ["\u2611 sent", "\u2610 filed"]);
+});
+
+test("docxParts: a table keeps its cells, bold header and alignment", () => {
+  const xml = docx("| Item | Fee |\n|:--|--:|\n| Drafting | £4,500 |").document;
+  assert.equal((xml.match(/<w:tr>/g) || []).length, 2);
+  assert.equal((xml.match(/<w:gridCol /g) || []).length, 2);
+  assert.match(xml, /<w:tblHeader\/>/);
+  assert.match(xml, /<w:jc w:val="right"\/><\/w:pPr><w:r><w:rPr><w:b\/><\/w:rPr><w:t xml:space="preserve">Fee</);
+  assert.match(xml, /<w:jc w:val="right"\/><\/w:pPr><w:r><w:t xml:space="preserve">£4,500</);
+  // A paragraph follows the table, or Word joins it to the next one.
+  assert.match(xml, /<\/w:tbl><w:p>/);
+});
+
+test("docxParts: a code block keeps its lines and its spaces", () => {
+  const xml = docx("```\nif x:\n\treturn 1\n\nend\n```").document;
+  const code = [...xml.matchAll(/<w:p><w:pPr><w:pStyle w:val="Code"\/><\/w:pPr>.*?<\/w:p>/g)];
+  assert.equal(code.length, 4);
+  assert.deepEqual(docxTexts(xml), ["if x:", "    return 1", " ", "end"]);
+});
+
+test("docxParts: a quote, a rule and a line break", () => {
+  const xml = docx("> quoted\n\n---\n\nfirst<br>second").document;
+  assert.match(xml, /<w:pStyle w:val="Quote"\/><\/w:pPr><w:r><w:t xml:space="preserve">quoted</);
+  assert.match(xml, /<w:pBdr><w:bottom /);
+  assert.match(xml, /first<\/w:t><\/w:r><w:r><w:br\/><\/w:r><w:r><w:t xml:space="preserve">second/);
+});
+
+test("docxParts: a web link is a link; anything else is only its words", () => {
+  const xml = docx('[site](https://example.com/a?b=1&c=2) and [odd](javascript:alert(1)) and ![chart](https://x.test/c.png)').document;
+  assert.match(xml, /<w:fldSimple w:instr=" HYPERLINK &quot;https:\/\/example\.com\/a\?b=1&amp;c=2&quot; "><w:r><w:rPr><w:rStyle w:val="Hyperlink"\/><\/w:rPr><w:t xml:space="preserve">site</);
+  assert.equal((xml.match(/<w:fldSimple /g) || []).length, 1);
+  assert.doesNotMatch(xml, /javascript:/);
+  // An image is never fetched or embedded: its description stands in.
+  assert.match(docxTexts(xml).join(""), /chart/);
+  assert.doesNotMatch(xml, /c\.png/);
+});
+
+test("docxParts: math keeps its source instead of losing underscores to italics", () => {
+  const xml = docx("Take $a_i$ and $b_i$ then.").document;
+  assert.deepEqual(docxTexts(xml), ["Take a_i and b_i then."]);
+  assert.doesNotMatch(xml, /<w:i\/>/);
+  assert.doesNotMatch(xml, /ekmath/);
+});
+
+test("docxParts: every style the document names is defined", () => {
+  const parts = docx("# h1\n## h2\n### h3\n#### h4\n\ntext `code` [l](https://e.test)\n\n- a\n\n1. b\n\n> q\n\n| a |\n|--|\n| b |\n\n```\nc\n```\n");
+  const used = new Set([...parts.document.matchAll(/<w:(?:pStyle|rStyle|tblStyle) w:val="([^"]+)"/g)].map((m) => m[1]));
+  const defined = new Set([...parts.styles.matchAll(/w:styleId="([^"]+)"/g)].map((m) => m[1]));
+  assert.ok(used.size >= 9, [...used].join(","));
+  for (const id of used) assert.ok(defined.has(id), `style ${id} is used but not defined`);
+});
+
+test("docxParts: an empty reply is still a valid document", () => {
+  const xml = docx("").document;
+  assert.match(xml, /<w:body><w:p><\/w:p><w:sectPr>/);
+});
+
+test("docxParts: paper is A4 unless Letter is asked for", () => {
+  assert.match(docx("x").document, /<w:pgSz w:w="11906" w:h="16838"\/>/);
+  assert.match(docx("x", { letter: true }).document, /<w:pgSz w:w="12240" w:h="15840"\/>/);
+});
+
+test("docxUsesLetter: by the region of the locale", () => {
+  assert.equal(docxUsesLetter("en-US"), true);
+  assert.equal(docxUsesLetter("fr-CA"), true);
+  assert.equal(docxUsesLetter("en-GB"), false);
+  assert.equal(docxUsesLetter("de-DE"), false);
+  assert.equal(docxUsesLetter("en"), false);
+  assert.equal(docxUsesLetter(undefined), false);
+});
+
+// ── codeBlockFileName ────────────────────────────────────────────────────
+
+test("codeBlockFileName: a name with the right extension for the stated language", () => {
+  assert.equal(codeBlockFileName("python"), "script.py");
+  assert.equal(codeBlockFileName("py"), "script.py");
+  assert.equal(codeBlockFileName("csv"), "data.csv");
+  assert.equal(codeBlockFileName("markdown"), "notes.md");
+  assert.equal(codeBlockFileName("md"), "notes.md");
+  assert.equal(codeBlockFileName("json"), "data.json");
+  assert.equal(codeBlockFileName("sql"), "query.sql");
+  assert.equal(codeBlockFileName("bash"), "script.sh");
+  assert.equal(codeBlockFileName("c++"), "main.cpp");
+});
+
+test("codeBlockFileName: case, spaces and extra words on the fence do not matter", () => {
+  assert.equal(codeBlockFileName("  Python  "), "script.py");
+  assert.equal(codeBlockFileName("python title=report"), "script.py");
+  assert.equal(codeBlockFileName("csv:figures"), "data.csv");
+  assert.equal(codeBlockFileName("JSON"), "data.json");
+});
+
+test("codeBlockFileName: no language, or one not known, is plain text", () => {
+  assert.equal(codeBlockFileName(""), "text.txt");
+  assert.equal(codeBlockFileName(null), "text.txt");
+  assert.equal(codeBlockFileName(undefined), "text.txt");
+  assert.equal(codeBlockFileName("klingon"), "text.txt");
+  // Names every object has must not be read as languages.
+  assert.equal(codeBlockFileName("constructor"), "text.txt");
+  assert.equal(codeBlockFileName("__proto__"), "text.txt");
+  assert.equal(codeBlockFileName("toString"), "text.txt");
+});
+
+test("codeBlockFileName: every suggestion is a bare file name with an extension", () => {
+  for (const lang of ["python", "csv", "md", "html", "rust", "java", "tex", "diff", "r", "klingon"]) {
+    const name = codeBlockFileName(lang);
+    assert.match(name, /^[A-Za-z]+\.[A-Za-z]+$/, `${lang} → ${name}`);
+  }
 });
